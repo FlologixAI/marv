@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp, useInput, useStdout } from "ink";
+import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import Spinner from "ink-spinner";
 import { isCommand, runCommand } from "./commands/index.ts";
 import { needsSetup, resolveConfig, type Config, type ConfigStore, type Env, type FileConfig } from "./config/config.ts";
@@ -9,6 +9,7 @@ import type { ChatTurn, Provider } from "./provider/types.ts";
 import type { Message } from "./types.ts";
 import { MessageView } from "./ui/MessageView.tsx";
 import { PromptInput } from "./ui/PromptInput.tsx";
+import { ScrollView } from "./ui/ScrollView.tsx";
 import { Setup } from "./ui/Setup.tsx";
 import { Splash } from "./ui/Splash.tsx";
 import { StatusBar } from "./ui/StatusBar.tsx";
@@ -16,7 +17,6 @@ import { theme } from "./ui/theme.ts";
 import { Transcript, type TranscriptItem } from "./ui/Transcript.tsx";
 
 const EXIT_CONFIRM_MS = 1500;
-const CLEAR_SCREEN = "\x1b[2J\x1b[3J\x1b[H";
 
 interface Props {
   store: ConfigStore;
@@ -35,7 +35,7 @@ type SetupMode = "first-run" | "reconfigure" | null;
 
 export function App({ store, initialFile, env, version, cwd, splashMs = 1200, makeProvider = createProvider }: Props) {
   const { exit } = useApp();
-  const { write } = useStdout();
+  const { columns, rows } = useWindowSize();
   const [phase, setPhase] = useState<"splash" | "main">(splashMs > 0 ? "splash" : "main");
 
   // Config: the saved file + env overrides → the Config we run with → a Provider.
@@ -55,8 +55,8 @@ export function App({ store, initialFile, env, version, cwd, splashMs = 1200, ma
   const [confirmExit, setConfirmExit] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const nextId = useRef(1);
-  // Bumped by /clear to remount <Static>, which otherwise remembers how many items it already printed.
-  const [session, setSession] = useState(0);
+  // Bumped on every submit so the transcript jumps back to the newest message.
+  const [followKey, setFollowKey] = useState(0);
 
   const busy = streaming !== null;
 
@@ -66,13 +66,9 @@ export function App({ store, initialFile, env, version, cwd, splashMs = 1200, ma
   }, []);
 
   const clearTranscript = useCallback(() => {
-    // <Static> output is already in the terminal, so wipe the screen itself,
-    // then start a fresh transcript.
-    write(CLEAR_SCREEN);
     conversation.current = [];
     setItems([{ kind: "welcome", id: "welcome-0" }]);
-    setSession((n) => n + 1);
-  }, [write]);
+  }, []);
 
   const send = useCallback(
     async (text: string) => {
@@ -112,6 +108,7 @@ export function App({ store, initialFile, env, version, cwd, splashMs = 1200, ma
     const text = raw.trim();
     if (!text || busy) return;
     setInput("");
+    setFollowKey((n) => n + 1);
     setHistory((prev) => (prev.at(-1) === text ? prev : [...prev, text]));
 
     if (!isCommand(text)) {
@@ -175,39 +172,50 @@ export function App({ store, initialFile, env, version, cwd, splashMs = 1200, ma
 
   const finishSplash = useCallback(() => setPhase("main"), []);
 
+  // ekko runs in the alternate screen (see cli.tsx), so the root fills the
+  // terminal: the transcript takes the leftover height and scrolls, and the
+  // prompt and status bar stay pinned to the bottom.
   if (phase === "splash") {
-    return <Splash version={version} cwd={cwd} durationMs={splashMs} onDone={finishSplash} />;
+    return (
+      <Box height={rows} width={columns} justifyContent="center" alignItems="center">
+        <Splash version={version} cwd={cwd} durationMs={splashMs} onDone={finishSplash} />
+      </Box>
+    );
   }
 
   return (
-    <Box flexDirection="column">
-      <Transcript key={session} items={items} version={version} cwd={cwd} />
+    <Box flexDirection="column" height={rows} width={columns}>
+      <ScrollView followKey={followKey} isActive={setupMode === null}>
+        <Transcript items={items} version={version} cwd={cwd} />
 
-      {streaming !== null &&
-        (streaming === "" ? (
-          <Box marginBottom={1}>
-            <Text color={theme.accent}>
-              <Spinner type="dots" />
-            </Text>
-            <Text color={theme.dim}> Thinking…</Text>
-          </Box>
+        {streaming !== null &&
+          (streaming === "" ? (
+            <Box marginBottom={1}>
+              <Text color={theme.accent}>
+                <Spinner type="dots" />
+              </Text>
+              <Text color={theme.dim}> Thinking…</Text>
+            </Box>
+          ) : (
+            <MessageView message={{ role: "assistant", text: streaming }} />
+          ))}
+      </ScrollView>
+
+      <Box flexDirection="column" flexShrink={0}>
+        {setupMode ? (
+          <Setup
+            initial={file}
+            envApiKey={config.apiKeySource === "env" ? config.apiKey : undefined}
+            onComplete={completeSetup}
+            onCancel={cancelSetup}
+          />
         ) : (
-          <MessageView message={{ role: "assistant", text: streaming }} />
-        ))}
-
-      {setupMode ? (
-        <Setup
-          initial={file}
-          envApiKey={config.apiKeySource === "env" ? config.apiKey : undefined}
-          onComplete={completeSetup}
-          onCancel={cancelSetup}
-        />
-      ) : (
-        <>
-          <PromptInput value={input} onChange={setInput} onSubmit={handleSubmit} history={history} busy={busy} />
-          <StatusBar model={provider.name} cwd={cwd} confirmExit={confirmExit} busy={busy} />
-        </>
-      )}
+          <>
+            <PromptInput value={input} onChange={setInput} onSubmit={handleSubmit} history={history} busy={busy} />
+            <StatusBar model={provider.name} cwd={cwd} confirmExit={confirmExit} busy={busy} />
+          </>
+        )}
+      </Box>
     </Box>
   );
 }

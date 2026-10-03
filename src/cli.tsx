@@ -40,10 +40,12 @@ try {
   process.exit(1);
 }
 
+// alternateScreen: draw on the terminal's separate full-screen buffer (like
+// vim or htop). Your shell's screen is restored untouched when ekko exits.
 // ctrl+c is handled inside the app (interrupt / clear / confirm exit).
 const instance = render(
   <App store={store} initialFile={initialFile} env={process.env} version={pkg.version} cwd={shortenHome(process.cwd())} />,
-  { exitOnCtrlC: false },
+  { exitOnCtrlC: false, alternateScreen: true },
 );
 
 await instance.waitUntilExit();

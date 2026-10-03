@@ -14,12 +14,15 @@ export function StatusBar({ model, cwd, confirmExit, busy }: Props) {
     ? "Press ctrl+c again to exit"
     : busy
       ? "ctrl+c to interrupt"
-      : "/help for commands · ctrl+c to exit";
+      : "/help · PgUp/PgDn to scroll · ctrl+c to exit";
 
   return (
     <Box paddingX={1} justifyContent="space-between">
-      <Text color={confirmExit ? theme.warning : theme.dim}>{hint}</Text>
-      <Text color={theme.dim}>
+      <Box flexShrink={0} marginRight={2}>
+        <Text color={confirmExit ? theme.warning : theme.dim}>{hint}</Text>
+      </Box>
+      {/* On a narrow terminal the model/cwd side gets cut off, not the hint. */}
+      <Text color={theme.dim} wrap="truncate-start">
         {model} · {cwd}
       </Text>
     </Box>
