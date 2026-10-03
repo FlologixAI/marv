@@ -1,22 +1,23 @@
 #!/usr/bin/env bun
 // Entrypoint for the `ekko` command (see "bin" in package.json).
-import { homedir } from "node:os";
 import { render } from "ink";
 import pkg from "../package.json";
 import { App } from "./app.tsx";
-import { EchoProvider } from "./provider/echo.ts";
+import { ConfigError, ConfigStore, defaultConfigDir } from "./config/config.ts";
+import { shortenHome } from "./paths.ts";
 
 const HELP = `ekko v${pkg.version}: a terminal coding agent
 
 Usage:
   ekko              start an interactive session
   ekko --version    print the version
-  ekko --help       show this help`;
+  ekko --help       show this help
 
-function shortenHome(path: string): string {
-  const home = homedir();
-  return path === home || path.startsWith(home + "/") ? "~" + path.slice(home.length) : path;
-}
+Config:
+  ~/.ekko/config.json   created by the setup screen (/setup to change it)
+  ANTHROPIC_API_KEY     overrides the saved API key
+  EKKO_MODEL            overrides the saved model
+  EKKO_CONFIG_DIR       use a different config directory`;
 
 const args = process.argv.slice(2);
 
@@ -29,10 +30,21 @@ if (args.includes("--help") || args.includes("-h")) {
   process.exit(0);
 }
 
+const store = new ConfigStore(defaultConfigDir(process.env));
+let initialFile;
+try {
+  initialFile = await store.load();
+} catch (err) {
+  if (!(err instanceof ConfigError)) throw err;
+  console.error(`${err.message}\n\nFix the file, or delete it to run setup again.`);
+  process.exit(1);
+}
+
 // ctrl+c is handled inside the app (interrupt / clear / confirm exit).
-const instance = render(<App provider={new EchoProvider()} version={pkg.version} cwd={shortenHome(process.cwd())} />, {
-  exitOnCtrlC: false,
-});
+const instance = render(
+  <App store={store} initialFile={initialFile} env={process.env} version={pkg.version} cwd={shortenHome(process.cwd())} />,
+  { exitOnCtrlC: false },
+);
 
 await instance.waitUntilExit();
 process.exit(0);

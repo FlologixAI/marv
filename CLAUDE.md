@@ -21,17 +21,20 @@ bun link                    # (once) puts `ekko` on PATH, pointing at src/cli.ts
 ## Architecture
 
 - `src/cli.tsx` is the `bin` entry (Bun shebang). It handles `--version`/`--help`, then renders `<App>` with `exitOnCtrlC: false`, because ctrl+c is handled in the app.
-- `src/app.tsx` holds all session state. The phases are `splash` → `main`. It keeps two separate histories:
+- **Config (`src/config/config.ts`)**: two layers, later wins: `~/.ekko/config.json` (zod-validated, written with mode 0600 because it can hold the API key), then env vars (`ANTHROPIC_API_KEY`, `EKKO_MODEL`). `FileConfig` is what's on disk; `resolveConfig()` produces the `Config` the app runs on. `EKKO_CONFIG_DIR` relocates the config, so use it when testing by hand to keep your real config untouched.
+- **Setup (`src/ui/Setup.tsx`)** runs on first run, or when Anthropic has no key, and again via `/setup`. It renders *in place of the prompt*, not as a separate screen, because unmounting `<Static>` would make it print the transcript again.
+- `createProvider(config)` in `src/provider/index.ts` is the only place that maps config to a concrete `Provider`.
+- `src/app.tsx` holds all session state. The phases are `splash` → `main`, plus an optional setup overlay. It keeps two separate histories:
   - `items`: the **transcript the user sees**, including the welcome banner, help text, and errors.
   - `conversation` (a ref of `ChatTurn[]`): **what the model sees**, which is only real user/assistant turns.
   Keep them separate; ekko's own notices must never leak into the model's context.
 - **Provider seam (`src/provider/types.ts`)**: every LLM vendor implements `Provider.stream(history, signal) → AsyncIterable<AgentEvent>`, converting its native stream into ekko's own `AgentEvent` union. The UI never imports a vendor SDK. `EchoProvider` is the stand-in until the Anthropic adapter lands.
 - **Rendering**: finished messages go through Ink `<Static>` (`src/ui/Transcript.tsx`), which prints each item once into scrollback. Only the streaming reply, prompt, and status bar re-render. `<Static>` remembers how many items it has already printed, so `/clear` wipes the screen *and* bumps a `key` to remount it.
-- **Slash commands (`src/commands/index.ts`)** are pure functions that return a `CommandAction` (`print` | `clear` | `exit`). The App applies the action. Add new commands to the `commands` array.
+- **Slash commands (`src/commands/index.ts`)** are pure functions that return a `CommandAction` (`print` | `clear` | `setup` | `exit`) and receive a read-only `CommandContext` (current config). The App applies the action. Add new commands to the `commands` array.
 - Colors live only in `src/ui/theme.ts`.
 
 ## Conventions
 
 - Imports use explicit `.ts`/`.tsx` extensions (`allowImportingTsExtensions` + `verbatimModuleSyntax`; use `import type` for types).
-- UI tests use `ink-testing-library`. Pass `splashMs={0}` to skip the splash, and `new EchoProvider(0)` for an instant stream.
+- UI tests use `ink-testing-library`. Pass `splashMs={0}` to skip the splash, `makeProvider={() => new EchoProvider(0)}` for an instant stream, and a `ConfigStore` on a temp dir.
 - LLM default (when the provider is added): `claude-opus-5-5` via `@anthropic-ai/sdk`, streaming, with a manual tool loop behind the `Provider` interface.

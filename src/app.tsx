@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import Spinner from "ink-spinner";
 import { isCommand, runCommand } from "./commands/index.ts";
+import { needsSetup, resolveConfig, type Config, type ConfigStore, type Env, type FileConfig } from "./config/config.ts";
+import { shortenHome } from "./paths.ts";
+import { createProvider } from "./provider/index.ts";
 import type { ChatTurn, Provider } from "./provider/types.ts";
 import type { Message } from "./types.ts";
 import { MessageView } from "./ui/MessageView.tsx";
 import { PromptInput } from "./ui/PromptInput.tsx";
+import { Setup } from "./ui/Setup.tsx";
 import { Splash } from "./ui/Splash.tsx";
 import { StatusBar } from "./ui/StatusBar.tsx";
 import { theme } from "./ui/theme.ts";
@@ -15,17 +19,30 @@ const EXIT_CONFIRM_MS = 1500;
 const CLEAR_SCREEN = "\x1b[2J\x1b[3J\x1b[H";
 
 interface Props {
-  provider: Provider;
+  store: ConfigStore;
+  /** The config file as loaded at startup; null on first run. */
+  initialFile: FileConfig | null;
+  env: Env;
   version: string;
   cwd: string;
   /** 0 skips the splash entirely (used by tests). */
   splashMs?: number;
+  /** Swappable so tests can inject an instant provider. */
+  makeProvider?: (config: Config) => Provider;
 }
 
-export function App({ provider, version, cwd, splashMs = 1200 }: Props) {
+type SetupMode = "first-run" | "reconfigure" | null;
+
+export function App({ store, initialFile, env, version, cwd, splashMs = 1200, makeProvider = createProvider }: Props) {
   const { exit } = useApp();
   const { write } = useStdout();
   const [phase, setPhase] = useState<"splash" | "main">(splashMs > 0 ? "splash" : "main");
+
+  // Config: the saved file + env overrides → the Config we run with → a Provider.
+  const [file, setFile] = useState(initialFile);
+  const config = useMemo(() => resolveConfig(file, env), [file, env]);
+  const provider = useMemo(() => makeProvider(config), [makeProvider, config]);
+  const [setupMode, setSetupMode] = useState<SetupMode>(() => (needsSetup(initialFile, config) ? "first-run" : null));
 
   // What the user sees (includes help text, errors, the welcome banner)…
   const [items, setItems] = useState<TranscriptItem[]>([{ kind: "welcome", id: "welcome-0" }]);
@@ -101,7 +118,7 @@ export function App({ provider, version, cwd, splashMs = 1200 }: Props) {
       void send(text);
       return;
     }
-    const action = runCommand(text);
+    const action = runCommand(text, { config, configPath: shortenHome(store.path) });
     switch (action.type) {
       case "print":
         addMessage({ role: "system", text: action.text, isError: action.isError });
@@ -109,13 +126,31 @@ export function App({ provider, version, cwd, splashMs = 1200 }: Props) {
       case "clear":
         clearTranscript();
         break;
+      case "setup":
+        setSetupMode("reconfigure");
+        break;
       case "exit":
         exit();
         break;
     }
   };
 
+  const completeSetup = async (next: FileConfig) => {
+    try {
+      await store.save(next);
+      setFile(next);
+      setSetupMode(null);
+      addMessage({ role: "system", text: `Saved to ${shortenHome(store.path)} · ${next.provider} · ${next.model}` });
+    } catch (err) {
+      addMessage({ role: "system", text: `Could not save config: ${(err as Error).message}`, isError: true });
+    }
+  };
+
+  // On first run there is nothing to go back to, so cancelling setup quits.
+  const cancelSetup = () => (setupMode === "first-run" ? exit() : setSetupMode(null));
+
   // ctrl+c: interrupt a reply → clear the prompt → ask to confirm → exit.
+  // (While setup is open, Setup handles ctrl+c itself.)
   useInput(
     (char, key) => {
       if (!(key.ctrl && char === "c")) return;
@@ -129,7 +164,7 @@ export function App({ provider, version, cwd, splashMs = 1200 }: Props) {
         setConfirmExit(true);
       }
     },
-    { isActive: phase === "main" },
+    { isActive: phase === "main" && setupMode === null },
   );
 
   useEffect(() => {
@@ -160,8 +195,19 @@ export function App({ provider, version, cwd, splashMs = 1200 }: Props) {
           <MessageView message={{ role: "assistant", text: streaming }} />
         ))}
 
-      <PromptInput value={input} onChange={setInput} onSubmit={handleSubmit} history={history} busy={busy} />
-      <StatusBar model={provider.name} cwd={cwd} confirmExit={confirmExit} busy={busy} />
+      {setupMode ? (
+        <Setup
+          initial={file}
+          envApiKey={config.apiKeySource === "env" ? config.apiKey : undefined}
+          onComplete={completeSetup}
+          onCancel={cancelSetup}
+        />
+      ) : (
+        <>
+          <PromptInput value={input} onChange={setInput} onSubmit={handleSubmit} history={history} busy={busy} />
+          <StatusBar model={provider.name} cwd={cwd} confirmExit={confirmExit} busy={busy} />
+        </>
+      )}
     </Box>
   );
 }
