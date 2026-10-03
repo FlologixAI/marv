@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import Spinner from "ink-spinner";
 import { copyToClipboard } from "./clipboard.ts";
-import { isCommand, runCommand } from "./commands/index.ts";
+import { commands, isCommand, runCommand } from "./commands/index.ts";
 import { needsSetup, resolveConfig, type Config, type ConfigStore, type Env, type FileConfig } from "./config/config.ts";
 import { shortenHome } from "./paths.ts";
 import { mouse, type MouseEvent } from "./mouse.ts";
@@ -271,7 +271,14 @@ export function App({
           />
         ) : (
           <>
-            <PromptInput value={input} onChange={setInput} onSubmit={handleSubmit} history={history} busy={busy} />
+            <PromptInput
+              value={input}
+              onChange={setInput}
+              onSubmit={handleSubmit}
+              history={history}
+              busy={busy}
+              commands={commands}
+            />
             <StatusBar model={provider.name} cwd={cwd} confirmExit={confirmExit} notice={notice} busy={busy} />
           </>
         )}
