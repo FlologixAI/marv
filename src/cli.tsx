@@ -17,7 +17,8 @@ Usage:
 
 Config:
   ~/.ekko/config.json   created by the setup screen (/setup to change it)
-  ANTHROPIC_API_KEY     overrides the saved API key
+  OPENROUTER_API_KEY    overrides the saved OpenRouter key
+  OLLAMA_HOST           where Ollama runs (default localhost:11434)
   EKKO_MODEL            overrides the saved model
   EKKO_CONFIG_DIR       use a different config directory`;
 

@@ -1,31 +1,41 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
-import { DEFAULT_MODEL, maskKey, MODELS, type FileConfig, type ProviderId } from "../config/config.ts";
+import { maskKey, PRESETS, type Env, type FileConfig, type ProviderId } from "../config/config.ts";
+import type { ModelInfo } from "../provider/models.ts";
+import { ModelPicker } from "./ModelPicker.tsx";
 import { Select } from "./Select.tsx";
 import { theme } from "./theme.ts";
 
 type Step = "provider" | "model" | "apiKey";
 
 interface Props {
-  /** The current file config when re-running via /setup; null on first run. */
+  /** The current file config when re-running via /setup or /model; null on first run. */
   initial: FileConfig | null;
-  /** If ANTHROPIC_API_KEY is set we use it and skip asking for a key. */
-  envApiKey?: string;
+  /** Checked for provider keys (e.g. OPENROUTER_API_KEY); a key there skips the key step. */
+  env: Env;
+  loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
+  /** "model" is the /model command: just pick a model for the current provider. */
+  startStep?: "provider" | "model";
   onComplete: (config: FileConfig) => void;
   onCancel: () => void;
 }
 
 const PROVIDER_ITEMS = [
-  { value: "anthropic", label: "Anthropic (Claude)", hint: "needs an API key" },
+  { value: "openrouter", label: "OpenRouter", hint: "hundreds of cloud models, one API key" },
+  { value: "ollama", label: "Ollama", hint: "models running on this machine, free" },
   { value: "echo", label: "Echo", hint: "offline test mode, repeats what you type" },
 ] as const;
 
+/** Drops undefined fields so the saved JSON stays tidy. */
+const tidy = (config: FileConfig): FileConfig =>
+  Object.fromEntries(Object.entries(config).filter(([, v]) => v !== undefined)) as FileConfig;
+
 // A small wizard: each step stores its answer and decides which step comes next.
-export function Setup({ initial, envApiKey, onComplete, onCancel }: Props) {
-  const [step, setStep] = useState<Step>("provider");
-  const [provider, setProvider] = useState<ProviderId>(initial?.provider ?? "anthropic");
-  const [model, setModel] = useState(initial?.model ?? DEFAULT_MODEL);
+export function Setup({ initial, env, loadModels, startStep = "provider", onComplete, onCancel }: Props) {
+  const [step, setStep] = useState<Step>(startStep);
+  const [provider, setProvider] = useState<ProviderId>(initial?.provider ?? "openrouter");
+  const [model, setModel] = useState("");
   const [keyInput, setKeyInput] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -33,18 +43,33 @@ export function Setup({ initial, envApiKey, onComplete, onCancel }: Props) {
     if (key.escape || (key.ctrl && input === "c")) onCancel();
   });
 
-  const finish = (patch: Partial<FileConfig>) => onComplete({ provider, model, apiKey: initial?.apiKey, ...patch });
+  const preset = PRESETS[provider];
+  const envKey = preset.keyEnv ? env[preset.keyEnv]?.trim() || undefined : undefined;
+  const needsKeyStep = Boolean(preset.keyEnv) && !envKey;
+  const sameProvider = provider === initial?.provider;
+
+  const finish = (patch: Partial<FileConfig>) =>
+    onComplete(
+      tidy({
+        provider,
+        model,
+        apiKey: initial?.apiKey,
+        // A custom endpoint belongs to the provider it was set for.
+        baseUrl: sameProvider ? initial?.baseUrl : undefined,
+        ...patch,
+      }),
+    );
 
   const chooseProvider = (value: ProviderId) => {
     setProvider(value);
-    if (value === "echo") onComplete({ provider: value, model, apiKey: initial?.apiKey });
+    if (value === "echo") onComplete(tidy({ provider: value, apiKey: initial?.apiKey }));
     else setStep("model");
   };
 
   const chooseModel = (value: string) => {
     setModel(value);
-    if (envApiKey) finish({ model: value });
-    else setStep("apiKey");
+    if (needsKeyStep && !(startStep === "model" && initial?.apiKey)) setStep("apiKey");
+    else finish({ model: value });
   };
 
   const submitKey = (raw: string) => {
@@ -55,18 +80,25 @@ export function Setup({ initial, envApiKey, onComplete, onCancel }: Props) {
     finish({ apiKey: value });
   };
 
-  const stepNumber = { provider: 1, model: 2, apiKey: 3 }[step];
-  const totalSteps = envApiKey ? 2 : 3;
+  // Stable per provider, so the picker fetches once rather than on every render.
+  const load = useCallback(() => loadModels(provider), [loadModels, provider]);
+
+  const steps: Step[] = ["provider", "model", ...(needsKeyStep ? (["apiKey"] as const) : [])];
+  const title = startStep === "model" ? `Switch ${preset.label} model` : "ekko setup";
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
       <Text>
         <Text bold color={theme.accent}>
-          ekko setup
+          {title}
         </Text>
-        <Text color={theme.dim}>
-          {"  "}step {stepNumber} of {provider === "echo" ? 1 : totalSteps}
-        </Text>
+        {startStep === "provider" && (
+          <Text color={theme.dim}>
+            {"  "}step {steps.indexOf(step) + 1}
+            {/* The total depends on the provider, so it's only known after step 1. */}
+            {step !== "provider" && ` of ${steps.length}`}
+          </Text>
+        )}
       </Text>
       <Box marginTop={1} flexDirection="column">
         {step === "provider" && (
@@ -79,19 +111,23 @@ export function Setup({ initial, envApiKey, onComplete, onCancel }: Props) {
         {step === "model" && (
           <>
             <Text>Which model?</Text>
-            <Select
-              items={MODELS.map((m) => ({ value: m.id, label: m.label, hint: m.hint }))}
-              initialValue={model}
+            <ModelPicker
+              load={load}
+              initialValue={sameProvider && initial?.model ? initial.model : preset.defaultModel}
               onSelect={chooseModel}
             />
-            {envApiKey && <Text color={theme.dim}>Using ANTHROPIC_API_KEY from your environment ({maskKey(envApiKey)}).</Text>}
+            {envKey && (
+              <Text color={theme.dim}>
+                Using {preset.keyEnv} from your environment ({maskKey(envKey)}).
+              </Text>
+            )}
           </>
         )}
 
         {step === "apiKey" && (
           <>
-            <Text>Paste your Anthropic API key:</Text>
-            <Text color={theme.dim}>Get one at console.anthropic.com. It's saved to ~/.ekko/config.json, readable only by you.</Text>
+            <Text>Paste your {preset.label} API key:</Text>
+            <Text color={theme.dim}>Get one at {preset.keyUrl}. It's saved to ~/.ekko/config.json, readable only by you.</Text>
             {initial?.apiKey && <Text color={theme.dim}>Press Enter to keep the current key ({maskKey(initial.apiKey)}).</Text>}
             <Box>
               <Text color={theme.accent}>{"> "}</Text>

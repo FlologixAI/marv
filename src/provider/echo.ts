@@ -1,4 +1,4 @@
-import type { AgentEvent, ChatTurn, Provider } from "./types.ts";
+import type { AgentEvent, ChatTurn, Provider, StreamOptions } from "./types.ts";
 
 // A fake provider that repeats the last user message back, one word at a time.
 // It exercises the exact same streaming path a real LLM will use.
@@ -7,7 +7,7 @@ export class EchoProvider implements Provider {
 
   constructor(private readonly delayMs = 40) {}
 
-  async *stream(history: ChatTurn[], signal?: AbortSignal): AsyncIterable<AgentEvent> {
+  async *stream(history: ChatTurn[], { signal }: StreamOptions = {}): AsyncIterable<AgentEvent> {
     const last = history.findLast((turn) => turn.role === "user");
     const words = `You said: ${last?.text ?? ""}`.split(/(\s+)/);
 

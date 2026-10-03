@@ -5,25 +5,46 @@ import { z } from "zod";
 
 // Configuration comes from two layers, and the later one wins:
 //   1. ~/.ekko/config.json  (written by the setup screen)
-//   2. environment variables (ANTHROPIC_API_KEY, EKKO_MODEL)
+//   2. environment variables (OPENROUTER_API_KEY, EKKO_MODEL, OLLAMA_HOST)
 // The file is what we save; the resolved Config is what the app runs with.
 
-export const PROVIDERS = ["anthropic", "echo"] as const;
+export const PROVIDERS = ["openrouter", "ollama", "echo"] as const;
 export type ProviderId = (typeof PROVIDERS)[number];
 
-export const DEFAULT_MODEL = "claude-opus-5-5";
+interface Preset {
+  label: string;
+  /** OpenAI-compatible endpoint; absent for providers that don't talk HTTP. */
+  baseUrl?: string;
+  /** Env var that overrides the saved key; absent when no key is needed. */
+  keyEnv?: string;
+  keyUrl?: string;
+  /** Used until a model is picked; empty means "must pick one in setup". */
+  defaultModel: string;
+}
 
-export const MODELS = [
-  { id: "claude-opus-5-5", label: "Claude Opus 5.5", hint: "recommended for coding" },
-  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", hint: "faster and cheaper" },
-  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", hint: "fastest, cheapest" },
-  { id: "claude-fable-5-1", label: "Claude Fable 5.1", hint: "most capable, priciest" },
-] as const;
+// Each provider is just a preset for the same OpenAI-compatible adapter
+// (except Echo, which is a fake for trying the UI offline).
+export const PRESETS: Record<ProviderId, Preset> = {
+  openrouter: {
+    label: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    keyEnv: "OPENROUTER_API_KEY",
+    keyUrl: "openrouter.ai/settings/keys",
+    defaultModel: "anthropic/claude-sonnet-5.5",
+  },
+  ollama: { label: "Ollama", baseUrl: "http://localhost:11434/v1", defaultModel: "" },
+  echo: { label: "Echo", defaultModel: "echo" },
+};
 
 const FileConfigSchema = z.object({
-  provider: z.enum(PROVIDERS).default("anthropic"),
-  model: z.string().min(1).default(DEFAULT_MODEL),
+  provider: z.enum(PROVIDERS).default("openrouter"),
+  model: z.string().min(1).optional(),
+  /** The OpenRouter key (the only provider that needs one so far). */
   apiKey: z.string().min(1).optional(),
+  /** Overrides the preset endpoint, e.g. Ollama on another machine. */
+  baseUrl: z.string().url().optional(),
+  /** Let thinking models reason before answering (slower, often better). */
+  thinking: z.boolean().optional(),
 });
 
 /** Exactly what is stored on disk. */
@@ -33,8 +54,10 @@ export type FileConfig = z.infer<typeof FileConfigSchema>;
 export interface Config {
   provider: ProviderId;
   model: string;
+  baseUrl?: string;
   apiKey?: string;
   apiKeySource?: "env" | "file";
+  thinking: boolean;
 }
 
 export type Env = Record<string, string | undefined>;
@@ -79,22 +102,34 @@ export class ConfigStore {
 }
 
 export function resolveConfig(file: FileConfig | null, env: Env): Config {
-  const envKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
-  const apiKey = envKey ?? file?.apiKey;
+  const provider = file?.provider ?? "openrouter";
+  const preset = PRESETS[provider];
+  const envKey = (preset.keyEnv && env[preset.keyEnv]?.trim()) || undefined;
+  const apiKey = preset.keyEnv ? (envKey ?? file?.apiKey) : undefined;
   return {
-    provider: file?.provider ?? "anthropic",
-    model: env.EKKO_MODEL?.trim() || file?.model || DEFAULT_MODEL,
+    provider,
+    model: env.EKKO_MODEL?.trim() || file?.model || preset.defaultModel,
+    baseUrl: file?.baseUrl ?? (provider === "ollama" ? ollamaUrl(env.OLLAMA_HOST) : preset.baseUrl),
     apiKey,
     apiKeySource: envKey ? "env" : apiKey ? "file" : undefined,
+    thinking: file?.thinking ?? false,
   };
 }
 
-/** First run, or a provider that needs a key we don't have. */
-export function needsSetup(file: FileConfig | null, config: Config): boolean {
-  return file === null || (config.provider === "anthropic" && !config.apiKey);
+/** OLLAMA_HOST is Ollama's own setting ("127.0.0.1:11434" or a full URL); honor it. */
+function ollamaUrl(host: string | undefined): string {
+  if (!host?.trim()) return PRESETS.ollama.baseUrl!;
+  const url = /^https?:\/\//.test(host) ? host : `http://${host}`;
+  return `${url.replace(/\/+$/, "")}/v1`;
 }
 
-/** "sk-ant-api03-abc…wxyz", enough to recognise a key without revealing it. */
+/** First run, a provider that needs a key we don't have, or no model picked yet. */
+export function needsSetup(file: FileConfig | null, config: Config): boolean {
+  if (file === null || !config.model) return true;
+  return Boolean(PRESETS[config.provider].keyEnv) && !config.apiKey;
+}
+
+/** "sk-or-v1-abc…wxyz", enough to recognise a key without revealing it. */
 export function maskKey(key: string): string {
   return key.length > 16 ? `${key.slice(0, 10)}…${key.slice(-4)}` : "****";
 }

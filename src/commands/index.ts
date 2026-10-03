@@ -1,4 +1,4 @@
-import { maskKey, type Config } from "../config/config.ts";
+import { maskKey, PRESETS, type Config } from "../config/config.ts";
 
 // Slash commands are handled locally and never reach the LLM.
 // Each command returns an action; the App decides how to apply it,
@@ -8,6 +8,9 @@ export type CommandAction =
   | { type: "print"; text: string; isError?: boolean }
   | { type: "clear" }
   | { type: "setup" }
+  /** With an id: switch straight to it. Without: open the model picker. */
+  | { type: "model"; id?: string }
+  | { type: "thinking"; on: boolean }
   | { type: "exit" };
 
 /** Read-only facts a command may need. */
@@ -37,6 +40,25 @@ export const commands: Command[] = [
     name: "setup",
     description: "Change provider, model, or API key",
     run: () => ({ type: "setup" }),
+  },
+  {
+    name: "model",
+    description: "Switch model (/model to pick, /model <id> to set)",
+    run: (args, { config }) => {
+      if (config.provider === "echo") {
+        return { type: "print", text: "Echo has no models. Use /setup to choose OpenRouter or Ollama.", isError: true };
+      }
+      return args ? { type: "model", id: args } : { type: "model" };
+    },
+  },
+  {
+    name: "think",
+    description: "Toggle model thinking (/think on, /think off)",
+    run: (args, { config }) => {
+      const arg = args.toLowerCase();
+      if (arg && arg !== "on" && arg !== "off") return { type: "print", text: "Usage: /think, /think on, or /think off", isError: true };
+      return { type: "thinking", on: arg ? arg === "on" : !config.thinking };
+    },
   },
   {
     name: "clear",
@@ -71,12 +93,17 @@ function helpText(): string {
 }
 
 function configText({ config, configPath }: CommandContext): string {
-  const key = config.apiKey
-    ? `${maskKey(config.apiKey)} (from ${config.apiKeySource === "env" ? "ANTHROPIC_API_KEY" : "config file"})`
-    : "not set";
+  const preset = PRESETS[config.provider];
+  const key = !preset.keyEnv
+    ? "not needed"
+    : config.apiKey
+      ? `${maskKey(config.apiKey)} (from ${config.apiKeySource === "env" ? preset.keyEnv : "config file"})`
+      : "not set";
   return [
-    `Provider:  ${config.provider}`,
+    `Provider:  ${preset.label}`,
     `Model:     ${config.model}`,
+    `Thinking:  ${config.thinking ? "on" : "off"}`,
+    ...(config.baseUrl ? [`Endpoint:  ${config.baseUrl}`] : []),
     `API key:   ${key}`,
     `File:      ${configPath}`,
   ].join("\n");

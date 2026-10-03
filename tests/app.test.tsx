@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanup, render } from "ink-testing-library";
 import { App } from "../src/app.tsx";
-import { ConfigStore, type FileConfig } from "../src/config/config.ts";
+import { ConfigStore, type Config, type FileConfig } from "../src/config/config.ts";
 import { mouse } from "../src/mouse.ts";
 import { EchoProvider } from "../src/provider/echo.ts";
+import type { ChatTurn, Provider, StreamOptions } from "../src/provider/types.ts";
 import { selection } from "../src/selection.ts";
 
 const ENTER = "\r";
@@ -21,7 +22,7 @@ async function type(stdin: { write: (data: string) => void }, text: string) {
   stdin.write(ENTER);
 }
 
-const ECHO: FileConfig = { provider: "echo", model: "claude-opus-5-5" };
+const ECHO: FileConfig = { provider: "echo" };
 
 let dir: string;
 let store: ConfigStore;
@@ -35,7 +36,12 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function renderApp(initialFile: FileConfig | null, splashMs = 0, copy = async (_text: string) => "test") {
+function renderApp(
+  initialFile: FileConfig | null,
+  splashMs = 0,
+  copy = async (_text: string) => "test",
+  makeProvider: (config: Config) => Provider = () => new EchoProvider(0),
+) {
   return render(
     <App
       store={store}
@@ -44,8 +50,9 @@ function renderApp(initialFile: FileConfig | null, splashMs = 0, copy = async (_
       version="9.9.9"
       cwd="~/x"
       splashMs={splashMs}
-      makeProvider={() => new EchoProvider(0)}
+      makeProvider={makeProvider}
       copy={copy}
+      loadModels={async () => [{ id: "qwen3.5:9b", local: true, tools: true }]}
     />,
   );
 }
@@ -67,10 +74,13 @@ describe("App", () => {
 
     stdin.write(DOWN);
     await tick();
+    stdin.write(DOWN);
+    await tick();
     stdin.write(ENTER); // Echo
     await tick();
 
     expect(await store.load()).toEqual(ECHO);
+    await tick(); // the "Saved" notice renders just after the file is written
     expect(frames.join("\n")).toContain("Saved to");
     expect(lastFrame()).toContain("Type a message");
   });
@@ -94,8 +104,8 @@ describe("App", () => {
     await type(stdin, "/config");
     await tick();
     const output = frames.join("\n");
-    expect(output).toContain("Provider:  echo");
-    expect(output).toContain("API key:   not set");
+    expect(output).toContain("Provider:  Echo");
+    expect(output).toContain("API key:   not needed");
   });
 
   test("dragging over text copies it and says so", async () => {
@@ -118,5 +128,92 @@ describe("App", () => {
     expect(copied).toEqual(["Welcome"]);
     expect(lastFrame()).toContain("Copied 7 chars");
     selection.clear();
+  });
+
+  test("sends the system prompt and the conversation to the provider", async () => {
+    const calls: { history: ChatTurn[]; options?: StreamOptions }[] = [];
+    const spy: Provider = {
+      name: "spy",
+      async *stream(history, options) {
+        calls.push({ history: [...history], options });
+        yield { type: "text_delta", text: "ok" };
+        yield { type: "done" };
+      },
+    };
+    const { stdin } = renderApp(ECHO, 0, undefined, () => spy);
+    await type(stdin, "first");
+    await tick(100);
+    await type(stdin, "second");
+    await tick(100);
+
+    expect(calls[0]!.options?.system).toContain("You are ekko");
+    expect(calls[0]!.options?.system).toContain("~/x");
+    // Stateless API: the second request carries the whole conversation so far.
+    expect(calls[1]!.history).toEqual([
+      { role: "user", text: "first" },
+      { role: "assistant", text: "ok" },
+      { role: "user", text: "second" },
+    ]);
+  });
+
+  test("/model <id> switches model and saves it", async () => {
+    const ollama: FileConfig = { provider: "ollama", model: "gemma4:12b" };
+    const { lastFrame, stdin } = renderApp(ollama);
+    await type(stdin, "/model qwen3.5:9b");
+    await tick(100);
+    expect(await store.load()).toEqual({ provider: "ollama", model: "qwen3.5:9b" });
+    expect(lastFrame()).toContain("Ollama · qwen3.5:9b");
+  });
+
+  test("/model opens the picker for the current provider", async () => {
+    const { lastFrame, stdin } = renderApp({ provider: "ollama", model: "gemma4:12b" });
+    await type(stdin, "/model");
+    await tick(100);
+    expect(lastFrame()).toContain("Switch Ollama model");
+    expect(lastFrame()).toContain("qwen3.5:9b");
+  });
+
+  test("shows thinking while the model reasons, then keeps only a short note", async () => {
+    const calls: ChatTurn[][] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const thinker: Provider = {
+      name: "thinker",
+      async *stream(history) {
+        calls.push([...history]);
+        yield { type: "thinking_delta", text: "Step 1: read the question.\nStep 2: answer briefly." };
+        await gate;
+        yield { type: "text_delta", text: "Hi!" };
+        yield { type: "done" };
+      },
+    };
+    const { lastFrame, stdin } = renderApp(ECHO, 0, undefined, () => thinker);
+    await type(stdin, "hello");
+    await tick(100);
+    expect(lastFrame()).toContain("Thinking… (9 words)");
+    expect(lastFrame()).toContain("Step 2: answer briefly.");
+
+    release();
+    await tick(100);
+    expect(lastFrame()).toContain("✻ Thought for");
+    expect(lastFrame()).toContain("Hi!");
+    expect(lastFrame()).not.toContain("Step 2");
+
+    // The reasoning is never sent back: the next request has only the reply.
+    await type(stdin, "again");
+    await tick(100);
+    expect(calls[1]).toEqual([
+      { role: "user", text: "hello" },
+      { role: "assistant", text: "Hi!" },
+      { role: "user", text: "again" },
+    ]);
+  });
+
+  test("/think toggles thinking and saves it", async () => {
+    const { lastFrame, stdin } = renderApp({ provider: "ollama", model: "qwen3.5:9b" });
+    await type(stdin, "/think");
+    await tick(100);
+    expect(await store.load()).toEqual({ provider: "ollama", model: "qwen3.5:9b", thinking: true });
+    expect(lastFrame()).toContain("Thinking on");
   });
 });

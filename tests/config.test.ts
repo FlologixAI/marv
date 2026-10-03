@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, ConfigStore, DEFAULT_MODEL, maskKey, needsSetup, resolveConfig } from "../src/config/config.ts";
+import { ConfigError, ConfigStore, maskKey, needsSetup, PRESETS, resolveConfig } from "../src/config/config.ts";
 
 let dir: string;
 let store: ConfigStore;
@@ -19,20 +19,20 @@ describe("ConfigStore", () => {
   });
 
   test("save then load round-trips, and the file is private (0600)", async () => {
-    const config = { provider: "anthropic" as const, model: "claude-sonnet-5-5", apiKey: "sk-ant-test" };
+    const config = { provider: "openrouter" as const, model: "openai/gpt-5.6-sol", apiKey: "sk-or-test" };
     await store.save(config);
     expect(await store.load()).toEqual(config);
     expect((await stat(store.path)).mode & 0o777).toBe(0o600);
   });
 
-  test("fills defaults for missing fields", async () => {
-    await store.save({ provider: "echo", model: DEFAULT_MODEL });
+  test("defaults to OpenRouter when the provider is missing", async () => {
+    await store.save({ provider: "echo" });
     await writeFile(store.path, "{}");
-    expect(await store.load()).toEqual({ provider: "anthropic", model: DEFAULT_MODEL });
+    expect(await store.load()).toEqual({ provider: "openrouter" });
   });
 
   test("rejects invalid JSON and unknown providers", async () => {
-    await store.save({ provider: "echo", model: DEFAULT_MODEL });
+    await store.save({ provider: "echo" });
     await writeFile(store.path, "{not json");
     await expect(store.load()).rejects.toBeInstanceOf(ConfigError);
 
@@ -42,38 +42,58 @@ describe("ConfigStore", () => {
 });
 
 describe("resolveConfig", () => {
-  const file = { provider: "anthropic" as const, model: "claude-haiku-4-5", apiKey: "sk-from-file" };
+  const file = { provider: "openrouter" as const, model: "z-ai/glm-5.3", apiKey: "sk-from-file" };
 
-  test("uses the file when no env vars are set", () => {
-    expect(resolveConfig(file, {})).toEqual({ ...file, apiKeySource: "file" });
+  test("uses the file and the preset endpoint when no env vars are set", () => {
+    expect(resolveConfig(file, {})).toEqual({ ...file, baseUrl: PRESETS.openrouter.baseUrl, apiKeySource: "file", thinking: false });
   });
 
   test("env vars override the file", () => {
-    const config = resolveConfig(file, { ANTHROPIC_API_KEY: "sk-from-env", EKKO_MODEL: "claude-opus-5-5" });
-    expect(config).toMatchObject({ apiKey: "sk-from-env", apiKeySource: "env", model: "claude-opus-5-5" });
+    const config = resolveConfig(file, { OPENROUTER_API_KEY: "sk-from-env", EKKO_MODEL: "openai/gpt-5.6-luna" });
+    expect(config).toMatchObject({ apiKey: "sk-from-env", apiKeySource: "env", model: "openai/gpt-5.6-luna" });
   });
 
-  test("defaults with no file at all", () => {
-    expect(resolveConfig(null, {})).toEqual({ provider: "anthropic", model: DEFAULT_MODEL, apiKey: undefined, apiKeySource: undefined });
+  test("defaults to OpenRouter and its default model with no file at all", () => {
+    expect(resolveConfig(null, {})).toMatchObject({ provider: "openrouter", model: PRESETS.openrouter.defaultModel });
+  });
+
+  test("Ollama needs no key, even if one is saved or set", () => {
+    const config = resolveConfig({ provider: "ollama", model: "qwen3.5:9b", apiKey: "sk-or" }, { OPENROUTER_API_KEY: "k" });
+    expect(config).toMatchObject({ baseUrl: "http://localhost:11434/v1", apiKey: undefined, apiKeySource: undefined });
+  });
+
+  test("Ollama honors OLLAMA_HOST, with or without a scheme", () => {
+    const ollama = { provider: "ollama" as const, model: "m" };
+    expect(resolveConfig(ollama, { OLLAMA_HOST: "10.0.0.5:11434" }).baseUrl).toBe("http://10.0.0.5:11434/v1");
+    expect(resolveConfig(ollama, { OLLAMA_HOST: "https://box.lan/" }).baseUrl).toBe("https://box.lan/v1");
+  });
+
+  test("a baseUrl in the file wins over the preset", () => {
+    expect(resolveConfig({ provider: "ollama", model: "m", baseUrl: "http://gpu:11434/v1" }, {}).baseUrl).toBe("http://gpu:11434/v1");
   });
 });
 
 describe("needsSetup", () => {
   test("on first run", () => {
-    expect(needsSetup(null, resolveConfig(null, { ANTHROPIC_API_KEY: "k" }))).toBe(true);
+    expect(needsSetup(null, resolveConfig(null, { OPENROUTER_API_KEY: "k" }))).toBe(true);
   });
-  test("when Anthropic has no key", () => {
-    const file = { provider: "anthropic" as const, model: DEFAULT_MODEL };
+  test("when OpenRouter has no key", () => {
+    const file = { provider: "openrouter" as const, model: "z-ai/glm-5.3" };
     expect(needsSetup(file, resolveConfig(file, {}))).toBe(true);
-    expect(needsSetup(file, resolveConfig(file, { ANTHROPIC_API_KEY: "k" }))).toBe(false);
+    expect(needsSetup(file, resolveConfig(file, { OPENROUTER_API_KEY: "k" }))).toBe(false);
+  });
+  test("when Ollama has no model picked yet", () => {
+    expect(needsSetup({ provider: "ollama" }, resolveConfig({ provider: "ollama" }, {}))).toBe(true);
+    const file = { provider: "ollama" as const, model: "qwen3.5:9b" };
+    expect(needsSetup(file, resolveConfig(file, {}))).toBe(false);
   });
   test("never for echo", () => {
-    const file = { provider: "echo" as const, model: DEFAULT_MODEL };
+    const file = { provider: "echo" as const };
     expect(needsSetup(file, resolveConfig(file, {}))).toBe(false);
   });
 });
 
 test("maskKey hides the middle of a key", () => {
-  expect(maskKey("sk-ant-api03-abcdefghijklmnop-wxyz")).toBe("sk-ant-api…wxyz");
+  expect(maskKey("sk-or-v1-abcdefghijklmnop-wxyz")).toBe("sk-or-v1-a…wxyz");
   expect(maskKey("short")).toBe("****");
 });

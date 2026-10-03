@@ -1,14 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Box, Text, useApp, useInput, useWindowSize } from "ink";
-import Spinner from "ink-spinner";
+import { Box, useApp, useInput, useWindowSize } from "ink";
 import { copyToClipboard } from "./clipboard.ts";
 import { commands, isCommand, runCommand } from "./commands/index.ts";
-import { needsSetup, resolveConfig, type Config, type ConfigStore, type Env, type FileConfig } from "./config/config.ts";
+import {
+  needsSetup,
+  PRESETS,
+  resolveConfig,
+  type Config,
+  type ConfigStore,
+  type Env,
+  type FileConfig,
+  type ProviderId,
+} from "./config/config.ts";
 import { shortenHome } from "./paths.ts";
 import { mouse, type MouseEvent } from "./mouse.ts";
 import { createProvider } from "./provider/index.ts";
+import { listModels, type ModelInfo } from "./provider/models.ts";
 import type { ChatTurn, Provider } from "./provider/types.ts";
 import { selection } from "./selection.ts";
+import { systemPrompt } from "./prompt.ts";
 import type { Message } from "./types.ts";
 import { MessageView } from "./ui/MessageView.tsx";
 import { PromptInput } from "./ui/PromptInput.tsx";
@@ -16,7 +26,7 @@ import { ScrollView } from "./ui/ScrollView.tsx";
 import { Setup } from "./ui/Setup.tsx";
 import { Splash } from "./ui/Splash.tsx";
 import { StatusBar } from "./ui/StatusBar.tsx";
-import { theme } from "./ui/theme.ts";
+import { ThinkingView } from "./ui/ThinkingView.tsx";
 import { Transcript, type TranscriptItem } from "./ui/Transcript.tsx";
 
 const EXIT_CONFIRM_MS = 1500;
@@ -35,9 +45,12 @@ interface Props {
   makeProvider?: (config: Config) => Provider;
   /** Swappable so tests don't touch the real clipboard. Returns how it copied. */
   copy?: (text: string) => Promise<string>;
+  /** Swappable so tests don't hit OpenRouter or Ollama for the model picker. */
+  loadModels?: (config: Pick<Config, "provider" | "baseUrl">) => Promise<ModelInfo[]>;
 }
 
-type SetupMode = "first-run" | "reconfigure" | null;
+// "model" is the /model picker: the setup screen, starting at the model step.
+type SetupMode = "first-run" | "reconfigure" | "model" | null;
 
 export function App({
   store,
@@ -48,6 +61,7 @@ export function App({
   splashMs = 1200,
   makeProvider = createProvider,
   copy = copyToClipboard,
+  loadModels = listModels,
 }: Props) {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
@@ -67,6 +81,8 @@ export function App({
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [streaming, setStreaming] = useState<string | null>(null);
+  // The model's reasoning while it thinks. Shown live, never sent back to the model.
+  const [thinking, setThinking] = useState("");
   const [confirmExit, setConfirmExit] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -96,9 +112,17 @@ export function App({
       setStreaming("");
 
       let reply = "";
+      let thought = "";
+      const started = Date.now();
+      let thoughtMs = 0;
       try {
-        for await (const event of provider.stream(conversation.current, controller.signal)) {
-          if (event.type === "text_delta") {
+        const system = systemPrompt({ cwd });
+        for await (const event of provider.stream(conversation.current, { system, signal: controller.signal })) {
+          if (event.type === "thinking_delta") {
+            thought += event.text;
+            setThinking(thought);
+          } else if (event.type === "text_delta") {
+            if (thought && !thoughtMs) thoughtMs = Date.now() - started;
             reply += event.text;
             setStreaming(reply);
           } else if (event.type === "error") {
@@ -108,6 +132,10 @@ export function App({
       } catch (err) {
         addMessage({ role: "system", text: `Error: ${(err as Error).message}`, isError: true });
       } finally {
+        if (thought) {
+          const seconds = Math.max(1, Math.round((thoughtMs || Date.now() - started) / 1000));
+          addMessage({ role: "system", text: `✻ Thought for ${seconds}s` });
+        }
         if (reply) {
           addMessage({ role: "assistant", text: reply });
           conversation.current.push({ role: "assistant", text: reply });
@@ -115,9 +143,10 @@ export function App({
         if (controller.signal.aborted) addMessage({ role: "system", text: "Interrupted." });
         abortRef.current = null;
         setStreaming(null);
+        setThinking("");
       }
     },
-    [provider, addMessage],
+    [provider, addMessage, cwd],
   );
 
   const handleSubmit = (raw: string) => {
@@ -142,22 +171,46 @@ export function App({
       case "setup":
         setSetupMode("reconfigure");
         break;
+      case "thinking":
+        void saveConfig(
+          { ...(file ?? { provider: config.provider }), thinking: action.on },
+          action.on
+            ? "Thinking on: models may reason before answering (slower, often better)."
+            : "Thinking off: models answer directly.",
+        );
+        break;
+      case "model":
+        if (action.id) void completeSetup({ ...(file ?? { provider: config.provider }), model: action.id });
+        else setSetupMode("model");
+        break;
       case "exit":
         exit();
         break;
     }
   };
 
-  const completeSetup = async (next: FileConfig) => {
+  const saveConfig = async (next: FileConfig, notice: string) => {
     try {
       await store.save(next);
       setFile(next);
       setSetupMode(null);
-      addMessage({ role: "system", text: `Saved to ${shortenHome(store.path)} · ${next.provider} · ${next.model}` });
+      addMessage({ role: "system", text: notice });
     } catch (err) {
       addMessage({ role: "system", text: `Could not save config: ${(err as Error).message}`, isError: true });
     }
   };
+
+  const completeSetup = (next: FileConfig) => {
+    const model = next.provider === "echo" ? "" : ` · ${next.model}`;
+    return saveConfig(next, `Saved to ${shortenHome(store.path)} · ${PRESETS[next.provider].label}${model}`);
+  };
+
+  // The picker lists models for whichever provider is being chosen. A custom
+  // endpoint (baseUrl) only applies to the provider it was saved with.
+  const loadModelsFor = useCallback(
+    (p: ProviderId) => loadModels(resolveConfig({ provider: p, baseUrl: p === file?.provider ? file.baseUrl : undefined }, env)),
+    [loadModels, file, env],
+  );
 
   // On first run there is nothing to go back to, so cancelling setup quits.
   const cancelSetup = () => (setupMode === "first-run" ? exit() : setSetupMode(null));
@@ -250,12 +303,7 @@ export function App({
 
         {streaming !== null &&
           (streaming === "" ? (
-            <Box marginBottom={1}>
-              <Text color={theme.accent}>
-                <Spinner type="dots" />
-              </Text>
-              <Text color={theme.dim}> Thinking…</Text>
-            </Box>
+            <ThinkingView thought={thinking} />
           ) : (
             <MessageView message={{ role: "assistant", text: streaming }} />
           ))}
@@ -265,7 +313,9 @@ export function App({
         {setupMode ? (
           <Setup
             initial={file}
-            envApiKey={config.apiKeySource === "env" ? config.apiKey : undefined}
+            env={env}
+            loadModels={loadModelsFor}
+            startStep={setupMode === "model" ? "model" : "provider"}
             onComplete={completeSetup}
             onCancel={cancelSetup}
           />

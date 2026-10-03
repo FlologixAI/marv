@@ -1,24 +1,33 @@
-import type { Config } from "../config/config.ts";
+import { PRESETS, type Config } from "../config/config.ts";
 import { EchoProvider } from "./echo.ts";
+import { OpenAICompatProvider } from "./openai-compat.ts";
 import type { Provider } from "./types.ts";
 
 // The one place that maps a config to a concrete Provider.
-// Adding a vendor = one new case here; nothing else in the app changes.
+// OpenRouter and Ollama are the same adapter pointed at different URLs.
 export function createProvider(config: Config): Provider {
   switch (config.provider) {
     case "echo":
       return new EchoProvider();
-    case "anthropic":
-      // Placeholder until milestone 3 adds the real Anthropic adapter.
-      return {
-        name: config.model,
-        async *stream() {
-          yield {
-            type: "error",
-            message: "The Anthropic provider arrives in milestone 3. Use /setup and pick Echo to try the UI for now.",
-          };
-          yield { type: "done" };
-        },
-      };
+    case "openrouter":
+      return new OpenAICompatProvider({
+        name: `openrouter · ${config.model}`,
+        label: PRESETS.openrouter.label,
+        baseUrl: config.baseUrl!,
+        model: config.model,
+        apiKey: config.apiKey,
+        // Optional attribution: shows "ekko" in your OpenRouter activity log.
+        headers: { "X-Title": "ekko" },
+      });
+    case "ollama":
+      return new OpenAICompatProvider({
+        name: `ollama · ${config.model}`,
+        label: PRESETS.ollama.label,
+        baseUrl: config.baseUrl!,
+        model: config.model,
+        offlineHint: "Is Ollama running? Start it with `ollama serve`.",
+        // Local thinking models can reason for minutes; "none" makes them answer directly.
+        body: config.thinking ? {} : { reasoning_effort: "none" },
+      });
   }
 }

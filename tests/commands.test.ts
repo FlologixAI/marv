@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { isCommand, runCommand as run, type CommandContext } from "../src/commands/index.ts";
 
 const ctx: CommandContext = {
-  config: { provider: "anthropic", model: "claude-opus-5-5", apiKey: "sk-ant-api03-abcdefghijklmnop-wxyz", apiKeySource: "env" },
+  config: {
+    provider: "openrouter",
+    model: "z-ai/glm-5.3",
+    baseUrl: "https://openrouter.ai/api/v1",
+    apiKey: "sk-or-v1-abcdefghijklmnop-wxyz",
+    apiKeySource: "env",
+    thinking: false,
+  },
   configPath: "~/.ekko/config.json",
 };
 const runCommand = (input: string) => run(input, ctx);
@@ -30,8 +37,32 @@ describe("slash commands", () => {
   test("/config shows a masked key and where it came from", () => {
     const action = runCommand("/config");
     if (action.type !== "print") throw new Error("expected print");
-    expect(action.text).toContain("sk-ant-api…wxyz (from ANTHROPIC_API_KEY)");
+    expect(action.text).toContain("Provider:  OpenRouter");
+    expect(action.text).toContain("Endpoint:  https://openrouter.ai/api/v1");
+    expect(action.text).toContain("sk-or-v1-a…wxyz (from OPENROUTER_API_KEY)");
     expect(action.text).not.toContain("abcdefghijklmnop");
+  });
+
+  test("/config says when no key is needed (Ollama)", () => {
+    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", thinking: false } });
+    expect(action).toMatchObject({ type: "print", text: expect.stringContaining("API key:   not needed") });
+  });
+
+  test("/model opens the picker, or switches straight to a given id", () => {
+    expect(runCommand("/model")).toEqual({ type: "model" });
+    expect(runCommand("/model openai/gpt-5.6-sol")).toEqual({ type: "model", id: "openai/gpt-5.6-sol" });
+  });
+
+  test("/think toggles, or takes on/off", () => {
+    expect(runCommand("/think")).toEqual({ type: "thinking", on: true });
+    expect(run("/think", { ...ctx, config: { ...ctx.config, thinking: true } })).toEqual({ type: "thinking", on: false });
+    expect(runCommand("/think off")).toEqual({ type: "thinking", on: false });
+    expect(runCommand("/think maybe")).toMatchObject({ type: "print", isError: true });
+  });
+
+  test("/model explains that Echo has no models", () => {
+    const action = run("/model", { ...ctx, config: { provider: "echo", model: "echo", thinking: false } });
+    expect(action).toMatchObject({ type: "print", isError: true });
   });
 
   test("/setup opens the setup screen", () => {
