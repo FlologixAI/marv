@@ -5,8 +5,8 @@ import pkg from "../package.json";
 import { App } from "./app.tsx";
 import { ConfigError, ConfigStore, defaultConfigDir } from "./config/config.ts";
 import { filterMouseInput, MOUSE_OFF, MOUSE_ON } from "./mouse.ts";
-import { selection } from "./selection.ts";
 import { shortenHome } from "./paths.ts";
+import { renderOptions } from "./render-options.ts";
 
 const HELP = `ekko v${pkg.version}: a terminal coding agent
 
@@ -51,13 +51,9 @@ if (process.stdin.isTTY && process.stdout.isTTY) {
   process.on("exit", () => process.stdout.write(MOUSE_OFF));
 }
 
-// alternateScreen: draw on the terminal's separate full-screen buffer (like
-// vim or htop). Your shell's screen is restored untouched when ekko exits.
-// transformOutput (our Ink patch) lets the selection highlight be drawn into each frame.
-// ctrl+c is handled inside the app (interrupt / clear / confirm exit).
 const instance = render(
   <App store={store} initialFile={initialFile} env={process.env} version={pkg.version} cwd={shortenHome(process.cwd())} />,
-  { exitOnCtrlC: false, alternateScreen: true, transformOutput: selection.transformOutput },
+  renderOptions,
 );
 
 await instance.waitUntilExit();
