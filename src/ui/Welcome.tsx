@@ -1,14 +1,14 @@
 import { Box, Text } from "ink";
-import { Bot } from "./Bot.tsx";
+import { Martian } from "./Martian.tsx";
 import { theme } from "./theme.ts";
 
-// The banner at the top of the session: the ekko bot, with the text lined up
-// beside its head (the antenna row sits above the text).
-export function Welcome({ version, cwd }: { version: string; cwd: string }) {
+// The banner at the top of the session: the ekko martian, with the
+// welcome text centered beside it.
+export function Welcome({ version, cwd, animate = true }: { version: string; cwd: string; animate?: boolean }) {
   return (
     <Box borderStyle="round" borderColor={theme.accent} paddingX={2} marginBottom={1} gap={3}>
-      <Bot />
-      <Box flexDirection="column" justifyContent="flex-end">
+      <Martian animate={animate} />
+      <Box flexDirection="column" justifyContent="center">
         <Text>
           <Text bold>Welcome to ekko</Text>
           <Text color={theme.dim}> v{version}</Text>
