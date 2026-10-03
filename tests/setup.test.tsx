@@ -27,7 +27,6 @@ const MODELS: Record<ProviderId, ModelInfo[]> = {
     { id: "qwen3.5:9b", tools: true, local: true },
     { id: "tiny:1b", tools: false, local: true },
   ],
-  echo: [],
 };
 const loadModels = async (provider: ProviderId) => MODELS[provider];
 
@@ -96,11 +95,12 @@ describe("Setup", () => {
     expect(onComplete).toHaveBeenCalledWith({ provider: "ollama", model: "llama3:8b" });
   });
 
-  test("Echo finishes immediately", async () => {
-    const { stdin, onComplete } = renderSetup();
+  test("only real providers are offered", async () => {
+    const { lastFrame } = renderSetup();
     await tick();
-    await press(stdin, DOWN, DOWN, ENTER);
-    expect(onComplete).toHaveBeenCalledWith({ provider: "echo" });
+    expect(lastFrame()).toContain("OpenRouter");
+    expect(lastFrame()).toContain("Ollama");
+    expect(lastFrame()).not.toContain("Echo");
   });
 
   test("Enter on an empty key keeps the saved one", async () => {

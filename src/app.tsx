@@ -201,8 +201,8 @@ export function App({
   };
 
   const completeSetup = (next: FileConfig) => {
-    const model = next.provider === "echo" ? "" : ` · ${next.model}`;
-    return saveConfig(next, `Saved to ${shortenHome(store.path)} · ${PRESETS[next.provider].label}${model}`);
+    const label = PRESETS[next.provider ?? "openrouter"].label;
+    return saveConfig(next, `Saved to ${shortenHome(store.path)} · ${label} · ${next.model}`);
   };
 
   // The picker lists models for whichever provider is being chosen. A custom

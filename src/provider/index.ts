@@ -1,5 +1,4 @@
 import { PRESETS, type Config } from "../config/config.ts";
-import { EchoProvider } from "./echo.ts";
 import { OpenAICompatProvider } from "./openai-compat.ts";
 import type { Provider } from "./types.ts";
 
@@ -7,13 +6,11 @@ import type { Provider } from "./types.ts";
 // OpenRouter and Ollama are the same adapter pointed at different URLs.
 export function createProvider(config: Config): Provider {
   switch (config.provider) {
-    case "echo":
-      return new EchoProvider();
     case "openrouter":
       return new OpenAICompatProvider({
         name: `openrouter · ${config.model}`,
         label: PRESETS.openrouter.label,
-        baseUrl: config.baseUrl!,
+        baseUrl: config.baseUrl,
         model: config.model,
         apiKey: config.apiKey,
         // Optional attribution: shows "ekko" in your OpenRouter activity log.
@@ -23,7 +20,7 @@ export function createProvider(config: Config): Provider {
       return new OpenAICompatProvider({
         name: `ollama · ${config.model}`,
         label: PRESETS.ollama.label,
-        baseUrl: config.baseUrl!,
+        baseUrl: config.baseUrl,
         model: config.model,
         offlineHint: "Is Ollama running? Start it with `ollama serve`.",
         // Local thinking models can reason for minutes; "none" makes them answer directly.

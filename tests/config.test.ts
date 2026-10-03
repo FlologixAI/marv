@@ -25,19 +25,18 @@ describe("ConfigStore", () => {
     expect((await stat(store.path)).mode & 0o777).toBe(0o600);
   });
 
-  test("defaults to OpenRouter when the provider is missing", async () => {
-    await store.save({ provider: "echo" });
-    await writeFile(store.path, "{}");
-    expect(await store.load()).toEqual({ provider: "openrouter" });
-  });
-
-  test("rejects invalid JSON and unknown providers", async () => {
-    await store.save({ provider: "echo" });
+  test("rejects invalid JSON", async () => {
+    await store.save({ provider: "ollama" });
     await writeFile(store.path, "{not json");
     await expect(store.load()).rejects.toBeInstanceOf(ConfigError);
+  });
 
-    await writeFile(store.path, JSON.stringify({ provider: "nope" }));
-    await expect(store.load()).rejects.toBeInstanceOf(ConfigError);
+  test("drops a provider ekko no longer has (like the old echo), keeping the rest", async () => {
+    await store.save({ provider: "ollama" });
+    await writeFile(store.path, JSON.stringify({ provider: "echo", apiKey: "sk-or-keep" }));
+    const file = await store.load();
+    expect(file).toEqual({ apiKey: "sk-or-keep" });
+    expect(needsSetup(file, resolveConfig(file, {}))).toBe(true); // so setup opens instead of a crash
   });
 });
 
@@ -87,8 +86,8 @@ describe("needsSetup", () => {
     const file = { provider: "ollama" as const, model: "qwen3.5:9b" };
     expect(needsSetup(file, resolveConfig(file, {}))).toBe(false);
   });
-  test("never for echo", () => {
-    const file = { provider: "echo" as const };
+  test("not when a provider and model are set and no key is needed", () => {
+    const file = { provider: "ollama" as const, model: "qwen3.5:9b" };
     expect(needsSetup(file, resolveConfig(file, {}))).toBe(false);
   });
 });

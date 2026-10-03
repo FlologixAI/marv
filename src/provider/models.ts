@@ -25,9 +25,6 @@ export async function listModels(
   fetchFn: typeof fetch = fetch,
 ): Promise<ModelInfo[]> {
   switch (config.provider) {
-    case "echo":
-      return [];
-
     case "openrouter": {
       // Public endpoint, no key needed. Prices come back in USD per token.
       const { data } = await getJson<{ data: OpenRouterModel[] }>(fetchFn, `${config.baseUrl}/models`);
@@ -46,7 +43,7 @@ export async function listModels(
     case "ollama": {
       // Ollama's native API (not the /v1 compatibility layer) lists local
       // models and, per model, its capabilities.
-      const origin = new URL(config.baseUrl!).origin;
+      const origin = new URL(config.baseUrl).origin;
       const { models } = await getJson<{ models: { name: string }[] }>(fetchFn, `${origin}/api/tags`);
       return Promise.all(
         models.map(async ({ name }) => {

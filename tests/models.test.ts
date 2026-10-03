@@ -47,10 +47,6 @@ describe("listModels", () => {
     ]);
   });
 
-  test("Echo has no models", async () => {
-    expect(await listModels({ provider: "echo" }, fakeFetch({}))).toEqual([]);
-  });
-
   test("a failed request becomes a readable error", async () => {
     const fetch = fakeFetch({});
     await expect(listModels({ provider: "ollama", baseUrl: "http://localhost:11434/v1" }, fetch)).rejects.toThrow(

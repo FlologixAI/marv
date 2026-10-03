@@ -6,9 +6,9 @@ import { cleanup, render } from "ink-testing-library";
 import { App } from "../src/app.tsx";
 import { ConfigStore, type Config, type FileConfig } from "../src/config/config.ts";
 import { mouse } from "../src/mouse.ts";
-import { EchoProvider } from "../src/provider/echo.ts";
 import type { ChatTurn, Provider, StreamOptions } from "../src/provider/types.ts";
 import { selection } from "../src/selection.ts";
+import { FakeProvider } from "./fake-provider.ts";
 
 const ENTER = "\r";
 const DOWN = "\x1b[B";
@@ -22,7 +22,8 @@ async function type(stdin: { write: (data: string) => void }, text: string) {
   stdin.write(ENTER);
 }
 
-const ECHO: FileConfig = { provider: "echo" };
+// Any saved provider + model will do; makeProvider swaps in a fake, so nothing hits the network.
+const LOCAL: FileConfig = { provider: "ollama", model: "qwen3.5:9b" };
 
 let dir: string;
 let store: ConfigStore;
@@ -40,7 +41,7 @@ function renderApp(
   initialFile: FileConfig | null,
   splashMs = 0,
   copy = async (_text: string) => "test",
-  makeProvider: (config: Config) => Provider = () => new EchoProvider(0),
+  makeProvider: (config: Config) => Provider = () => new FakeProvider(),
 ) {
   return render(
     <App
@@ -59,7 +60,7 @@ function renderApp(
 
 describe("App", () => {
   test("shows the splash, then the main view after a key press", async () => {
-    const { lastFrame, stdin } = renderApp(ECHO, 60_000);
+    const { lastFrame, stdin } = renderApp(LOCAL, 60_000);
     expect(lastFrame()).toContain("press any key");
 
     stdin.write("x");
@@ -74,43 +75,43 @@ describe("App", () => {
 
     stdin.write(DOWN);
     await tick();
-    stdin.write(DOWN);
+    stdin.write(ENTER); // Ollama
     await tick();
-    stdin.write(ENTER); // Echo
+    stdin.write(ENTER); // the only model the fake list offers
     await tick();
 
-    expect(await store.load()).toEqual(ECHO);
+    expect(await store.load()).toEqual(LOCAL);
     await tick(); // the "Saved" notice renders just after the file is written
     expect(frames.join("\n")).toContain("Saved to");
     expect(lastFrame()).toContain("Type a message");
   });
 
-  test("echoes a message back through the provider stream", async () => {
-    const { frames, stdin } = renderApp(ECHO);
+  test("streams a reply through the provider", async () => {
+    const { frames, stdin } = renderApp(LOCAL);
     await type(stdin, "hello world");
     await tick(200);
     expect(frames.join("\n")).toContain("You said: hello world");
   });
 
   test("/help prints the command list", async () => {
-    const { frames, stdin } = renderApp(ECHO);
+    const { frames, stdin } = renderApp(LOCAL);
     await type(stdin, "/help");
     await tick();
     expect(frames.join("\n")).toContain("Clear the conversation");
   });
 
   test("/config shows the provider and model", async () => {
-    const { frames, stdin } = renderApp(ECHO);
+    const { frames, stdin } = renderApp(LOCAL);
     await type(stdin, "/config");
     await tick();
     const output = frames.join("\n");
-    expect(output).toContain("Provider:  Echo");
+    expect(output).toContain("Provider:  Ollama");
     expect(output).toContain("API key:   not needed");
   });
 
   test("dragging over text copies it and says so", async () => {
     const copied: string[] = [];
-    const { lastFrame } = renderApp(ECHO, 0, async (text) => {
+    const { lastFrame } = renderApp(LOCAL, 0, async (text) => {
       copied.push(text);
       return "wl-copy";
     });
@@ -140,7 +141,7 @@ describe("App", () => {
         yield { type: "done" };
       },
     };
-    const { stdin } = renderApp(ECHO, 0, undefined, () => spy);
+    const { stdin } = renderApp(LOCAL, 0, undefined, () => spy);
     await type(stdin, "first");
     await tick(100);
     await type(stdin, "second");
@@ -187,7 +188,7 @@ describe("App", () => {
         yield { type: "done" };
       },
     };
-    const { lastFrame, stdin } = renderApp(ECHO, 0, undefined, () => thinker);
+    const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => thinker);
     await type(stdin, "hello");
     await tick(100);
     expect(lastFrame()).toContain("Thinking… (9 words)");

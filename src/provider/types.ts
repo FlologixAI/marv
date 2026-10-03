@@ -1,6 +1,6 @@
 // The seam between ekko and any LLM vendor.
 //
-// Every provider (Echo, and OpenRouter/Ollama through the OpenAI-compatible
+// Every provider (OpenRouter and Ollama, through the OpenAI-compatible
 // adapter) turns its own streaming format into these events. The UI and the agent
 // loop only ever see AgentEvent, so swapping vendors never touches them.
 
@@ -24,7 +24,7 @@ export interface StreamOptions {
 }
 
 export interface Provider {
-  /** Shown in the status bar, e.g. "echo" or "openrouter · z-ai/glm-5.3". */
+  /** Shown in the status bar, e.g. "openrouter · z-ai/glm-5.3". */
   readonly name: string;
   stream(history: ChatTurn[], options?: StreamOptions): AsyncIterable<AgentEvent>;
 }

@@ -13,7 +13,7 @@ bun install
 bun run dev                 # run the TUI from source (same as `ekko`)
 bun test                    # all tests
 bun test tests/commands     # one file (path substring filter)
-bun test -t "echoes"        # tests whose name matches
+bun test -t "streams"       # tests whose name matches
 bun run typecheck           # tsc --noEmit
 bun link                    # (once) puts `ekko` on PATH, pointing at src/cli.tsx — no build step
 ```
@@ -38,5 +38,5 @@ bun link                    # (once) puts `ekko` on PATH, pointing at src/cli.ts
 ## Conventions
 
 - Imports use explicit `.ts`/`.tsx` extensions (`allowImportingTsExtensions` + `verbatimModuleSyntax`; use `import type` for types).
-- UI tests use `ink-testing-library`. Pass `splashMs={0}` to skip the splash, `makeProvider={() => new EchoProvider(0)}` for an instant stream, and a `ConfigStore` on a temp dir.
-- Providers: OpenRouter (default model `anthropic/claude-sonnet-5.5`), Ollama (local, no key), Echo (offline fake). Tests never hit the network: the adapter is tested against a local `Bun.serve`, and `App` takes `loadModels`/`makeProvider` props.
+- UI tests use `ink-testing-library`. Pass `splashMs={0}` to skip the splash, `makeProvider={() => new FakeProvider()}` (`tests/fake-provider.ts`) for an instant, offline stream, and a `ConfigStore` on a temp dir.
+- Providers: OpenRouter (default model `anthropic/claude-sonnet-5.5`) and Ollama (local, no key). A saved provider ekko no longer knows (e.g. the removed `echo`) is dropped on load, which reopens setup. Tests never hit the network: the adapter is tested against a local `Bun.serve`, and `App` takes `loadModels`/`makeProvider` props.

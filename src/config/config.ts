@@ -8,13 +8,13 @@ import { z } from "zod";
 //   2. environment variables (OPENROUTER_API_KEY, EKKO_MODEL, OLLAMA_HOST)
 // The file is what we save; the resolved Config is what the app runs with.
 
-export const PROVIDERS = ["openrouter", "ollama", "echo"] as const;
+export const PROVIDERS = ["openrouter", "ollama"] as const;
 export type ProviderId = (typeof PROVIDERS)[number];
 
 interface Preset {
   label: string;
-  /** OpenAI-compatible endpoint; absent for providers that don't talk HTTP. */
-  baseUrl?: string;
+  /** The OpenAI-compatible endpoint. */
+  baseUrl: string;
   /** Env var that overrides the saved key; absent when no key is needed. */
   keyEnv?: string;
   keyUrl?: string;
@@ -22,8 +22,7 @@ interface Preset {
   defaultModel: string;
 }
 
-// Each provider is just a preset for the same OpenAI-compatible adapter
-// (except Echo, which is a fake for trying the UI offline).
+// Each provider is just a preset for the same OpenAI-compatible adapter.
 export const PRESETS: Record<ProviderId, Preset> = {
   openrouter: {
     label: "OpenRouter",
@@ -33,11 +32,14 @@ export const PRESETS: Record<ProviderId, Preset> = {
     defaultModel: "anthropic/claude-sonnet-5.5",
   },
   ollama: { label: "Ollama", baseUrl: "http://localhost:11434/v1", defaultModel: "" },
-  echo: { label: "Echo", defaultModel: "echo" },
 };
 
+const isProvider = (value: unknown): value is ProviderId => PROVIDERS.includes(value as ProviderId);
+
 const FileConfigSchema = z.object({
-  provider: z.enum(PROVIDERS).default("openrouter"),
+  // A provider ekko no longer has (e.g. the old "echo") is dropped rather than
+  // rejected, so setup opens instead of ekko refusing to start.
+  provider: z.preprocess((v) => (isProvider(v) ? v : undefined), z.enum(PROVIDERS).optional()),
   model: z.string().min(1).optional(),
   /** The OpenRouter key (the only provider that needs one so far). */
   apiKey: z.string().min(1).optional(),
@@ -54,7 +56,7 @@ export type FileConfig = z.infer<typeof FileConfigSchema>;
 export interface Config {
   provider: ProviderId;
   model: string;
-  baseUrl?: string;
+  baseUrl: string;
   apiKey?: string;
   apiKeySource?: "env" | "file";
   thinking: boolean;
@@ -118,14 +120,14 @@ export function resolveConfig(file: FileConfig | null, env: Env): Config {
 
 /** OLLAMA_HOST is Ollama's own setting ("127.0.0.1:11434" or a full URL); honor it. */
 function ollamaUrl(host: string | undefined): string {
-  if (!host?.trim()) return PRESETS.ollama.baseUrl!;
+  if (!host?.trim()) return PRESETS.ollama.baseUrl;
   const url = /^https?:\/\//.test(host) ? host : `http://${host}`;
   return `${url.replace(/\/+$/, "")}/v1`;
 }
 
-/** First run, a provider that needs a key we don't have, or no model picked yet. */
+/** First run, no provider chosen, a provider that needs a key we don't have, or no model picked yet. */
 export function needsSetup(file: FileConfig | null, config: Config): boolean {
-  if (file === null || !config.model) return true;
+  if (file?.provider === undefined || !config.model) return true;
   return Boolean(PRESETS[config.provider].keyEnv) && !config.apiKey;
 }
 

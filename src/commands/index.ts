@@ -44,12 +44,7 @@ export const commands: Command[] = [
   {
     name: "model",
     description: "Switch model (/model to pick, /model <id> to set)",
-    run: (args, { config }) => {
-      if (config.provider === "echo") {
-        return { type: "print", text: "Echo has no models. Use /setup to choose OpenRouter or Ollama.", isError: true };
-      }
-      return args ? { type: "model", id: args } : { type: "model" };
-    },
+    run: (args) => (args ? { type: "model", id: args } : { type: "model" }),
   },
   {
     name: "think",

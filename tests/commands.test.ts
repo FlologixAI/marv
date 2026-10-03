@@ -44,7 +44,7 @@ describe("slash commands", () => {
   });
 
   test("/config says when no key is needed (Ollama)", () => {
-    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", thinking: false } });
+    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://localhost:11434/v1", thinking: false } });
     expect(action).toMatchObject({ type: "print", text: expect.stringContaining("API key:   not needed") });
   });
 
@@ -58,11 +58,6 @@ describe("slash commands", () => {
     expect(run("/think", { ...ctx, config: { ...ctx.config, thinking: true } })).toEqual({ type: "thinking", on: false });
     expect(runCommand("/think off")).toEqual({ type: "thinking", on: false });
     expect(runCommand("/think maybe")).toMatchObject({ type: "print", isError: true });
-  });
-
-  test("/model explains that Echo has no models", () => {
-    const action = run("/model", { ...ctx, config: { provider: "echo", model: "echo", thinking: false } });
-    expect(action).toMatchObject({ type: "print", isError: true });
   });
 
   test("/setup opens the setup screen", () => {

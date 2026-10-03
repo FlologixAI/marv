@@ -24,7 +24,6 @@ interface Props {
 const PROVIDER_ITEMS = [
   { value: "openrouter", label: "OpenRouter", hint: "hundreds of cloud models, one API key" },
   { value: "ollama", label: "Ollama", hint: "models running on this machine, free" },
-  { value: "echo", label: "Echo", hint: "offline test mode, repeats what you type" },
 ] as const;
 
 /** Drops undefined fields so the saved JSON stays tidy. */
@@ -62,8 +61,7 @@ export function Setup({ initial, env, loadModels, startStep = "provider", onComp
 
   const chooseProvider = (value: ProviderId) => {
     setProvider(value);
-    if (value === "echo") onComplete(tidy({ provider: value, apiKey: initial?.apiKey }));
-    else setStep("model");
+    setStep("model");
   };
 
   const chooseModel = (value: string) => {
