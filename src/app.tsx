@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import Spinner from "ink-spinner";
+import { copyToClipboard } from "./clipboard.ts";
 import { isCommand, runCommand } from "./commands/index.ts";
 import { needsSetup, resolveConfig, type Config, type ConfigStore, type Env, type FileConfig } from "./config/config.ts";
 import { shortenHome } from "./paths.ts";
+import { mouse, type MouseEvent } from "./mouse.ts";
 import { createProvider } from "./provider/index.ts";
 import type { ChatTurn, Provider } from "./provider/types.ts";
+import { selection } from "./selection.ts";
 import type { Message } from "./types.ts";
 import { MessageView } from "./ui/MessageView.tsx";
 import { PromptInput } from "./ui/PromptInput.tsx";
@@ -17,6 +20,7 @@ import { theme } from "./ui/theme.ts";
 import { Transcript, type TranscriptItem } from "./ui/Transcript.tsx";
 
 const EXIT_CONFIRM_MS = 1500;
+const NOTICE_MS = 2000;
 
 interface Props {
   store: ConfigStore;
@@ -29,11 +33,22 @@ interface Props {
   splashMs?: number;
   /** Swappable so tests can inject an instant provider. */
   makeProvider?: (config: Config) => Provider;
+  /** Swappable so tests don't touch the real clipboard. Returns how it copied. */
+  copy?: (text: string) => Promise<string>;
 }
 
 type SetupMode = "first-run" | "reconfigure" | null;
 
-export function App({ store, initialFile, env, version, cwd, splashMs = 1200, makeProvider = createProvider }: Props) {
+export function App({
+  store,
+  initialFile,
+  env,
+  version,
+  cwd,
+  splashMs = 1200,
+  makeProvider = createProvider,
+  copy = copyToClipboard,
+}: Props) {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
   const [phase, setPhase] = useState<"splash" | "main">(splashMs > 0 ? "splash" : "main");
@@ -53,6 +68,7 @@ export function App({ store, initialFile, env, version, cwd, splashMs = 1200, ma
   const [history, setHistory] = useState<string[]>([]);
   const [streaming, setStreaming] = useState<string | null>(null);
   const [confirmExit, setConfirmExit] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const nextId = useRef(1);
   // Bumped on every submit so the transcript jumps back to the newest message.
@@ -170,6 +186,50 @@ export function App({ store, initialFile, env, version, cwd, splashMs = 1200, ma
     return () => clearTimeout(timer);
   }, [confirmExit]);
 
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  // Mouse selection: drag to highlight, release to copy. The highlight is drawn
+  // by selection.transformOutput (hooked into Ink in cli.tsx); subscribing here
+  // re-renders on every change so Ink produces a frame with the new highlight.
+  useSyncExternalStore(selection.subscribe, () => selection.current);
+  useEffect(() => {
+    const onMouse = (event: MouseEvent) => {
+      switch (event.type) {
+        case "press":
+          selection.start({ x: event.x, y: event.y });
+          break;
+        case "drag":
+          selection.extend({ x: event.x, y: event.y });
+          break;
+        case "release": {
+          const text = selection.text();
+          if (!text) {
+            selection.clear(); // just a click
+            break;
+          }
+          void copy(text).then((how) =>
+            setNotice(how === "osc52" ? `Sent ${text.length} chars to the terminal clipboard` : `Copied ${text.length} chars`),
+          );
+          break;
+        }
+        case "scroll":
+          selection.clear(); // the text under the highlight is moving
+          break;
+      }
+    };
+    mouse.on("event", onMouse);
+    return () => {
+      mouse.off("event", onMouse);
+    };
+  }, [copy]);
+
+  // Typing anything clears the highlight, like in a terminal.
+  useInput(() => selection.clear(), { isActive: phase === "main" });
+
   const finishSplash = useCallback(() => setPhase("main"), []);
 
   // ekko runs in the alternate screen (see cli.tsx), so the root fills the
@@ -212,7 +272,7 @@ export function App({ store, initialFile, env, version, cwd, splashMs = 1200, ma
         ) : (
           <>
             <PromptInput value={input} onChange={setInput} onSubmit={handleSubmit} history={history} busy={busy} />
-            <StatusBar model={provider.name} cwd={cwd} confirmExit={confirmExit} busy={busy} />
+            <StatusBar model={provider.name} cwd={cwd} confirmExit={confirmExit} notice={notice} busy={busy} />
           </>
         )}
       </Box>

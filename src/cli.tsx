@@ -4,6 +4,8 @@ import { render } from "ink";
 import pkg from "../package.json";
 import { App } from "./app.tsx";
 import { ConfigError, ConfigStore, defaultConfigDir } from "./config/config.ts";
+import { filterMouseInput, MOUSE_OFF, MOUSE_ON } from "./mouse.ts";
+import { selection } from "./selection.ts";
 import { shortenHome } from "./paths.ts";
 
 const HELP = `ekko v${pkg.version}: a terminal coding agent
@@ -40,12 +42,22 @@ try {
   process.exit(1);
 }
 
+// Mouse wheel scrolling and drag-to-select (see src/mouse.ts, src/selection.ts). Mouse reporting is a terminal-wide
+// mode, so it must be switched off on every way out, or the shell would start
+// receiving mouse codes after ekko quits.
+if (process.stdin.isTTY && process.stdout.isTTY) {
+  filterMouseInput(process.stdin);
+  process.stdout.write(MOUSE_ON);
+  process.on("exit", () => process.stdout.write(MOUSE_OFF));
+}
+
 // alternateScreen: draw on the terminal's separate full-screen buffer (like
 // vim or htop). Your shell's screen is restored untouched when ekko exits.
+// transformOutput (our Ink patch) lets the selection highlight be drawn into each frame.
 // ctrl+c is handled inside the app (interrupt / clear / confirm exit).
 const instance = render(
   <App store={store} initialFile={initialFile} env={process.env} version={pkg.version} cwd={shortenHome(process.cwd())} />,
-  { exitOnCtrlC: false, alternateScreen: true },
+  { exitOnCtrlC: false, alternateScreen: true, transformOutput: selection.transformOutput },
 );
 
 await instance.waitUntilExit();

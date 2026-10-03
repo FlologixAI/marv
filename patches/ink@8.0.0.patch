@@ -1,0 +1,42 @@
+diff --git a/build/ink.d.ts b/build/ink.d.ts
+index 3aca51bd7da892eb5cfb1df671c46155b5011892..913f265a6defefd0d79e119f0ffd9900d8922dad 100644
+--- a/build/ink.d.ts
++++ b/build/ink.d.ts
+@@ -21,6 +21,7 @@ export type Options = {
+     exitOnCtrlC: boolean;
+     patchConsole: boolean;
+     onRender?: (metrics: RenderMetrics) => void;
++    transformOutput?: (output: string) => string;
+     isScreenReaderEnabled?: boolean;
+     waitUntilExit?: () => Promise<unknown>;
+     maxFps?: number;
+diff --git a/build/ink.js b/build/ink.js
+index 550cdf00d2b15ac43f5d1cd708bc82c52c513569..b67eb2409e425b59c49dda7c108e79766fae1b43 100644
+--- a/build/ink.js
++++ b/build/ink.js
+@@ -233,7 +233,9 @@ export default class Ink {
+             this.lastOutputToRender = '';
+         }
+         const startTime = performance.now();
+-        const { output, outputHeight, staticOutput } = render(this.rootNode, this.isScreenReaderEnabled);
++        const { output: rawOutput, outputHeight, staticOutput } = render(this.rootNode, this.isScreenReaderEnabled);
++        // ekko patch: let the app post-process each frame (used for mouse text selection).
++        const output = this.options.transformOutput ? this.options.transformOutput(rawOutput) : rawOutput;
+         const renderTime = performance.now() - startTime;
+         this.renderFrame(output, outputHeight, staticOutput);
+         this.options.onRender?.({ renderTime });
+diff --git a/build/render.d.ts b/build/render.d.ts
+index 63c59ec147214d98a2be2f73df390fd3ee59bb40..642a49f6068a3d9c185c5c8f76e369f3279c1ad5 100644
+--- a/build/render.d.ts
++++ b/build/render.d.ts
+@@ -48,6 +48,10 @@ export type RenderOptions = {
+     */
+     onRender?: (metrics: RenderMetrics) => void;
+     /**
++    (ekko patch) Post-process each rendered frame before it is written. Must not change the frame's dimensions.
++    */
++    transformOutput?: (output: string) => string;
++    /**
+     Enable screen reader support. See https://github.com/vadimdemedes/ink/blob/master/readme.md#screen-reader-support
+ 
+     @default process.env['INK_SCREEN_READER'] === 'true'

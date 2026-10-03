@@ -6,13 +6,17 @@ interface Props {
   cwd: string;
   /** Set after one ctrl+c on an empty prompt. */
   confirmExit: boolean;
+  /** A short-lived message, e.g. after copying a selection. */
+  notice?: string | null;
   busy: boolean;
 }
 
-export function StatusBar({ model, cwd, confirmExit, busy }: Props) {
+export function StatusBar({ model, cwd, confirmExit, notice, busy }: Props) {
   const hint = confirmExit
     ? "Press ctrl+c again to exit"
-    : busy
+    : notice
+      ? notice
+      : busy
       ? "ctrl+c to interrupt"
       : "/help · PgUp/PgDn to scroll · ctrl+c to exit";
 

@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { cleanup, render } from "ink-testing-library";
 import { App } from "../src/app.tsx";
 import { ConfigStore, type FileConfig } from "../src/config/config.ts";
+import { mouse } from "../src/mouse.ts";
 import { EchoProvider } from "../src/provider/echo.ts";
+import { selection } from "../src/selection.ts";
 
 const ENTER = "\r";
 const DOWN = "\x1b[B";
@@ -33,7 +35,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function renderApp(initialFile: FileConfig | null, splashMs = 0) {
+function renderApp(initialFile: FileConfig | null, splashMs = 0, copy = async (_text: string) => "test") {
   return render(
     <App
       store={store}
@@ -43,6 +45,7 @@ function renderApp(initialFile: FileConfig | null, splashMs = 0) {
       cwd="~/x"
       splashMs={splashMs}
       makeProvider={() => new EchoProvider(0)}
+      copy={copy}
     />,
   );
 }
@@ -93,5 +96,27 @@ describe("App", () => {
     const output = frames.join("\n");
     expect(output).toContain("Provider:  echo");
     expect(output).toContain("API key:   not set");
+  });
+
+  test("dragging over text copies it and says so", async () => {
+    const copied: string[] = [];
+    const { lastFrame } = renderApp(ECHO, 0, async (text) => {
+      copied.push(text);
+      return "wl-copy";
+    });
+    await tick();
+    // The real app feeds frames to the store through Ink's transformOutput hook.
+    selection.transformOutput(lastFrame()!);
+    const y = lastFrame()!.split("\n").findIndex((line) => line.includes("Welcome"));
+    const x = lastFrame()!.split("\n")[y]!.indexOf("Welcome");
+
+    mouse.emit("event", { type: "press", x, y });
+    mouse.emit("event", { type: "drag", x: x + 6, y });
+    mouse.emit("event", { type: "release", x: x + 6, y });
+    await tick();
+
+    expect(copied).toEqual(["Welcome"]);
+    expect(lastFrame()).toContain("Copied 7 chars");
+    selection.clear();
   });
 });

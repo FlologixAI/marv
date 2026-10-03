@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Box, useBoxMetrics, useInput } from "ink";
+import { mouse, type MouseEvent } from "../mouse.ts";
+
+const WHEEL_ROWS = 3;
 
 interface Props {
   children: ReactNode;
@@ -12,9 +15,9 @@ interface Props {
 // transcript. The viewport fills whatever height its parent gives it and
 // clips the content, which is shifted up by `contentOffsetY` rows.
 //
-// It follows the bottom (like a chat) until you press PgUp. Then it stays where
-// you scrolled, even while a reply streams in, until you page back down or
-// `followKey` changes.
+// It follows the bottom (like a chat) until you press PgUp or scroll up. Then
+// it stays where you scrolled, even while a reply streams in, until you scroll
+// back down or `followKey` changes.
 export function ScrollView({ children, followKey = 0, isActive = true }: Props) {
   const viewportRef = useRef(null);
   const contentRef = useRef(null);
@@ -31,17 +34,35 @@ export function ScrollView({ children, followKey = 0, isActive = true }: Props) 
   // Keep one row of overlap so you don't lose your place.
   const page = Math.max(1, viewport.clientHeight - 1);
 
+  // Functional update: a fast wheel spin delivers several notches before the
+  // next render, and each must build on the last.
+  const scrollBy = (rows: number) =>
+    setTop((prev) => {
+      const current = prev === null ? maxTop : Math.min(prev, maxTop);
+      const next = Math.max(0, current + rows);
+      return next >= maxTop ? null : next;
+    });
+
   useInput(
     (_input, key) => {
-      if (key.pageUp) {
-        setTop(Math.max(0, scrollTop - page));
-      } else if (key.pageDown) {
-        const next = scrollTop + page;
-        setTop(next >= maxTop ? null : next);
-      }
+      if (key.pageUp) scrollBy(-page);
+      else if (key.pageDown) scrollBy(page);
     },
     { isActive },
   );
+
+  // Wheel notches come from src/mouse.ts, which filters them out of stdin.
+  // Re-subscribed every render so the handler sees the current maxTop.
+  useEffect(() => {
+    if (!isActive) return;
+    const onMouse = (event: MouseEvent) => {
+      if (event.type === "scroll") scrollBy(event.step * WHEEL_ROWS);
+    };
+    mouse.on("event", onMouse);
+    return () => {
+      mouse.off("event", onMouse);
+    };
+  });
 
   return (
     <Box ref={viewportRef} flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden" contentOffsetY={scrollTop}>

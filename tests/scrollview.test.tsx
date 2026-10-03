@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Box, Text } from "ink";
 import { cleanup, render } from "ink-testing-library";
+import { mouse } from "../src/mouse.ts";
 import { ScrollView } from "../src/ui/ScrollView.tsx";
 
 const PAGE_UP = "\x1b[5~";
@@ -58,6 +59,27 @@ describe("ScrollView", () => {
     rerender(<Lines count={12} />);
     await tick();
     expect(visible(lastFrame())[0]).toBe("line 4");
+  });
+
+  test("the mouse wheel scrolls 3 rows per notch", async () => {
+    const { lastFrame } = render(<Lines count={10} />);
+    await tick();
+    mouse.emit("event", { type: "scroll", step: -1 });
+    await tick();
+    expect(visible(lastFrame())[0]).toBe("line 4");
+
+    mouse.emit("event", { type: "scroll", step: 1 });
+    await tick();
+    expect(visible(lastFrame()).at(-1)).toBe("line 10");
+  });
+
+  test("several wheel notches before a render all count", async () => {
+    const { lastFrame } = render(<Lines count={20} />);
+    await tick();
+    mouse.emit("event", { type: "scroll", step: -1 });
+    mouse.emit("event", { type: "scroll", step: -1 });
+    await tick();
+    expect(visible(lastFrame())[0]).toBe("line 11");
   });
 
   test("a new followKey jumps back to the bottom", async () => {
