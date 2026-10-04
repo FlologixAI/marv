@@ -24,7 +24,8 @@
 | `src/sandbox.ts`, `src/tools/bash.ts` | modify | Extra read-only folders (a worktree's shared `.git`); bash `usesNetwork` |
 | `src/agent.ts` | modify | Run consecutive parallel calls concurrently; results in call order |
 | `src/prompt.ts` | modify | `# Agents` section; `subagentPrompt()` |
-| `src/worktree.ts` | new | Create / inspect / finish git worktrees |
+| `src/worktree.ts` | new | Create / inspect / finish git worktrees; safe git environment |
+| `src/tools/files.ts`, `src/tools/glob.ts`, `src/tools/grep.ts` | modify | File listing never runs repo programs; pinnable git paths |
 | `src/subagent.ts` | new | Run one subagent: tools, prompt, approvals, progress, report |
 | `src/tools/agent.ts` | new | The `agent` tool (schema, approval preview, run) |
 | `tests/fake-provider.ts` | modify | `RoutedProvider` for interleaved subagent requests |
@@ -1104,6 +1105,38 @@ describe("createWorktree / finishWorktree", () => {
     expect(git(repo, "show", `${wt.branch}:b.txt`)).toBe("bee"); // committed to the real branch, not the fake repo
   });
 
+  test("a nested repository (e.g. in a submodule's folder) isn't committed automatically", async () => {
+    const wt = createWorktree({ root: repo, baseDir: trees, description: "Nested" });
+    await mkdir(join(wt.dir, "sub", ".git"), { recursive: true });
+    await writeFile(join(wt.dir, "c.txt"), "c\n");
+    const line = finishWorktree(wt, { description: "Nested", interrupted: false });
+    expect(line).toContain("another git repository (sub/.git)");
+    expect(line).toContain(`still in ${wt.dir}`);
+    expect(existsSync(join(wt.dir, "c.txt"))).toBe(true);
+    expect(git(repo, "rev-list", "--count", `main..${wt.branch}`)).toBe("0");
+  });
+
+  test("only this worktree's record is removed, not the user's other worktrees", async () => {
+    const other = join(trees, "users-own");
+    git(repo, "worktree", "add", "-q", "-b", "mine", other);
+    await rm(other, { recursive: true, force: true }); // e.g. on a drive that isn't mounted right now
+    const wt = createWorktree({ root: repo, baseDir: trees, description: "Tidy" });
+    finishWorktree(wt, { description: "Tidy", interrupted: false });
+    expect(git(repo, "worktree", "list")).toContain(other);
+    expect(git(repo, "worktree", "list")).not.toContain(wt.dir);
+  });
+
+  test("inherited GIT_* variables don't redirect Marv's git", async () => {
+    const wt = createWorktree({ root: repo, baseDir: trees, description: "Env" });
+    await writeFile(join(wt.dir, "d.txt"), "d\n");
+    process.env.GIT_INDEX_FILE = join(trees, "elsewhere-index");
+    try {
+      expect(finishWorktree(wt, { description: "Env", interrupted: false })).toContain("1 commit");
+    } finally {
+      delete process.env.GIT_INDEX_FILE;
+    }
+  });
+
   test("leftover changes are committed, the folder removed, the branch kept", async () => {
     const wt = createWorktree({ root: repo, baseDir: trees, description: "Add b" });
     await writeFile(join(wt.dir, "b.txt"), "bee\n");
@@ -1152,8 +1185,8 @@ Expected: FAIL, `Cannot find module '../src/worktree.ts'`.
 // it can't plant hooks or config that git would later run outside the
 // sandbox. When it's done, Marv commits its changes to the branch, removes the
 // folder and keeps the branch, which the parent agent reviews and merges.
-import { mkdirSync, rmSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { ToolError } from "./tools/types.ts";
 
 export interface Worktree {
@@ -1172,24 +1205,41 @@ export interface Worktree {
 export const NOT_A_REPO =
   'isolation: "worktree" needs a git repository with at least one commit. Start the agent without isolation instead.';
 
-function git(cwd: string, args: string[], env?: Record<string, string>): { ok: boolean; out: string } {
-  const result = Bun.spawnSync(["git", ...args], { cwd, env: env && { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
+/** Hooks and fsmonitor are how a repository makes git run a program; Marv's own git calls turn both off. */
+export const NO_PROGRAMS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
+
+/** The environment without inherited GIT_* variables (a parent git or hook could have set GIT_DIR, GIT_INDEX_FILE…), plus `pinned`. */
+export function gitEnvironment(pinned: Record<string, string> = {}): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !key.startsWith("GIT_")) env[key] = value;
+  return { ...env, ...pinned };
+}
+
+function git(cwd: string, args: string[], pinned?: Record<string, string>): { ok: boolean; out: string } {
+  const result = Bun.spawnSync(["git", ...NO_PROGRAMS, ...args], { cwd, env: gitEnvironment(pinned), stdout: "pipe", stderr: "pipe" });
   const ok = result.exitCode === 0;
   return { ok, out: (ok ? result.stdout : result.stderr).toString().trim() };
 }
 
-/** Hooks and fsmonitor are how a repository makes git run a program; Marv's own git calls on worktrees turn both off. */
-const NO_PROGRAMS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
+/**
+ * Where git must look for a worktree a subagent has used. The worktree's
+ * `.git` file was within the subagent's reach and could point at a fake
+ * repository with its own config, so Marv's git outside the sandbox (the
+ * finishing commit, and the file listing behind glob and grep) never reads it.
+ */
+export const worktreeEnv = (wt: Worktree) => ({ GIT_DIR: wt.adminDir, GIT_COMMON_DIR: wt.gitDir, GIT_WORK_TREE: wt.dir });
+
+const worktreeGit = (wt: Worktree, ...args: string[]) => git(wt.dir, args, worktreeEnv(wt));
+const repoGit = (wt: Worktree, ...args: string[]) => git(wt.repo, args);
 
 /**
- * Git on a worktree after a subagent used it, run by Marv outside the
- * sandbox. Every git path is pinned through the environment: the worktree's
- * `.git` file was within the subagent's reach and could point at a fake
- * repository with its own config.
+ * Another git repository inside the worktree (e.g. in a submodule's folder):
+ * when git looks into it, it uses that repository's own config, which could
+ * make it run a program outside the sandbox. Found anywhere, at any depth.
  */
-const worktreeGit = (wt: Worktree, ...args: string[]) =>
-  git(wt.dir, [...NO_PROGRAMS, ...args], { GIT_DIR: wt.adminDir, GIT_COMMON_DIR: wt.gitDir, GIT_WORK_TREE: wt.dir });
-const repoGit = (wt: Worktree, ...args: string[]) => git(wt.repo, [...NO_PROGRAMS, ...args]);
+function nestedRepo(dir: string): string | undefined {
+  return (readdirSync(dir, { recursive: true }) as string[]).find((path) => basename(path) === ".git" && path !== ".git");
+}
 
 /** What a worktree would start from, and how many uncommitted changes it would leave behind. Null outside a repo. */
 export function inspectRepo(root: string): { base: string; dirty: number } | null {
@@ -1226,21 +1276,27 @@ export function createWorktree({ root, baseDir, description }: { root: string; b
 }
 
 /**
- * Commits the subagent's changes, removes the folder and keeps the branch (or
- * deletes it if nothing was committed). Returns the line the parent agent
- * reads. If the commit fails, the folder is kept and its path reported, so no
- * work is lost.
+ * Commits the subagent's changes, removes the worktree and keeps the branch
+ * (or deletes it if nothing was committed). Returns the line the parent agent
+ * reads. If anything can't be committed, the folder is kept and its path
+ * reported, so no work is lost.
  */
 export function finishWorktree(wt: Worktree, { description, interrupted }: { description: string; interrupted: boolean }): string {
+  const keep = (why: string) => `Branch ${wt.branch}: ${why} The changes are still in ${wt.dir}.`;
+  const nested = nestedRepo(wt.dir);
+  if (nested) return keep(`the worktree contains another git repository (${nested}), so Marv didn't commit it automatically.`);
   if (worktreeGit(wt, "status", "--porcelain").out) {
-    worktreeGit(wt, "add", "-A");
+    const added = worktreeGit(wt, "add", "-A");
+    if (!added.ok) return keep(`couldn't stage the changes (${added.out}).`);
     const committed = worktreeGit(wt, "commit", "-q", "-m", `marv: ${description}${interrupted ? " (interrupted)" : ""}`);
-    if (!committed.ok) return `Branch ${wt.branch}: couldn't commit the changes (${committed.out}). They're still in ${wt.dir}.`;
+    if (!committed.ok) return keep(`couldn't commit the changes (${committed.out}).`);
+    if (worktreeGit(wt, "status", "--porcelain").out) return keep("some changes couldn't be committed.");
   }
   const count = Number(repoGit(wt, "rev-list", "--count", `${wt.base}..${wt.branch}`).out) || 0;
-  // Deleting the folder and pruning (rather than `git worktree remove`) never reads anything inside the worktree.
+  // Delete the folder and this worktree's own record directly. `git worktree remove` would read inside the
+  // worktree, and `git worktree prune` would also drop the user's worktrees whose folders are missing right now.
   rmSync(wt.dir, { recursive: true, force: true });
-  repoGit(wt, "worktree", "prune");
+  rmSync(wt.adminDir, { recursive: true, force: true });
   if (count === 0) {
     repoGit(wt, "branch", "-D", wt.branch);
     return `No changes (branch ${wt.branch} removed).`;
@@ -1259,6 +1315,104 @@ Expected: all PASS. (If `wt.gitDir` differs from `join(repo, ".git")` only by a 
 ```bash
 git add src/worktree.ts tests/worktree.test.ts
 git commit -m "Worktrees: create, inspect, and finish (commit leftovers, keep the branch)"
+```
+
+---
+
+### Task 7b: The file listing can't be redirected either
+
+`glob` and `grep` list files with `git ls-files` — outside the sandbox, without approval. In a worktree, a subagent could point the worktree's `.git` file at a fake repository whose config sets `core.fsmonitor` to a program, and the next `glob` would run it with the real home folder. (The main agent has a weaker form of this already: an approved bash command could set `core.fsmonitor` in the project's own `.git/config`.) Fix: the listing always turns hooks and fsmonitor off, and a worktree subagent's tools pin git's paths.
+
+**Files:**
+- Modify: `src/tools/files.ts` (`listProjectFiles`, `filesUnder`), `src/tools/glob.ts`, `src/tools/grep.ts`, `src/tools/types.ts`
+- Test: `tests/tools.test.ts`
+
+- [ ] **Step 1: Write the failing tests** (append to `tests/tools.test.ts`; add `existsSync` from `node:fs` if missing)
+
+```ts
+describe("the file listing never runs a repository's programs", () => {
+  const gitIn = (cwd: string, ...args: string[]) => Bun.spawnSync(["git", ...args], { cwd });
+  const globCall = { id: "g1", name: "glob", arguments: JSON.stringify({ pattern: "**/*.txt" }) };
+
+  test("core.fsmonitor in the project's own config isn't run", async () => {
+    const pwned = join(outside, "PWNED");
+    gitIn(root, "init", "-q");
+    gitIn(root, "config", "core.fsmonitor", `touch ${pwned}`);
+    await writeFile(join(root, "a.txt"), "a\n");
+    const result = await runTool(globCall, { root });
+    expect(result.output).toContain("a.txt");
+    expect(existsSync(pwned)).toBe(false);
+  });
+
+  test("with gitEnv, a redirected .git file is ignored", async () => {
+    const pwned = join(outside, "PWNED");
+    // The real repository, outside the folder the agent works in.
+    const real = join(outside, "real.git");
+    gitIn(outside, "init", "-q", "--bare", real);
+    // A fake one the .git file in the work folder points to, with a program in its config.
+    const fake = join(outside, "fake.git");
+    gitIn(outside, "init", "-q", "--bare", fake);
+    gitIn(fake, "config", "core.fsmonitor", `touch ${pwned}`);
+    await writeFile(join(root, ".git"), `gitdir: ${fake}\n`);
+    await writeFile(join(root, "b.txt"), "b\n");
+
+    const result = await runTool(globCall, { root, gitEnv: { GIT_DIR: real, GIT_COMMON_DIR: real, GIT_WORK_TREE: root } });
+    expect(result.output).toContain("b.txt");
+    expect(existsSync(pwned)).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `bun test tests/tools -t "never runs"`
+Expected: FAIL (`PWNED` exists; `gitEnv` isn't a known context field for the type checker).
+
+- [ ] **Step 3: Implement**
+
+`src/tools/types.ts`, add to `ToolContext`:
+```ts
+  /** Pins where git looks for this agent's file listing (a worktree subagent: its own .git file is within its reach). */
+  gitEnv?: Record<string, string>;
+```
+
+`src/tools/files.ts`: add `import { gitEnvironment, NO_PROGRAMS } from "../worktree.ts";` and change `listProjectFiles` and `filesUnder`:
+```ts
+/**
+ * Every file in the project, as project-relative paths, sorted. Inside a git
+ * repo this is `git ls-files` (tracked + untracked, minus .gitignore'd), so
+ * build output and dependencies stay out of the model's way. It runs outside
+ * the sandbox without approval, so it never runs the repository's programs
+ * (hooks, fsmonitor), and `gitEnv` pins where git looks.
+ */
+export async function listProjectFiles(root: string, gitEnv?: Record<string, string>): Promise<string[]> {
+  const git = Bun.spawnSync(["git", ...NO_PROGRAMS, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+    cwd: root,
+    env: gitEnvironment(gitEnv),
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+```
+(the rest of the function is unchanged)
+```ts
+/** Files under `dir` (a project-relative directory, "." for everything). */
+export async function filesUnder(root: string, dir: string, gitEnv?: Record<string, string>): Promise<string[]> {
+  const all = await listProjectFiles(root, gitEnv);
+```
+
+`src/tools/glob.ts`: `async run({ pattern, path = "." }, { root, gitEnv }) {` and `(await filesUnder(root, base, gitEnv))`.
+`src/tools/grep.ts`: `async run({ pattern, path = ".", glob, ignoreCase }, { root, signal, gitEnv }) {` and `await filesUnder(root, base, gitEnv)`.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `bun test && bun run typecheck`
+Expected: all PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/tools/files.ts src/tools/glob.ts src/tools/grep.ts src/tools/types.ts tests/tools.test.ts
+git commit -m "File listing: never run a repository's programs; pinnable git paths"
 ```
 
 ---
@@ -1558,7 +1712,7 @@ import { sandboxAvailable } from "./sandbox.ts";
 import { runTool, tools, toolSpecs } from "./tools/index.ts";
 import { ToolError, type AgentHost, type Decision, type ToolContext, type ToolResult } from "./tools/types.ts";
 import { tokens } from "./usage.ts";
-import { createWorktree, finishWorktree, type Worktree } from "./worktree.ts";
+import { createWorktree, finishWorktree, worktreeEnv, type Worktree } from "./worktree.ts";
 
 /** Implementing a task takes more steps than answering a question. */
 export const SUBAGENT_MAX_STEPS = 50;
@@ -1621,6 +1775,7 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
     sandbox: ctx.sandbox,
     skills: ctx.skills,
     readOnly: worktree ? [worktree.gitDir] : undefined,
+    gitEnv: worktree && worktreeEnv(worktree),
     approve: subagentApprove(ctx.approve, who, Boolean(worktree) && sandboxed),
   };
   const system = subagentPrompt({

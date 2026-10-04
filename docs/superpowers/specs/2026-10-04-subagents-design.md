@@ -171,10 +171,18 @@ subagents. A subagent's approval requests carry `ApprovalRequest.agent` (who ask
   subagent's changes itself (`git add -A && git commit -m "marv:
   <description>"`, `(interrupted)` appended after an abort or error), outside
   the sandbox, with every git path pinned through `GIT_DIR`/`GIT_COMMON_DIR`/
-  `GIT_WORK_TREE` (never trusting the worktree's `.git` file) and `-c
-  core.hooksPath=/dev/null -c core.fsmonitor=false`. Then it deletes the folder
-  and runs `git worktree prune`. The branch stays (one commit per subagent). If
-  the commit fails, the folder is kept and its path reported. Accepted: hooks
+  `GIT_WORK_TREE` (never trusting the worktree's `.git` file), inherited
+  `GIT_*` variables dropped, and `-c core.hooksPath=/dev/null -c
+  core.fsmonitor=false`. If the worktree contains another `.git` (e.g. a
+  submodule folder the subagent filled), it doesn't commit: git would use that
+  repository's config. Then it deletes the folder and this worktree's own
+  record in `.git/worktrees` (not `git worktree prune`, which would also drop
+  the user's worktrees whose folders are missing). The branch stays (one
+  commit per subagent). If anything can't be committed, the folder is kept and
+  its path reported.
+- **File listing:** `glob`/`grep` list files with `git ls-files` outside the
+  sandbox and without approval, so it always passes the same `-c` flags, and a
+  worktree subagent's tools pin git's paths (`ToolContext.gitEnv`). Accepted: hooks
   kept in the repo's own files (e.g. `.husky/`) can be changed like any code,
   and arrive with the merge; the parent reviews the diff before merging.
 - **Result line:** `Branch marv/task-2-parser-errors-a3f9: 2 commits on abc1234`
