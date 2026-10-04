@@ -39,7 +39,7 @@ Why subagents at all:
 **In-process subagents.** The `agent` tool calls `runAgent()` again in the same
 Marv process with a fresh history. A worktree subagent's `ToolContext.root` is
 its worktree, and the existing confinement keys off `root`:
-`resolveInProject()` for the file tools, bwrap's writable bind for `bash`.
+`resolveInProject()` for the file tools, bwrap's writable root for `bash`.
 
 Rejected: a child `marv --headless` process per subagent inside bwrap. Stronger
 isolation (file tools in the kernel sandbox too), but the API key and network
@@ -84,7 +84,7 @@ Modeled on `src/skills.ts`.
   complete, the user won't see your steps"; for worktree runs also: "you are in
   a fresh git worktree on branch X; gitignored files such as node_modules and
   build output are absent, so install dependencies (bash with network: true)
-  before building; commit your work") followed by the agent file's body. No
+  before building; you can't commit, Marv commits your changes when you finish") followed by the agent file's body. No
   Memory section.
 - **Lookup:** exact name first; if not found and the name has a `prefix:`,
   retry without it (`superpowers:code-reviewer` → `code-reviewer`), so
@@ -128,8 +128,8 @@ agent({
    had plus a note saying why, with `isError: true`. If it ended `declined`,
    set `declined: true` (section 4).
 
-New `ToolContext` fields: `callId` (set by `runTool`), `writable` (extra
-writable folders for bash), and `agentHost?: AgentHost` (agent types,
+New `ToolContext` fields: `callId` (set by `runTool`), `readOnly` (extra
+folders bash may read, e.g. a worktree's `.git`), and `agentHost?: AgentHost` (agent types,
 `providerFor(model)`, cwd, AGENTS.md, worktrees dir, `onUsage`, `onProgress`).
 Only the main agent's context has an `agentHost`, so subagents can't start
 subagents. A subagent's approval requests carry `ApprovalRequest.agent` (who asks).
@@ -158,25 +158,25 @@ subagents. A subagent's approval requests carry `ApprovalRequest.agent` (who ask
   main folder has uncommitted changes: they won't be in the worktree.
 - **Create:** `git worktree add -b marv/<slug>-<4 hex> <dir> HEAD`; slug from
   `description` (lowercase, dashes, ≤40 chars).
-- **Sandbox:** `sandboxArgs` gains `writable: string[]` and `readOnly: string[]`
-  (mounted in that order, both after the hidden home). A worktree subagent's
-  bash gets the repo's common git dir (`git rev-parse --git-common-dir`) as
-  writable, because commits write objects and refs there, and read-only on top:
-  `.git/hooks`, `.git/config`, and its admin folder's `commondir` and `gitdir`.
-  Why: hooks and config can make git run programs, and they'd run *outside*
-  the sandbox the next time Marv or the user runs git; the pointers could
-  redirect git to a fake repository. Second layer: Marv's own git calls on a
-  worktree name its admin folder explicitly (`--git-dir`, `--work-tree`,
-  ignoring the worktree's `.git` file) and pass `-c core.hooksPath=/dev/null
-  -c core.fsmonitor=false`. Remaining, accepted: with `.git` writable a
-  subagent could move other branches (e.g. `git branch -f main`), which the
-  parent's merge would show; the same trust an approved `bash` in the main
-  folder has.
-- **Finish** (always, including error and abort): if the worktree has
-  uncommitted changes, `git add -A && git commit -m "marv: <description>"`
-  (`(interrupted)` appended after an abort or error), run outside the sandbox
-  by Marv itself. Then `git worktree remove`. The branch stays. If any step
-  fails, keep the worktree and include its path in the result.
+- **Sandbox:** `sandboxArgs` gains `readOnly: string[]`: extra folders shown
+  read-only (refused for `/`, the home folder or its parents). A worktree
+  subagent's root is its worktree (writable) and the repo's common git dir
+  (`git rev-parse --git-common-dir`) is read-only, so `git status`, `diff` and
+  `log` work but it can't commit, move branches, or plant hooks or config.
+  Why not writable: hooks and config make git run programs, and they'd run
+  *outside* the sandbox the next time Marv or the user runs git; review of an
+  earlier design found one hole after another (sibling worktrees' pointers,
+  per-worktree config, submodules), so the repository stays out of reach.
+- **Finish** (always, including error and abort): Marv commits the
+  subagent's changes itself (`git add -A && git commit -m "marv:
+  <description>"`, `(interrupted)` appended after an abort or error), outside
+  the sandbox, with every git path pinned through `GIT_DIR`/`GIT_COMMON_DIR`/
+  `GIT_WORK_TREE` (never trusting the worktree's `.git` file) and `-c
+  core.hooksPath=/dev/null -c core.fsmonitor=false`. Then it deletes the folder
+  and runs `git worktree prune`. The branch stays (one commit per subagent). If
+  the commit fails, the folder is kept and its path reported. Accepted: hooks
+  kept in the repo's own files (e.g. `.husky/`) can be changed like any code,
+  and arrive with the merge; the parent reviews the diff before merging.
 - **Result line:** `Branch marv/task-2-parser-errors-a3f9: 2 commits on abc1234`
   (or `no changes` and the branch is deleted when there were no commits).
   The parent inspects and merges with ordinary, approved `bash` git commands,
@@ -252,7 +252,8 @@ as roots.
 - `tests/worktree.test.ts` (real git, temp repo): branch and base; leftover
   changes committed (incl. `(interrupted)`); folder removed, branch kept; no
   commits → branch deleted; uncommitted warning; not-a-repo fails before
-  approval; `sandboxArgs` includes the git dir as writable.
+  approval; `sandboxArgs` shows the git dir read-only; Marv's finishing git
+  ignores a planted hook and redirected pointers.
 - `tests/approval.test.tsx`: concurrent requests queue and none is lost; Esc
   answers all "no"; "always" drains matching queued requests; worktree
   auto-approval covers edits but not `network: true` and not with the sandbox

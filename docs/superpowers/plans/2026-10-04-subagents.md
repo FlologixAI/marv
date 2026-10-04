@@ -4,7 +4,7 @@
 
 **Goal:** Marv can hand a task to a subagent (a fresh run of the agent loop with its own prompt and tools), run several at once, and optionally give each its own git worktree.
 
-**Architecture:** In-process. A new `agent` tool calls `runAgent()` again with a fresh history; `runAgent` runs consecutive `agent` calls concurrently (max 4) and appends results in call order. A worktree subagent's `ToolContext.root` is its worktree, so `resolveInProject()` and the bwrap sandbox confine it; its changes are auto-approved (except network), and Marv commits leftovers and removes the folder when it ends, leaving a branch for the parent to merge.
+**Architecture:** In-process. A new `agent` tool calls `runAgent()` again with a fresh history; `runAgent` runs consecutive `agent` calls concurrently (max 4) and appends results in call order. A worktree subagent's `ToolContext.root` is its worktree, so `resolveInProject()` and the bwrap sandbox confine it; its changes are auto-approved (except network); its sandbox shows the repo's `.git` read-only, and when it ends Marv commits its changes, removes the folder and leaves a branch for the parent to merge.
 
 **Tech Stack:** Bun, TypeScript, Ink, zod, git worktrees, bubblewrap. Spec: `docs/superpowers/specs/2026-10-04-subagents-design.md`.
 
@@ -19,9 +19,9 @@
 | `src/frontmatter.ts` | new | Parse the `---` YAML block shared by SKILL.md and agent files |
 | `src/skills.ts` | modify | Use `parseFrontmatter` |
 | `src/agents.ts` | new | Agent types: load `.marv/agents/*.md`, built-in `general-purpose`, lookup |
-| `src/tools/types.ts` | modify | `parallel`, `needsApproval`, `usesNetwork` on `Tool`; `callId`, `writable`, `agentHost` on `ToolContext`; `agent`, `network` on `ApprovalRequest`; `AgentHost`, `AgentProgress` |
+| `src/tools/types.ts` | modify | `parallel`, `needsApproval`, `usesNetwork` on `Tool`; `callId`, `readOnly`, `agentHost` on `ToolContext`; `agent`, `network` on `ApprovalRequest`; `AgentHost`, `AgentProgress` |
 | `src/tools/index.ts` | modify | `runTool(call, ctx, available)`; per-call approval gate; register `agent`; `isParallelCall` |
-| `src/sandbox.ts`, `src/tools/bash.ts` | modify | Extra writable folders (a worktree's shared `.git`); bash `usesNetwork` |
+| `src/sandbox.ts`, `src/tools/bash.ts` | modify | Extra read-only folders (a worktree's shared `.git`); bash `usesNetwork` |
 | `src/agent.ts` | modify | Run consecutive parallel calls concurrently; results in call order |
 | `src/prompt.ts` | modify | `# Agents` section; `subagentPrompt()` |
 | `src/worktree.ts` | new | Create / inspect / finish git worktrees |
@@ -584,6 +584,8 @@ git commit -m "Tools: per-call approval, network flag, restricted tool lists"
 
 ### Task 4: Extra writable folders in the sandbox
 
+> **Superseded during review:** a writable shared `.git` lets a sandboxed command plant hooks or config that git later runs outside the sandbox. The sandbox now takes `readOnly: string[]` instead (extra folders shown read-only, e.g. a worktree's `.git`; refused for `/`, the home folder or its parents), and Marv makes the worktree commit itself (Task 7).
+
 A worktree's `.git` is a file pointing into the main repo's `.git/worktrees/<id>`, and commits write objects into the main `.git`. With only the worktree writable, `git commit` inside the sandbox would fail.
 
 **Files:**
@@ -928,11 +930,11 @@ describe("subagentPrompt", () => {
     expect(subagentPrompt({ ...base, body: "" })).toStartWith("You are a general-purpose coding agent.");
   });
 
-  test("in a worktree: names the branch, says dependencies are missing and to commit", () => {
+  test("in a worktree: names the branch, says dependencies are missing and that Marv commits", () => {
     const prompt = subagentPrompt({ ...base, worktree: { branch: "marv/task-2-ab12", base: "abc1234" } });
     expect(prompt).toContain("branch marv/task-2-ab12 (started from abc1234)");
     expect(prompt).toContain("node_modules");
-    expect(prompt).toContain("Commit your work");
+    expect(prompt).toContain("Marv commits everything you changed");
   });
 
   test("includes skills and AGENTS.md like the main prompt", () => {
@@ -986,7 +988,7 @@ interface SubagentPromptInput {
 export function subagentPrompt({ cwd, tools, body, instructions, skills = [], worktree, date = new Date() }: SubagentPromptInput): string {
   const role = body || "You are a general-purpose coding agent.";
   const where = worktree
-    ? `\n\nYou are working in your own git worktree, on branch ${worktree.branch} (started from ${worktree.base}). Other agents can't see your changes until your branch is merged. Files ignored by git, such as node_modules and build output, aren't here: install dependencies first if you need them (bash with network: true). Commit your work on this branch when you're done.`
+    ? `\n\nYou are working in your own git worktree, on branch ${worktree.branch} (started from ${worktree.base}). Other agents can't see your changes until your branch is merged. Files ignored by git, such as node_modules and build output, aren't here: install dependencies first if you need them (bash with network: true). You can't commit: the repository is read-only here (git status, diff and log work). When you finish, Marv commits everything you changed to your branch.`
     : "";
   const base = `${role}
 
@@ -1080,19 +1082,13 @@ describe("createWorktree / finishWorktree", () => {
     expect(git(repo, "branch", "--list", wt.branch)).toContain(wt.branch);
     expect(wt.gitDir).toBe(join(repo, ".git"));
     expect(wt.adminDir).toStartWith(join(repo, ".git", "worktrees"));
-    expect(wt.protectedPaths).toEqual([
-      join(repo, ".git", "hooks"),
-      join(repo, ".git", "config"),
-      join(wt.adminDir, "commondir"),
-      join(wt.adminDir, "gitdir"),
-    ]);
     expect(wt.base).toBe(git(repo, "rev-parse", "--short", "HEAD"));
   });
 
-  test("Marv's own git ignores a planted hook and a redirected .git file", async () => {
+  test("Marv's own git ignores a planted hook and redirected git pointers", async () => {
     const wt = createWorktree({ root: repo, baseDir: trees, description: "Sneaky" });
     const pwned = join(trees, "PWNED");
-    // A hook in the shared .git. (In real use the sandbox keeps hooks read-only; this is the second layer.)
+    // Plant what a subagent might, if it could write there. (In real use the sandbox shows .git read-only; this is the second layer.)
     await mkdir(join(wt.gitDir, "hooks"), { recursive: true });
     await writeFile(join(wt.gitDir, "hooks", "pre-commit"), `#!/bin/sh\ntouch ${pwned}\n`, { mode: 0o755 });
     // The worktree's .git file pointed at a fake repository whose config runs a program.
@@ -1100,6 +1096,7 @@ describe("createWorktree / finishWorktree", () => {
     git(trees, "init", "-q", "--bare", fake);
     git(fake, "config", "core.fsmonitor", `touch ${pwned}`);
     await writeFile(join(wt.dir, ".git"), `gitdir: ${fake}\n`);
+    await writeFile(join(wt.adminDir, "commondir"), `${fake}\n`);
     await writeFile(join(wt.dir, "b.txt"), "bee\n");
 
     finishWorktree(wt, { description: "Sneaky", interrupted: false });
@@ -1150,11 +1147,12 @@ Expected: FAIL, `Cannot find module '../src/worktree.ts'`.
 //
 //   git worktree add -b marv/<task>-<id> ~/.marv/worktrees/<project>/<task>-<id> HEAD
 //
-// The worktree shares the repository's .git (objects, branches), so what the
-// subagent commits shows up in the main checkout as a branch at once. When
-// it's done, Marv commits anything left over, removes the folder and keeps the
-// branch, which the parent agent reviews and merges with ordinary git commands.
-import { mkdirSync } from "node:fs";
+// Inside the sandbox a subagent can change only its worktree's files: the
+// repository's .git is visible read-only (git status, diff and log work), so
+// it can't plant hooks or config that git would later run outside the
+// sandbox. When it's done, Marv commits its changes to the branch, removes the
+// folder and keeps the branch, which the parent agent reviews and merges.
+import { mkdirSync, rmSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { ToolError } from "./tools/types.ts";
 
@@ -1165,24 +1163,17 @@ export interface Worktree {
   base: string;
   /** The main checkout (the project root). */
   repo: string;
-  /** The repository's shared .git folder: the sandbox must let commits write there. */
+  /** The repository's shared .git folder (the sandbox shows it read-only). */
   gitDir: string;
-  /** This worktree's own folder inside the shared .git (.git/worktrees/<id>). */
+  /** This worktree's own folder inside it (.git/worktrees/<id>): its HEAD and index. */
   adminDir: string;
-  /**
-   * Inside the writable .git, what the sandbox keeps read-only: hooks and
-   * config would make git run a program outside the sandbox the next time
-   * anyone uses it, and the admin folder's pointers could redirect git to a
-   * fake repository.
-   */
-  protectedPaths: string[];
 }
 
 export const NOT_A_REPO =
   'isolation: "worktree" needs a git repository with at least one commit. Start the agent without isolation instead.';
 
-function git(cwd: string, ...args: string[]): { ok: boolean; out: string } {
-  const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+function git(cwd: string, args: string[], env?: Record<string, string>): { ok: boolean; out: string } {
+  const result = Bun.spawnSync(["git", ...args], { cwd, env: env && { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
   const ok = result.exitCode === 0;
   return { ok, out: (ok ? result.stdout : result.stderr).toString().trim() };
 }
@@ -1191,19 +1182,20 @@ function git(cwd: string, ...args: string[]): { ok: boolean; out: string } {
 const NO_PROGRAMS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
 
 /**
- * Git on a worktree a subagent has used, run by Marv outside the sandbox. It
- * names the worktree's admin folder itself instead of trusting the `.git` file
- * in the worktree, which the subagent could have rewritten to point at a fake
+ * Git on a worktree after a subagent used it, run by Marv outside the
+ * sandbox. Every git path is pinned through the environment: the worktree's
+ * `.git` file was within the subagent's reach and could point at a fake
  * repository with its own config.
  */
-const worktreeGit = (wt: Worktree, ...args: string[]) => git(wt.dir, "--git-dir", wt.adminDir, "--work-tree", wt.dir, ...NO_PROGRAMS, ...args);
-const repoGit = (wt: Worktree, ...args: string[]) => git(wt.repo, ...NO_PROGRAMS, ...args);
+const worktreeGit = (wt: Worktree, ...args: string[]) =>
+  git(wt.dir, [...NO_PROGRAMS, ...args], { GIT_DIR: wt.adminDir, GIT_COMMON_DIR: wt.gitDir, GIT_WORK_TREE: wt.dir });
+const repoGit = (wt: Worktree, ...args: string[]) => git(wt.repo, [...NO_PROGRAMS, ...args]);
 
 /** What a worktree would start from, and how many uncommitted changes it would leave behind. Null outside a repo. */
 export function inspectRepo(root: string): { base: string; dirty: number } | null {
-  const head = git(root, "rev-parse", "--short", "HEAD");
+  const head = git(root, ["rev-parse", "--short", "HEAD"]);
   if (!head.ok) return null;
-  const status = git(root, "status", "--porcelain").out;
+  const status = git(root, ["status", "--porcelain"]).out;
   return { base: head.out, dirty: status ? status.split("\n").length : 0 };
 }
 
@@ -1225,30 +1217,30 @@ export function createWorktree({ root, baseDir, description }: { root: string; b
   const branch = branchName(description);
   const dir = join(baseDir, branch.slice("marv/".length));
   mkdirSync(baseDir, { recursive: true });
-  const added = git(root, "worktree", "add", "-q", "-b", branch, dir, "HEAD");
+  const added = git(root, ["worktree", "add", "-q", "-b", branch, dir, "HEAD"]);
   if (!added.ok) throw new ToolError(`Couldn't create a worktree: ${added.out}`);
   const absolute = (path: string) => (isAbsolute(path) ? path : resolve(dir, path));
-  const gitDir = absolute(git(dir, "rev-parse", "--git-common-dir").out);
-  const adminDir = absolute(git(dir, "rev-parse", "--git-dir").out);
-  const protectedPaths = [join(gitDir, "hooks"), join(gitDir, "config"), join(adminDir, "commondir"), join(adminDir, "gitdir")];
-  return { dir, branch, base: repo.base, repo: root, gitDir, adminDir, protectedPaths };
+  const gitDir = absolute(git(dir, ["rev-parse", "--git-common-dir"]).out);
+  const adminDir = absolute(git(dir, ["rev-parse", "--git-dir"]).out);
+  return { dir, branch, base: repo.base, repo: root, gitDir, adminDir };
 }
 
 /**
- * Commits what the subagent left uncommitted, removes the folder and keeps the
- * branch (or deletes it if nothing was committed). Returns the line the parent
- * agent reads. If a step fails, the folder is kept and its path reported, so
- * no work is lost.
+ * Commits the subagent's changes, removes the folder and keeps the branch (or
+ * deletes it if nothing was committed). Returns the line the parent agent
+ * reads. If the commit fails, the folder is kept and its path reported, so no
+ * work is lost.
  */
 export function finishWorktree(wt: Worktree, { description, interrupted }: { description: string; interrupted: boolean }): string {
   if (worktreeGit(wt, "status", "--porcelain").out) {
     worktreeGit(wt, "add", "-A");
     const committed = worktreeGit(wt, "commit", "-q", "-m", `marv: ${description}${interrupted ? " (interrupted)" : ""}`);
-    if (!committed.ok) return `Branch ${wt.branch}: couldn't commit the remaining changes (${committed.out}). They're still in ${wt.dir}.`;
+    if (!committed.ok) return `Branch ${wt.branch}: couldn't commit the changes (${committed.out}). They're still in ${wt.dir}.`;
   }
   const count = Number(repoGit(wt, "rev-list", "--count", `${wt.base}..${wt.branch}`).out) || 0;
-  const removed = repoGit(wt, "worktree", "remove", wt.dir);
-  if (!removed.ok) return `Branch ${wt.branch}: ${count} commit(s) on ${wt.base}. The worktree couldn't be removed (${removed.out}); it's still at ${wt.dir}.`;
+  // Deleting the folder and pruning (rather than `git worktree remove`) never reads anything inside the worktree.
+  rmSync(wt.dir, { recursive: true, force: true });
+  repoGit(wt, "worktree", "prune");
   if (count === 0) {
     repoGit(wt, "branch", "-D", wt.branch);
     return `No changes (branch ${wt.branch} removed).`;
@@ -1628,8 +1620,7 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
     signal: ctx.signal,
     sandbox: ctx.sandbox,
     skills: ctx.skills,
-    writable: worktree ? [worktree.gitDir] : undefined,
-    readOnly: worktree?.protectedPaths,
+    readOnly: worktree ? [worktree.gitDir] : undefined,
     approve: subagentApprove(ctx.approve, who, Boolean(worktree) && sandboxed),
   };
   const system = subagentPrompt({
@@ -1793,7 +1784,7 @@ export const isParallelCall = (call: ToolCall) => tools.some((t) => t.name === c
 - [ ] **Step 8: Run the tests**
 
 Run: `bun test tests/agent-tool tests/tools tests/app && bun run typecheck`
-Expected: all PASS. If "approve once…" fails on the commit step, check that `subCtx.writable` holds the `.git` path (Task 4) and that the sandbox is available (`bwrap --version`).
+Expected: all PASS. If "approve once…" fails, check that `subCtx.readOnly` holds the `.git` path (Task 4) and that the sandbox is available (`bwrap --version`).
 
 - [ ] **Step 9: Commit**
 
@@ -2455,7 +2446,7 @@ git commit -m "Render-budget test for parallel subagents"
 
 ### Task 14: A worktree subagent can build and commit inside the real sandbox
 
-This settles the spec's open point: can a sandboxed command in a worktree commit (needs the shared `.git` writable) and run `bun install && bun test` (`~/.bun` is read-only in the sandbox)?
+This settles the spec's open point: can a sandboxed command in a worktree run `bun install && bun test` (`~/.bun` is read-only in the sandbox) and read git, while the repository itself stays unchangeable?
 
 **Files:**
 - Test: `tests/worktree-sandbox.test.ts`
@@ -2498,33 +2489,38 @@ afterEach(async () => {
   await rm(trees, { recursive: true, force: true });
 });
 
+// How a worktree subagent's bash runs: the worktree writable, the shared .git read-only.
 const inWorktree = (wt: Worktree, command: string, network = false) =>
-  runCommand({ command, root: wt.dir, sandbox: true, network, timeoutMs: 120_000, writable: [wt.gitDir], readOnly: wt.protectedPaths });
+  runCommand({ command, root: wt.dir, sandbox: true, network, timeoutMs: 120_000, readOnly: [wt.gitDir] });
 
-sandboxed("inside the sandbox, the shared .git's hooks and config stay read-only", async () => {
-  const wt = createWorktree({ root: repo, baseDir: trees, description: "escape check" });
-  const hook = await inWorktree(wt, `echo 'touch /tmp/x' > ${join(wt.gitDir, "hooks", "pre-commit")}`);
-  expect(hook.exitCode).not.toBe(0);
-  const config = await inWorktree(wt, "git config core.fsmonitor 'touch /tmp/x'");
-  expect(config.exitCode).not.toBe(0);
-  const pointer = await inWorktree(wt, `echo /elsewhere > ${join(wt.adminDir, "commondir")}`);
-  expect(pointer.exitCode).not.toBe(0);
-  finishWorktree(wt, { description: "escape check", interrupted: false });
+sandboxed("builds, tests and reads git inside the sandbox; Marv commits afterwards", async () => {
+  const wt = createWorktree({ root: repo, baseDir: trees, description: "sandbox check" });
+  const result = await inWorktree(wt, "bun install && bun test && echo hi > hi.txt && git status --porcelain && git log --oneline -1");
+  expect(result.output).toContain("1 pass");
+  expect(result.output).toContain("?? hi.txt");
+  expect(result.exitCode).toBe(0);
+  expect(finishWorktree(wt, { description: "sandbox check", interrupted: false })).toContain("1 commit");
+  expect(git(repo, "show", `${wt.branch}:hi.txt`)).toBe("hi");
 }, 130_000);
 
-sandboxed("commits and runs tests inside the sandbox", async () => {
-  const wt = createWorktree({ root: repo, baseDir: trees, description: "sandbox check" });
-  const result = await inWorktree(wt, "bun install && bun test && echo hi > hi.txt && git add -A && git commit -q -m 'from the sandbox'");
-  expect(result.output).toContain("1 pass");
-  expect(result.exitCode).toBe(0);
-  expect(git(repo, "log", "-1", "--format=%s", wt.branch)).toBe("from the sandbox");
-  finishWorktree(wt, { description: "sandbox check", interrupted: false });
+sandboxed("inside the sandbox, the repository can't be changed", async () => {
+  const wt = createWorktree({ root: repo, baseDir: trees, description: "escape check" });
+  for (const command of [
+    "touch x && git add x", // the index lives in .git
+    `echo 'touch /tmp/x' > ${join(wt.gitDir, "hooks", "pre-commit")}`,
+    "git config core.fsmonitor 'touch /tmp/x'",
+    `echo /elsewhere > ${join(wt.adminDir, "commondir")}`,
+    "git branch -f main HEAD~0",
+  ]) {
+    expect((await inWorktree(wt, command)).exitCode).not.toBe(0);
+  }
+  finishWorktree(wt, { description: "escape check", interrupted: false });
 }, 130_000);
 
 online("installs a real dependency inside the sandbox", async () => {
   const wt = createWorktree({ root: repo, baseDir: trees, description: "deps check" });
   await writeFile(join(wt.dir, "package.json"), JSON.stringify({ name: "demo", private: true, dependencies: { "is-number": "7.0.0" } }));
-  const result = await inWorktree(wt, "bun install && bun -e 'console.log(require(\"is-number\")(5))'", true);
+  const result = await inWorktree(wt, "bun install && bun -e 'console.log(require(\\"is-number\\")(5))'", true);
   expect(result.output).toContain("true");
   expect(result.exitCode).toBe(0);
   finishWorktree(wt, { description: "deps check", interrupted: false });
@@ -2563,7 +2559,7 @@ Re-run Step 2's commands and `bun test tests/bash`. Expected: PASS.
 
 ```bash
 git add tests/worktree-sandbox.test.ts src/sandbox.ts tests/bash.test.ts
-git commit -m "Worktree subagents can build and commit inside the sandbox"
+git commit -m "Worktree subagents can build inside the sandbox; the repository stays read-only"
 ```
 
 ---
@@ -2577,7 +2573,7 @@ git commit -m "Worktree subagents can build and commit inside the sandbox"
 
 Add an architecture bullet after **Memory**:
 ```md
-- **Subagents (`src/agents.ts`, `src/subagent.ts`, `src/tools/agent.ts`, `src/worktree.ts`)**: the `agent` tool runs `runAgent()` again with a fresh history, the type's system prompt (`subagentPrompt`) and its tools; only its last message returns to the parent. Types are `.marv/agents/<name>.md` / `~/.marv/agents/<name>.md` (frontmatter `name`, `description`, optional `tools` — Claude Code names are mapped — and `model`), plus the built-in `general-purpose`; `findAgent` also tries a name without its `plugin:` prefix. Subagents never get `agent` or `memory`, and `runTool(call, ctx, available)` refuses tools they weren't given. Consecutive `agent` calls in one reply run in parallel (`MAX_PARALLEL` = 4; results appended in call order for the cache). `isolation: "worktree"` creates `~/.marv/worktrees/<project>/<slug>-<id>` on branch `marv/<slug>-<id>`; the dispatch is approved once (scope `agent:worktree`), then its changes are auto-approved while the sandbox is on, except `network: true`; its bash gets the repo's `.git` as an extra writable folder. When it ends, Marv commits leftovers, removes the folder and keeps the branch (deleted if empty); the parent merges with git. Approvals are a FIFO queue in the App (`1 more waiting`; Esc/ctrl+c decline all); requests carry `agent` (who asks). Progress reaches the transcript through `AgentHost.onProgress`, batched with streamed text; ctrl+o shows each subagent's last 20 steps (`ink-text-input` is patched so ctrl+letter doesn't type).
+- **Subagents (`src/agents.ts`, `src/subagent.ts`, `src/tools/agent.ts`, `src/worktree.ts`)**: the `agent` tool runs `runAgent()` again with a fresh history, the type's system prompt (`subagentPrompt`) and its tools; only its last message returns to the parent. Types are `.marv/agents/<name>.md` / `~/.marv/agents/<name>.md` (frontmatter `name`, `description`, optional `tools` — Claude Code names are mapped — and `model`), plus the built-in `general-purpose`; `findAgent` also tries a name without its `plugin:` prefix. Subagents never get `agent` or `memory`, and `runTool(call, ctx, available)` refuses tools they weren't given. Consecutive `agent` calls in one reply run in parallel (`MAX_PARALLEL` = 4; results appended in call order for the cache). `isolation: "worktree"` creates `~/.marv/worktrees/<project>/<slug>-<id>` on branch `marv/<slug>-<id>`; the dispatch is approved once (scope `agent:worktree`), then its changes are auto-approved while the sandbox is on, except `network: true`; its sandbox shows the repo's `.git` read-only (status/diff/log work; it can't commit, plant hooks or change config, which git would run outside the sandbox). When it ends, Marv commits its changes (every git path pinned via `GIT_DIR`/`GIT_COMMON_DIR`/`GIT_WORK_TREE`, hooks and fsmonitor off), deletes the folder, prunes, and keeps the branch (deleted if empty); the parent merges with git. Approvals are a FIFO queue in the App (`1 more waiting`; Esc/ctrl+c decline all); requests carry `agent` (who asks). Progress reaches the transcript through `AgentHost.onProgress`, batched with streamed text; ctrl+o shows each subagent's last 20 steps (`ink-text-input` is patched so ctrl+letter doesn't type).
 ```
 Add `agent` to the list of `CommandAction`s only if one was added (none was: `/agents` is a `print`).
 
