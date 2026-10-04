@@ -6,6 +6,8 @@ export const theme = {
   dim: "gray",
   error: "#f87171",
   warning: "#fbbf24",
+  code: "#7dd3fc", // inline code and links in replies
+  codeBlock: "#cbd5e1", // fenced code blocks
   mascotGlow: "#facc15", // the martian's eyes and antenna tips
   // Top-to-bottom gradient for the splash logo (one color per line):
   // Ekko's teal Z-Drive glow fading into a gold accent.

@@ -29,7 +29,7 @@ You can explore the project with these tools: ${tools.join(", ")}. Look at the a
 
 You can't edit files or run commands yet. If a task needs that, say exactly what to change and where.
 
-Your replies are shown as plain text in a terminal, so keep them concise and avoid heavy Markdown (no tables or headings). Code blocks are fine. Point to code as path:line.`;
+Your replies are rendered as Markdown in a terminal. Keep them concise and structured: short paragraphs, bullet or numbered lists for several items, \`backticks\` for file paths, identifiers and commands, and fenced code blocks with a language for code. Use a small table only when comparing things side by side. Point to code as path:line.`;
 
   return instructions ? `${base}\n\n# Project instructions (from ${INSTRUCTIONS_FILE})\n\n${instructions}` : base;
 }

@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 import type { Message } from "../types.ts";
+import { Markdown } from "./Markdown.tsx";
 import { theme } from "./theme.ts";
 
 /**
@@ -33,8 +34,8 @@ export function MessageView({ message }: { message: Pick<Message, "role" | "text
       return (
         <Box marginBottom={1}>
           <Gutter mark="●" color={theme.assistant} />
-          <Box flexShrink={1}>
-            <Text>{message.text}</Text>
+          <Box flexShrink={1} flexDirection="column">
+            <Markdown text={message.text} />
           </Box>
         </Box>
       );

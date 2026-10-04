@@ -59,10 +59,19 @@ describe("MessageView wrapping", () => {
         const lines = await renderAt(width, { role, text: LONG });
         for (const line of lines) expect(stringWidth(line)).toBeLessThanOrEqual(width);
         const words = lines.join(" ").replace(/^[●>]\s*/, "").split(/\s+/).filter(Boolean);
-        expect(words).toEqual(LONG.split(/\s+/));
+        // Replies are rendered as Markdown, so their `code` loses its backticks.
+        const expected = role === "assistant" ? LONG.replaceAll("`", "") : LONG;
+        expect(words).toEqual(expected.split(/\s+/));
       });
     }
   }
+
+  test("nested Markdown lists stay within the terminal at any width", async () => {
+    const text = "- Core: `agent.ts`, `app.tsx`, `cli.tsx`, `prompt.ts`, `paths.ts`, `mouse.ts`, `selection.ts`\n  - UI: `Martian.tsx`, `MessageView.tsx`, `ModelPicker.tsx`, `PromptInput.tsx`, `ScrollView.tsx`";
+    for (const width of [30, 57, 80, 121]) {
+      for (const line of await renderAt(width, { role: "assistant", text })) expect(stringWidth(line)).toBeLessThanOrEqual(width);
+    }
+  });
 
   test("tool lines stay within the terminal too", async () => {
     const lines = await renderAt(40, { role: "tool", text: "read_file", tool: { label: "src/a/very/long/path/to/some/file.ts", status: "done", summary: "1 line" } });
