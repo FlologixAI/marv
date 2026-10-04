@@ -8,30 +8,23 @@ import { sandboxArgs, sandboxAvailable } from "../src/sandbox.ts";
 describe("sandboxArgs", () => {
   const base = { root: "/home/me/proj", home: "/home/me", path: "/usr/bin", exists: (p: string) => p.endsWith(".bun") };
 
-  test("extra writable folders (a worktree's shared .git) are mounted after the home is hidden", () => {
-    const args = sandboxArgs({ ...base, network: false, writable: ["/home/me/proj/.git"] });
-    expect(args.join(" ")).toContain("--bind /home/me/proj/.git /home/me/proj/.git");
-    const writableAt = args.lastIndexOf("/home/me/proj/.git");
-    expect(writableAt).toBeGreaterThan(args.indexOf(base.home)); // after the home tmpfs
-    expect(writableAt).toBeGreaterThan(args.indexOf(base.root, args.indexOf("--bind"))); // after the root bind
-  });
-
-  test("read-only paths are mounted after the writable folder they sit in", () => {
+  test("extra read-only folders (a worktree's shared .git) are mounted after the home is hidden and the root bound", () => {
     const git = "/home/me/proj/.git";
-    const args = sandboxArgs({ ...base, network: false, writable: [git], readOnly: [`${git}/hooks`, `${git}/config`] });
-    const text = args.join(" ");
-    expect(text).toContain(`--ro-bind-try ${git}/hooks ${git}/hooks`);
-    expect(text).toContain(`--ro-bind-try ${git}/config ${git}/config`);
-    expect(args.indexOf("--ro-bind-try")).toBeGreaterThan(args.indexOf(git));
+    const args = sandboxArgs({ ...base, network: false, readOnly: [git] });
+    expect(args.join(" ")).toContain(`--ro-bind ${git} ${git}`);
+    const at = args.lastIndexOf(git);
+    expect(at).toBeGreaterThan(args.indexOf(base.home)); // after the home tmpfs
+    expect(at).toBeGreaterThan(args.indexOf(base.root, args.indexOf("--bind"))); // after the root bind
   });
 
-  test("without extra writable folders only the project is bound read-write", () => {
-    expect(sandboxArgs({ ...base, network: false }).filter((a) => a === "--bind")).toHaveLength(1);
+  test("extra folders never add a read-write bind", () => {
+    const args = sandboxArgs({ ...base, network: false, readOnly: ["/home/me/proj/.git"] });
+    expect(args.filter((a) => a === "--bind")).toHaveLength(1);
   });
 
-  test("writable folders that would expose the home folder or the whole system are refused", () => {
+  test("extra folders that would expose the home folder or the whole system are refused", () => {
     for (const dir of ["/", "/home", base.home, "relative"]) {
-      expect(() => sandboxArgs({ ...base, network: false, writable: [dir] })).toThrow();
+      expect(() => sandboxArgs({ ...base, network: false, readOnly: [dir] })).toThrow();
     }
   });
 
