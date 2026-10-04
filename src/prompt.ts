@@ -21,10 +21,12 @@ interface PromptInput {
   skills?: { name: string; description: string }[];
   /** What Marv remembers (personal and project), as of the start of the conversation. */
   memory?: Memories;
+  /** Agent types the agent tool can start: names and descriptions only. */
+  agents?: { name: string; description: string }[];
   date?: Date;
 }
 
-export function systemPrompt({ cwd, tools, instructions, skills = [], memory, date = new Date() }: PromptInput): string {
+export function systemPrompt({ cwd, tools, instructions, skills = [], memory, agents = [], date = new Date() }: PromptInput): string {
   const base = `You are Marv, a coding agent running in the user's terminal.
 
 Working directory: ${cwd}
@@ -36,12 +38,51 @@ You can change files with edit_file (replace exact text; copy it from read_file,
 
 Your replies are rendered as Markdown in a terminal. Keep them concise and structured: short paragraphs, bullet or numbered lists for several items, \`backticks\` for file paths, identifiers and commands, and fenced code blocks with a language for code. Use a small table only when comparing things side by side. Point to code as path:line.`;
 
-  const skillList = skills.length
+  const agentList = agents.length
+    ? `\n\n# Agents\n\nThe agent tool hands a self-contained task to a subagent: a fresh agent that sees only the prompt you give it, works with its own tools, and returns a report. Use one for research across many files, implementing one well-specified task, or an independent review, and keep your own context for coordinating. Put everything it needs in the prompt. Several agent calls in one reply run in parallel; give parallel agents that change files isolation: "worktree" so they don't collide, then review and merge their branches with git. Types:\n\n${agents.map((a) => `- ${a.name}: ${a.description}`).join("\n")}`
+    : "";
+  const remembered = memory ? `\n\n${memorySection(memory)}` : "";
+  return base + remembered + skillsSection(skills) + agentList + projectSection(instructions);
+}
+
+function skillsSection(skills: { name: string; description: string }[]): string {
+  return skills.length
     ? `\n\n# Skills\n\nSkills are detailed instructions for particular kinds of tasks. When a request matches one of these, load it with the skill tool before you start, then follow it:\n\n${skills.map((s) => `- ${s.name}: ${s.description}`).join("\n")}`
     : "";
-  const project = instructions ? `\n\n# Project instructions (from ${INSTRUCTIONS_FILE})\n\n${instructions}` : "";
-  const remembered = memory ? `\n\n${memorySection(memory)}` : "";
-  return base + remembered + skillList + project;
+}
+
+const projectSection = (instructions?: string) => (instructions ? `\n\n# Project instructions (from ${INSTRUCTIONS_FILE})\n\n${instructions}` : "");
+
+interface SubagentPromptInput {
+  cwd: string;
+  tools: string[];
+  /** The agent type's own instructions; empty for general-purpose. */
+  body: string;
+  instructions?: string;
+  skills?: { name: string; description: string }[];
+  /** Set when it works in its own git worktree. */
+  worktree?: { branch: string; base: string };
+  date?: Date;
+}
+
+/**
+ * A subagent's system prompt: its type's instructions, then what it needs to
+ * know about its situation. No memory: that's the main agent's.
+ */
+export function subagentPrompt({ cwd, tools, body, instructions, skills = [], worktree, date = new Date() }: SubagentPromptInput): string {
+  const role = body || "You are a general-purpose coding agent.";
+  const where = worktree
+    ? `\n\nYou are working in your own git worktree, on branch ${worktree.branch} (started from ${worktree.base}). Other agents can't see your changes until your branch is merged. Files ignored by git, such as node_modules and build output, aren't here: install dependencies first if you need them (bash with network: true). You can't commit: the repository is read-only here (git status, diff and log work). When you finish, Marv commits everything you changed to your branch.`
+    : "";
+  const base = `${role}
+
+You are a subagent of Marv, a coding agent in the user's terminal. Another agent gave you the task in the first message. Your final message is your report back to it: say what you did, what you found, and anything left undone, completely and concisely. The user doesn't see your steps, only that report.
+
+Working directory: ${cwd}
+Today's date: ${date.toISOString().slice(0, 10)}
+
+Your tools: ${tools.join(", ")}. Look at the actual code before you change or judge it. Paths are relative to the working directory. Commands run in a sandbox: only the working directory is writable, and there's no network unless you set network: true.${where}`;
+  return base + skillsSection(skills) + projectSection(instructions);
 }
 
 /**
