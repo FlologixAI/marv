@@ -135,4 +135,86 @@ describe("runAgent", () => {
       { type: "done", reason: "error" },
     ]);
   });
+
+  describe("parallel calls", () => {
+    const sub = (id: string, ms: number): ToolCall => ({ id, name: "agent", arguments: JSON.stringify({ description: id, ms }) });
+    const isParallel = (c: ToolCall) => c.name === "agent";
+
+    /** A runTool that sleeps `ms` for agent calls and records how many run at once. */
+    function tracked(declineId?: string) {
+      const state = { active: 0, max: 0, started: [] as string[] };
+      const runTool = async (c: ToolCall) => {
+        state.started.push(c.id);
+        state.active++;
+        state.max = Math.max(state.max, state.active);
+        const { ms = 0 } = JSON.parse(c.arguments) as { ms?: number };
+        await Bun.sleep(ms);
+        state.active--;
+        return { output: `out ${c.id}`, summary: "ok", label: c.id, ...(c.id === declineId ? { declined: true } : {}) };
+      };
+      return { state, runTool };
+    }
+
+    test("consecutive parallel calls run at once; results go into history in call order", async () => {
+      const provider = new ScriptedProvider([useTools(sub("a", 60), sub("b", 10)), say("Both done.")]);
+      const history: ChatTurn[] = [{ role: "user", text: "go" }];
+      const { state, runTool } = tracked();
+      const events = await run(provider, history, { runTool, isParallel });
+
+      expect(state.max).toBe(2);
+      // b finished first…
+      expect(events.filter((e) => e.type === "tool_end").map((e) => e.type === "tool_end" && e.call.id)).toEqual(["b", "a"]);
+      // …but the history is in call order, so every request is deterministic (prompt cache).
+      expect(history.filter((t) => t.role === "tool").map((t) => t.role === "tool" && t.callId)).toEqual(["a", "b"]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "end" });
+    });
+
+    test("at most 4 run at once", async () => {
+      const calls = Array.from({ length: 6 }, (_, i) => sub(`s${i}`, 20));
+      const provider = new ScriptedProvider([useTools(...calls), say("ok")]);
+      const { state, runTool } = tracked();
+      await run(provider, [{ role: "user", text: "go" }], { runTool, isParallel });
+      expect(state.max).toBe(4);
+      expect(state.started).toHaveLength(6);
+    });
+
+    test("a non-parallel call between them splits the group", async () => {
+      const provider = new ScriptedProvider([useTools(sub("a", 20), call("r", "x.ts"), sub("b", 20)), say("ok")]);
+      const { state, runTool } = tracked();
+      await run(provider, [{ role: "user", text: "go" }], { runTool, isParallel });
+      expect(state.max).toBe(1);
+      expect(state.started).toEqual(["a", "r", "b"]);
+    });
+
+    test("an interrupt answers queued calls without running them", async () => {
+      const controller = new AbortController();
+      const provider = new ScriptedProvider([useTools(sub("a", 10), sub("b", 10), sub("c", 10))]);
+      const history: ChatTurn[] = [{ role: "user", text: "go" }];
+      const events = await run(provider, history, {
+        signal: controller.signal,
+        isParallel,
+        maxParallel: 1,
+        runTool: async (c) => {
+          controller.abort();
+          return { output: `out ${c.id}`, summary: "ok", label: c.id };
+        },
+      });
+      expect(history.filter((t) => t.role === "tool").map((t) => t.role === "tool" && t.text)).toEqual([
+        "out a",
+        "Interrupted by the user before this tool ran.",
+        "Interrupted by the user before this tool ran.",
+      ]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
+
+    test("a no in a parallel group lets the running ones finish, then stops", async () => {
+      const provider = new ScriptedProvider([useTools(sub("a", 5), sub("b", 30)), say("never")]);
+      const history: ChatTurn[] = [{ role: "user", text: "go" }];
+      const { runTool } = tracked("a");
+      const events = await run(provider, history, { runTool, isParallel });
+      expect(history.filter((t) => t.role === "tool").map((t) => t.role === "tool" && t.text)).toEqual(["out a", "out b"]);
+      expect(provider.requests).toHaveLength(1);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "declined" });
+    });
+  });
 });

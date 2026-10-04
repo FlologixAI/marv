@@ -9,10 +9,27 @@
 // events, and `history` (the conversation the model sees) is appended to in
 // place, never rewritten, so every request starts with the previous one and
 // the provider's prompt cache keeps hitting.
+//
+// Tool calls run one at a time, except subagents: several `agent` calls in
+// one reply run at the same time (at most MAX_PARALLEL), and their results are
+// still appended in call order, so the history doesn't depend on which
+// finished first.
 import type { ChatTurn, Provider, ToolCall, ToolSpec, Usage } from "./provider/types.ts";
 import type { ToolResult } from "./tools/types.ts";
 
 export const DEFAULT_MAX_STEPS = 25;
+export const MAX_PARALLEL = 4;
+
+const NOT_RUN = {
+  aborted: "Interrupted by the user before this tool ran.",
+  declined: "Not run: the user declined an earlier action.",
+};
+
+type Result = ToolResult & { label: string };
+type GroupEvent =
+  | { type: "start"; index: number; call: ToolCall }
+  | { type: "end"; index: number; call: ToolCall; result: Result }
+  | { type: "skip"; index: number; result: Result };
 
 export type LoopEvent =
   | { type: "text_delta"; text: string }
@@ -34,15 +51,76 @@ interface Options {
   runTool: (call: ToolCall) => Promise<ToolResult & { label: string }>;
   signal: AbortSignal;
   maxSteps?: number;
+  /** Calls that may run at the same time as their neighbours (subagents). Default: none. */
+  isParallel?: (call: ToolCall) => boolean;
+  maxParallel?: number;
 }
 
 /** The transcript label for a call before it runs ("src/app.ts"), falling back to the raw arguments. */
 function labelOf(call: ToolCall): string {
   try {
     const args = JSON.parse(call.arguments) as Record<string, unknown>;
-    return String(args.path ?? args.pattern ?? args.command ?? call.arguments);
+    const agent = typeof args.description === "string" ? `${args.type ?? "general-purpose"} · ${args.description}` : undefined;
+    return String(args.path ?? args.pattern ?? args.command ?? agent ?? call.arguments);
   } catch {
     return call.arguments;
+  }
+}
+
+/**
+ * Runs a group of calls at the same time (at most `limit` at once) and reports
+ * each start and end as it happens. Calls still queued after an interrupt or a
+ * "no" are answered without running.
+ */
+async function* runGroup(
+  group: ToolCall[],
+  runTool: Options["runTool"],
+  limit: number,
+  signal: AbortSignal,
+): AsyncGenerator<GroupEvent> {
+  // Calls finish whenever they like (in promise callbacks); their events wait
+  // in `ready` until the generator's consumer gets to them, and `wake` resumes
+  // the generator if it is waiting for one.
+  const ready: GroupEvent[] = [];
+  let wake: (() => void) | null = null;
+  const emit = (event: GroupEvent) => {
+    ready.push(event);
+    wake?.();
+    wake = null;
+  };
+  let next = 0;
+  let active = 0;
+  let settled = 0;
+  let declined = false;
+  const startMore = () => {
+    while (active < limit && next < group.length) {
+      const index = next++;
+      const call = group[index]!;
+      if (signal.aborted || declined) {
+        settled++;
+        emit({ type: "skip", index, result: { output: declined ? NOT_RUN.declined : NOT_RUN.aborted, summary: "not run", label: call.name } });
+        continue;
+      }
+      active++;
+      emit({ type: "start", index, call });
+      // Started inside a promise chain, so even a runTool that throws
+      // synchronously ends as an error result instead of a call that never settles.
+      void Promise.resolve()
+        .then(() => runTool(call))
+        .catch((err: Error): Result => ({ output: `${call.name} failed: ${err.message}`, summary: "error", isError: true, label: call.name }))
+        .then((result) => {
+          active--;
+          settled++;
+          declined ||= Boolean(result.declined);
+          emit({ type: "end", index, call, result });
+          startMore();
+        });
+    }
+  };
+  startMore();
+  while (settled < group.length || ready.length > 0) {
+    if (ready.length === 0) await new Promise<void>((resolve) => (wake = resolve));
+    yield* ready.splice(0);
   }
 }
 
@@ -54,6 +132,8 @@ export async function* runAgent({
   runTool,
   signal,
   maxSteps = DEFAULT_MAX_STEPS,
+  isParallel = () => false,
+  maxParallel = MAX_PARALLEL,
 }: Options): AsyncGenerator<LoopEvent> {
   for (let step = 0; step < maxSteps; step++) {
     let text = "";
@@ -101,17 +181,28 @@ export async function* runAgent({
     // Every call must get a result, even after an interrupt or a "no": a
     // request with an unanswered tool call is rejected by the API.
     let declined = false;
-    for (const call of calls) {
+    for (let i = 0; i < calls.length; ) {
+      // A run of consecutive parallel calls goes together; anything else, one at a time.
+      let end = i + 1;
+      if (isParallel(calls[i]!)) while (end < calls.length && isParallel(calls[end]!)) end++;
+      const group = calls.slice(i, end);
+      i = end;
       if (signal.aborted || declined) {
-        const text = declined ? "Not run: the user declined an earlier action." : "Interrupted by the user before this tool ran.";
-        history.push({ role: "tool", callId: call.id, name: call.name, text });
+        for (const call of group) history.push({ role: "tool", callId: call.id, name: call.name, text: declined ? NOT_RUN.declined : NOT_RUN.aborted });
         continue;
       }
-      yield { type: "tool_start", call, label: labelOf(call) };
-      const result = await runTool(call);
-      history.push({ role: "tool", callId: call.id, name: call.name, text: result.output });
-      yield { type: "tool_end", call, result };
-      declined = Boolean(result.declined);
+      const results: Result[] = [];
+      for await (const event of runGroup(group, runTool, maxParallel, signal)) {
+        if (event.type === "start") {
+          yield { type: "tool_start", call: event.call, label: labelOf(event.call) };
+        } else {
+          results[event.index] = event.result;
+          if (event.type === "end") yield { type: "tool_end", call: event.call, result: event.result };
+        }
+      }
+      // In call order, whatever order they finished in (prompt cache).
+      group.forEach((call, k) => history.push({ role: "tool", callId: call.id, name: call.name, text: results[k]!.output }));
+      declined = results.some((r) => r.declined);
     }
     if (signal.aborted) {
       yield { type: "done", reason: "aborted" };
