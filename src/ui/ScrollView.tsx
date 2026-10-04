@@ -4,6 +4,12 @@ import { mouse, type MouseEvent } from "../mouse.ts";
 import type { Viewport } from "../selection.ts";
 
 const WHEEL_ROWS = 3;
+/**
+ * One glide step every 20 ms (50/s). Just above Ink's frame interval (60/s =
+ * 16.7 ms) so every step gets its own frame: at 16 ms the two timers beat
+ * against each other and frames came 4 ms, then 50 ms apart (visible stutter).
+ */
+const GLIDE_MS = 20;
 
 interface Props {
   children: ReactNode;
@@ -52,6 +58,37 @@ export function ScrollView({ children, followKey = 0, isActive = true, onViewpor
     scrollBy,
   );
 
+  // Smooth wheel scrolling: notches add to a distance still to travel, and a
+  // per-frame glide covers a third of what's left each step (at least one
+  // row). One notch moves 1+1+1 rows instead of jumping 3; a fast flick moves
+  // quickly at first, then eases out. Reversing direction drops the rest.
+  const latestScrollBy = useRef(scrollBy);
+  latestScrollBy.current = scrollBy;
+  const glide = useRef({ remaining: 0, timer: null as ReturnType<typeof setTimeout> | null });
+  const glideStep = () => {
+    const g = glide.current;
+    if (g.remaining === 0) {
+      g.timer = null;
+      return;
+    }
+    const step = Math.sign(g.remaining) * Math.max(1, Math.ceil(Math.abs(g.remaining) / 3));
+    g.remaining -= step;
+    latestScrollBy.current(step);
+    g.timer = setTimeout(glideStep, GLIDE_MS);
+  };
+  const glideBy = (rows: number) => {
+    const g = glide.current;
+    if (Math.sign(rows) !== Math.sign(g.remaining)) g.remaining = 0;
+    g.remaining += rows;
+    if (!g.timer) glideStep(); // the first row moves right away
+  };
+  useEffect(
+    () => () => {
+      if (glide.current.timer) clearTimeout(glide.current.timer);
+    },
+    [],
+  );
+
   useInput(
     (_input, key) => {
       if (key.pageUp) scrollBy(-page);
@@ -65,7 +102,7 @@ export function ScrollView({ children, followKey = 0, isActive = true, onViewpor
   useEffect(() => {
     if (!isActive) return;
     const onMouse = (event: MouseEvent) => {
-      if (event.type === "scroll") scrollBy(event.step * WHEEL_ROWS);
+      if (event.type === "scroll") glideBy(event.step * WHEEL_ROWS);
     };
     mouse.on("event", onMouse);
     return () => {

@@ -13,6 +13,9 @@ export const renderOptions = {
   // the whole screen on every update (each martian frame, each keystroke),
   // which flickers in terminals that ignore synchronized output.
   incrementalRendering: true,
+  // Frames are cheap enough (~7 ms) to draw at 60/s, which makes scrolling
+  // glide instead of step. Ink's default is 30.
+  maxFps: 60,
   // Our Ink patch: lets the selection highlight be drawn into each frame.
   transformOutput: selection.transformOutput,
 } satisfies RenderOptions;

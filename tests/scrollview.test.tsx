@@ -61,25 +61,38 @@ describe("ScrollView", () => {
     expect(visible(lastFrame())[0]).toBe("line 4");
   });
 
-  test("the mouse wheel scrolls 3 rows per notch", async () => {
-    const { lastFrame } = render(<Lines count={10} />);
+  test("the mouse wheel scrolls 3 rows per notch, gliding one row per frame", async () => {
+    const { lastFrame, frames } = render(<Lines count={10} />);
     await tick();
     mouse.emit("event", { type: "scroll", step: -1 });
-    await tick();
+    await tick(120);
     expect(visible(lastFrame())[0]).toBe("line 4");
+    // It passed through the rows in between instead of jumping.
+    const tops = frames.map((frame) => visible(frame)[0]);
+    expect(tops).toContain("line 6");
+    expect(tops).toContain("line 5");
 
     mouse.emit("event", { type: "scroll", step: 1 });
-    await tick();
+    await tick(120);
     expect(visible(lastFrame()).at(-1)).toBe("line 10");
   });
 
-  test("several wheel notches before a render all count", async () => {
-    const { lastFrame } = render(<Lines count={20} />);
+  test("a fast flick adds up, and the glide catches up quickly", async () => {
+    const { lastFrame } = render(<Lines count={60} />);
     await tick();
-    mouse.emit("event", { type: "scroll", step: -1 });
-    mouse.emit("event", { type: "scroll", step: -1 });
+    for (let i = 0; i < 6; i++) mouse.emit("event", { type: "scroll", step: -1 }); // 18 rows
+    await tick(200);
+    expect(visible(lastFrame())[0]).toBe("line 39"); // bottom was lines 57-60; 18 rows up
+  });
+
+  test("a direction change cancels the rest of the glide", async () => {
+    const { lastFrame } = render(<Lines count={60} />);
     await tick();
-    expect(visible(lastFrame())[0]).toBe("line 11");
+    for (let i = 0; i < 6; i++) mouse.emit("event", { type: "scroll", step: -1 });
+    mouse.emit("event", { type: "scroll", step: 1 }); // changed my mind
+    await tick(200);
+    // Only the 3 rows of the last notch remain to travel, back toward the bottom: it ends at the bottom.
+    expect(visible(lastFrame()).at(-1)).toBe("line 60");
   });
 
   test("a new followKey jumps back to the bottom", async () => {
