@@ -1,9 +1,12 @@
 // All colors live here so the look can be changed in one place.
 export const theme = {
   accent: "#2dd4bf",
-  user: "gray",
+  // Exact shades, not the terminal's "gray" (ANSI bright black): terminals
+  // pick that shade themselves, and GNOME Console's is ~2.5:1 against its
+  // background, hard to read. Contrast on a dark background (#1e1e1e):
+  user: "#d4d4d8", // your messages: ~11:1, visible but distinct from replies
   assistant: "white",
-  dim: "gray",
+  dim: "#a1a1aa", // reasoning, hints, status: ~6.5:1, quieter but readable
   error: "#f87171",
   warning: "#fbbf24",
   code: "#7dd3fc", // inline code and links in replies
