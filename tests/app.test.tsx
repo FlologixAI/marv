@@ -11,6 +11,7 @@ import type { AgentEvent, ChatTurn, Provider, StreamOptions } from "../src/provi
 import { selection } from "../src/selection.ts";
 import type { Skill } from "../src/skills.ts";
 import type { ModelInfo } from "../src/provider/models.ts";
+import { SessionStore } from "../src/sessions.ts";
 import { FakeProvider, ScriptedProvider } from "./fake-provider.ts";
 
 const ENTER = "\r";
@@ -496,6 +497,106 @@ describe("App", () => {
       await type(stdin, "hi");
       await tick(150);
       expect(lastFrame()).toContain("910/32.8k ctx · local");
+    });
+  });
+
+  describe("sessions", () => {
+    let sessions: SessionStore;
+    beforeEach(() => {
+      sessions = new SessionStore(join(dir, "sessions"));
+    });
+
+    function renderWithSessions(model: Provider, resume?: "latest" | "pick") {
+      return render(
+        <App
+          store={store}
+          initialFile={LOCAL}
+          env={{}}
+          version="9.9.9"
+          cwd="~/x"
+          root={project}
+          splashMs={0}
+          makeProvider={() => model}
+          loadModels={async () => []}
+          sessions={sessions}
+          resume={resume}
+        />,
+      );
+    }
+    const say = (text: string) => [{ type: "text_delta", text }, { type: "done" }] as AgentEvent[];
+
+    test("each turn is saved, with both the transcript and the conversation", async () => {
+      const { stdin } = renderWithSessions(new ScriptedProvider([say("Paris.")]));
+      await type(stdin, "capital of France?");
+      await tick(500);
+      const [summary] = await sessions.list(project);
+      expect(summary).toMatchObject({ title: "capital of France?", messages: 2 });
+      const saved = await sessions.load(project, summary!.id);
+      expect(saved!.conversation).toEqual([
+        { role: "user", text: "capital of France?" },
+        { role: "assistant", text: "Paris." },
+      ]);
+    });
+
+    test("/resume picks an earlier session and carries on from it", async () => {
+      // An earlier session…
+      const first = renderWithSessions(new ScriptedProvider([say("Paris.")]));
+      await type(first.stdin, "capital of France?");
+      await tick(500);
+      first.unmount();
+
+      // …picked up in a new one.
+      const model = new ScriptedProvider([say("About 2.1 million.")]);
+      const { lastFrame, stdin } = renderWithSessions(model);
+      await type(stdin, "/resume");
+      await tick(150);
+      expect(lastFrame()).toContain("Resume a session");
+      expect(lastFrame()).toContain("capital of France?");
+      stdin.write(ENTER);
+      await tick(200);
+      expect(lastFrame()).toContain("Paris."); // the old transcript is back
+      expect(lastFrame()).toContain("Resumed");
+
+      await type(stdin, "and its population?");
+      await tick(200);
+      // The model gets the earlier conversation too.
+      expect(model.requests[0]!.history).toEqual([
+        { role: "user", text: "capital of France?" },
+        { role: "assistant", text: "Paris." },
+        { role: "user", text: "and its population?" },
+      ]);
+      await tick(400);
+      expect(await sessions.list(project)).toHaveLength(1); // still the same session
+    });
+
+    test("--continue resumes the latest session at startup", async () => {
+      const first = renderWithSessions(new ScriptedProvider([say("Paris.")]));
+      await type(first.stdin, "capital of France?");
+      await tick(500);
+      first.unmount();
+
+      const { lastFrame } = renderWithSessions(new ScriptedProvider([]), "latest");
+      await tick(300);
+      expect(lastFrame()).toContain("capital of France?");
+      expect(lastFrame()).toContain("Paris.");
+    });
+
+    test("/resume with nothing saved says so", async () => {
+      const { lastFrame, stdin } = renderWithSessions(new ScriptedProvider([]));
+      await type(stdin, "/resume");
+      await tick(150);
+      expect(lastFrame()).toContain("No saved sessions for this project yet.");
+    });
+
+    test("/clear starts a new session and keeps the old one", async () => {
+      const { stdin } = renderWithSessions(new ScriptedProvider([say("one"), say("two")]));
+      await type(stdin, "first");
+      await tick(500);
+      await type(stdin, "/clear");
+      await tick();
+      await type(stdin, "second");
+      await tick(500);
+      expect((await sessions.list(project)).map((s) => s.title)).toEqual(["second", "first"]);
     });
   });
 });

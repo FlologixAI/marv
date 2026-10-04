@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Entrypoint for the `marv` command (see "bin" in package.json).
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { render } from "ink";
 import pkg from "../package.json";
 import { App } from "./app.tsx";
@@ -9,6 +10,7 @@ import { filterMouseInput, MOUSE_OFF, MOUSE_ON } from "./mouse.ts";
 import { shortenHome } from "./paths.ts";
 import { loadInstructions } from "./prompt.ts";
 import { loadSkills } from "./skills.ts";
+import { SessionStore } from "./sessions.ts";
 import { renderOptions } from "./render-options.ts";
 import { selection } from "./selection.ts";
 
@@ -16,11 +18,14 @@ const HELP = `Marv v${pkg.version}: a terminal coding agent
 
 Usage:
   marv              start an interactive session
+  marv -c           continue the latest session in this folder (--continue)
+  marv -r           pick an earlier session to resume (--resume)
   marv --version    print the version
   marv --help       show this help
 
 Config:
   ~/.marv/config.json   created by the setup screen (/setup to change it)
+  ~/.marv/sessions/     saved conversations, one folder per project
   OPENROUTER_API_KEY    overrides the saved OpenRouter key
   OLLAMA_HOST           where Ollama runs (default localhost:11434)
   MARV_MODEL            overrides the saved model
@@ -74,6 +79,8 @@ const instance = render(
     instructions={instructions}
     skills={skills}
     skillProblems={skillProblems}
+    sessions={new SessionStore(join(defaultConfigDir(process.env), "sessions"))}
+    resume={args.includes("-c") || args.includes("--continue") ? "latest" : args.includes("-r") || args.includes("--resume") ? "pick" : undefined}
   />,
   renderOptions,
 );

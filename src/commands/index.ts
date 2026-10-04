@@ -16,6 +16,7 @@ export type CommandAction =
   | { type: "model"; id?: string }
   | { type: "thinking"; on: boolean }
   | { type: "sandbox"; on: boolean }
+  | { type: "resume" }
   /** The user ran a skill: /<name> <args>. */
   | { type: "skill"; skill: Skill; args: string }
   | { type: "exit" };
@@ -66,6 +67,11 @@ export const commands: Command[] = [
       if (arg && arg !== "on" && arg !== "off") return { type: "print", text: "Usage: /think, /think on, or /think off", isError: true };
       return { type: "thinking", on: arg ? arg === "on" : !config.thinking };
     },
+  },
+  {
+    name: "resume",
+    description: "Pick up an earlier session in this project",
+    run: () => ({ type: "resume" }),
   },
   {
     name: "cost",

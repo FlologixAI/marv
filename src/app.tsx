@@ -21,11 +21,13 @@ import type { ChatTurn, Provider, Usage } from "./provider/types.ts";
 import { selection } from "./selection.ts";
 import { systemPrompt } from "./prompt.ts";
 import { addUsage, costText, emptyTotals, type Prices, type Totals } from "./usage.ts";
+import { newSession, timeAgo, type Session, type SessionStore, type SessionSummary } from "./sessions.ts";
 import { skillMessage, type Skill } from "./skills.ts";
 import { runTool, toolSpecsFor } from "./tools/index.ts";
 import type { ApprovalRequest, Decision } from "./tools/types.ts";
 import type { Message } from "./types.ts";
 import { Approval } from "./ui/Approval.tsx";
+import { SessionPicker } from "./ui/SessionPicker.tsx";
 import { MessageView } from "./ui/MessageView.tsx";
 import { PromptInput } from "./ui/PromptInput.tsx";
 import { ScrollView } from "./ui/ScrollView.tsx";
@@ -69,6 +71,10 @@ interface Props {
   copy?: (text: string) => Promise<string>;
   /** Swappable so tests don't hit OpenRouter or Ollama for the model picker. */
   loadModels?: (config: Pick<Config, "provider" | "baseUrl">) => Promise<ModelInfo[]>;
+  /** Where sessions are saved; without it, nothing is saved. */
+  sessions?: SessionStore;
+  /** Start by resuming: the latest session here (marv -c), or a picker (marv -r). */
+  resume?: "latest" | "pick";
 }
 
 // "model" is the /model picker: the setup screen, starting at the model step.
@@ -88,6 +94,8 @@ export function App({
   makeProvider = createProvider,
   copy = copyToClipboard,
   loadModels = listModels,
+  sessions,
+  resume,
 }: Props) {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
@@ -104,6 +112,12 @@ export function App({
   // …versus what the model sees: user and assistant turns, tool calls and results.
   // Only ever appended to (until /clear): see the prompt cache note in agent.ts.
   const conversation = useRef<ChatTurn[]>([]);
+  // The saved session this conversation is written to (a new one after /clear).
+  const configRef = useRef(config);
+  configRef.current = config;
+  const sessionRef = useRef<Session>(newSession(root, config));
+  const [picker, setPicker] = useState<SessionSummary[] | null>(null);
+
   // Built once per session, so they're byte-identical in every request.
   const specs = useMemo(() => toolSpecsFor({ hasSkills: skills.length > 0 }), [skills]);
   const system = useMemo(
@@ -186,6 +200,7 @@ export function App({
 
   const clearTranscript = useCallback(() => {
     selection.reset();
+    sessionRef.current = newSession(root, configRef.current);
     conversation.current = [];
     warnedFull.current = false;
     setUsage(null);
@@ -355,6 +370,9 @@ export function App({
             : "Thinking off: models answer directly.",
         );
         break;
+      case "resume":
+        void openPicker();
+        break;
       case "skill":
         void send(text, skillMessage(action.skill, action.args));
         break;
@@ -475,6 +493,67 @@ export function App({
   // Typing anything clears the highlight, like in a terminal.
   useInput(() => selection.clear(), { isActive: phase === "main" });
 
+  // Save the session once a turn is over (not mid-run), shortly after things settle.
+  useEffect(() => {
+    if (!sessions || busy) return;
+    const timer = setTimeout(() => {
+      const transcript = items.flatMap((item) => (item.kind === "message" ? [item.message] : []));
+      const { provider: providerId, model } = configRef.current;
+      sessionRef.current = { ...sessionRef.current, provider: providerId, model, conversation: [...conversation.current], transcript, totals };
+      void sessions.save(sessionRef.current).catch(() => {});
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [sessions, busy, items, totals]);
+
+  /** Brings back a saved session: both histories, its cost, and it keeps saving to the same file. */
+  const restore = useCallback(
+    (session: Session) => {
+      selection.reset();
+      sessionRef.current = session;
+      conversation.current = [...session.conversation];
+      nextId.current = Math.max(0, ...session.transcript.map((m) => m.id)) + 1;
+      setTotals(session.totals);
+      setUsage(null);
+      const switched = session.model !== configRef.current.model ? ` (it used ${session.model}; continuing with ${configRef.current.model})` : "";
+      setItems([
+        { kind: "welcome", id: "welcome-0" },
+        ...session.transcript.map((message) => ({ kind: "message" as const, id: `msg-${message.id}`, message })),
+      ]);
+      addMessage({ role: "system", text: `Resumed a session from ${timeAgo(session.updatedAt)}${switched}.` });
+      setFollowKey((n) => n + 1);
+    },
+    [addMessage],
+  );
+
+  const openPicker = useCallback(async () => {
+    if (!sessions) return;
+    const list = (await sessions.list(root)).filter((s) => s.id !== sessionRef.current.id);
+    if (list.length === 0) addMessage({ role: "system", text: "No saved sessions for this project yet." });
+    else setPicker(list);
+  }, [sessions, root, addMessage]);
+
+  const pickSession = useCallback(
+    async (id: string) => {
+      setPicker(null);
+      const session = await sessions?.load(root, id);
+      if (session) restore(session);
+      else addMessage({ role: "system", isError: true, text: "That session couldn't be loaded." });
+    },
+    [sessions, root, restore, addMessage],
+  );
+
+  // marv -c / marv -r
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (resumed.current || !resume || !sessions || phase !== "main") return;
+    resumed.current = true;
+    if (resume === "pick") void openPicker();
+    else
+      void sessions.latest(root).then((session) =>
+        session ? restore(session) : addMessage({ role: "system", text: "No saved session to continue in this project." }),
+      );
+  }, [resume, sessions, phase, root, restore, openPicker, addMessage]);
+
   // Skills that couldn't be loaded are reported once, not silently skipped.
   useEffect(() => {
     if (skillProblems.length === 0) return;
@@ -509,7 +588,9 @@ export function App({
       </ScrollView>
 
       <Box flexDirection="column" flexShrink={0}>
-        {approval && !setupMode ? (
+        {picker && !setupMode && !approval ? (
+          <SessionPicker sessions={picker} onPick={(id) => void pickSession(id)} onCancel={() => setPicker(null)} />
+        ) : approval && !setupMode ? (
           <>
             <Approval request={approval.request} onDecide={decide} />
             <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy />
