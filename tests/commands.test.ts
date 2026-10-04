@@ -79,6 +79,14 @@ describe("slash commands", () => {
     expect(run("/help", { ...ctx, skills: [help] }).type).toBe("print");
   });
 
+  test("/remember saves to personal memory, or to the project with project:", () => {
+    expect(runCommand("/remember uses bun, not npm")).toEqual({ type: "remember", scope: "personal", text: "uses bun, not npm" });
+    expect(runCommand("/remember project: tests need Ollama")).toEqual({ type: "remember", scope: "project", text: "tests need Ollama" });
+    expect(runCommand("/remember")).toMatchObject({ type: "print", isError: true });
+    expect(runCommand("/forget ollama")).toEqual({ type: "forget", text: "ollama" });
+    expect(runCommand("/memory")).toEqual({ type: "memory" });
+  });
+
   test("/think toggles, or takes on/off", () => {
     expect(runCommand("/think")).toEqual({ type: "thinking", on: true });
     expect(run("/think", { ...ctx, config: { ...ctx.config, thinking: true } })).toEqual({ type: "thinking", on: false });

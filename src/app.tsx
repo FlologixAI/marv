@@ -22,6 +22,7 @@ import { selection } from "./selection.ts";
 import { systemPrompt } from "./prompt.ts";
 import { addUsage, costText, emptyTotals, tokens, type Prices, type Totals } from "./usage.ts";
 import { COMPACT_AT, compactedHistory, summarize } from "./compact.ts";
+import { addMemory, findMemory, loadMemory, removeMemory, type Memories, type MemoryPaths } from "./memory.ts";
 import { newSession, timeAgo, type Session, type SessionStore, type SessionSummary } from "./sessions.ts";
 import { skillMessage, type Skill } from "./skills.ts";
 import { runTool, toolSpecsFor } from "./tools/index.ts";
@@ -74,6 +75,8 @@ interface Props {
   sessions?: SessionStore;
   /** Start by resuming: the latest session here (marv -c), or a picker (marv -r). */
   resume?: "latest" | "pick";
+  /** Where memory lives, and what it held at startup. */
+  memory?: { paths: MemoryPaths; initial: Memories };
 }
 
 // "model" is the /model picker: the setup screen, starting at the model step.
@@ -95,6 +98,7 @@ export function App({
   loadModels = listModels,
   sessions,
   resume,
+  memory,
 }: Props) {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
@@ -119,9 +123,11 @@ export function App({
 
   // Built once per session, so they're byte-identical in every request.
   const specs = useMemo(() => toolSpecsFor({ hasSkills: skills.length > 0 }), [skills]);
+  // Memory as of the start of this conversation (reloaded by /clear), so the system prompt stays fixed within it.
+  const [memories, setMemories] = useState<Memories | undefined>(memory?.initial);
   const system = useMemo(
-    () => systemPrompt({ cwd, tools: specs.map((t) => t.name), instructions, skills }),
-    [cwd, specs, instructions, skills],
+    () => systemPrompt({ cwd, tools: specs.map((t) => t.name), instructions, skills, memory: memories }),
+    [cwd, specs, instructions, skills, memories],
   );
   // Skills show up in the / menu next to the built-in commands.
   const menu = useMemo(() => [...commands, ...skills.map(({ name, description }) => ({ name, description }))], [skills]);
@@ -201,11 +207,13 @@ export function App({
 
   const clearTranscript = useCallback(() => {
     selection.reset();
+    // A new conversation picks up memories saved during the last one.
+    if (memory) void loadMemory(memory.paths).then(setMemories);
     sessionRef.current = newSession(root, configRef.current);
     conversation.current = [];
     setUsage(null);
     setItems([{ kind: "welcome", id: "welcome-0" }]);
-  }, []);
+  }, [memory]);
 
   // Adds a request's tokens and cost to the session's totals.
   const countUsage = useCallback(
@@ -315,7 +323,7 @@ export function App({
           history: conversation.current,
           system,
           tools: specs,
-          runTool: (call) => runTool(call, { root, signal: controller.signal, approve, sandbox: config.sandbox, skills }),
+          runTool: (call) => runTool(call, { root, signal: controller.signal, approve, sandbox: config.sandbox, skills, memory: memory?.paths }),
           signal: controller.signal,
         })) {
           switch (event.type) {
@@ -382,6 +390,51 @@ export function App({
     [provider, addMessage, updateMessage, system, specs, skills, root, approve, config.sandbox, countUsage, compact, contextLength],
   );
 
+  // /memory, /remember, /forget: you editing Marv's memory directly (no approval needed).
+  const nextTime = "Marv will use it from the next conversation (/clear starts one).";
+  const showMemory = async () => {
+    if (!memory) return addMessage({ role: "system", text: "Memory isn't available." });
+    const { personal, project } = await loadMemory(memory.paths);
+    const list = (entries: string[]) => (entries.length ? entries.map((e) => `- ${e}`).join("\n") : "*(nothing yet)*");
+    addMessage({
+      role: "system",
+      markdown: true,
+      text: [
+        `**Personal** (all projects): \`${shortenHome(memory.paths.personal)}\``,
+        list(personal),
+        `**This project**: \`${shortenHome(memory.paths.project)}\``,
+        list(project),
+        "Edit these files directly, use `/remember` and `/forget`, or ask Marv to remember or forget something.",
+      ].join("\n\n"),
+    });
+  };
+  const rememberNote = async (scope: "personal" | "project", text: string) => {
+    if (!memory) return;
+    const { added, error } = await addMemory(memory.paths[scope], text);
+    addMessage(
+      error
+        ? { role: "system", isError: true, text: error }
+        : { role: "system", text: added ? `Saved to ${scope} memory. ${nextTime}` : `That's already in ${scope} memory.` },
+    );
+  };
+  const forgetNote = async (text: string) => {
+    if (!memory) return;
+    // Look in both scopes; remove only when exactly one memory matches.
+    const matches = [
+      ...(await findMemory(memory.paths.personal, text)).map((m) => ({ scope: "personal" as const, m })),
+      ...(await findMemory(memory.paths.project, text)).map((m) => ({ scope: "project" as const, m })),
+    ];
+    if (matches.length !== 1) {
+      return addMessage({
+        role: "system",
+        isError: true,
+        text: matches.length ? `${matches.length} memories match; use more of the text: ${matches.map((x) => `"${x.m}"`).join(", ")}` : `No memory matches "${text}".`,
+      });
+    }
+    const result = await removeMemory(memory.paths[matches[0]!.scope], matches[0]!.m);
+    addMessage("error" in result ? { role: "system", isError: true, text: result.error } : { role: "system", text: `Forgot: ${result.removed}` });
+  };
+
   const handleSubmit = (raw: string) => {
     const text = raw.trim();
     if (!text || busy) return;
@@ -417,6 +470,15 @@ export function App({
             ? "Thinking on: models may reason before answering (slower, often better)."
             : "Thinking off: models answer directly.",
         );
+        break;
+      case "memory":
+        void showMemory();
+        break;
+      case "remember":
+        void rememberNote(action.scope, action.text);
+        break;
+      case "forget":
+        void forgetNote(action.text);
         break;
       case "compact":
         void compact(action.focus, false);
@@ -628,7 +690,14 @@ export function App({
   return (
     <Box flexDirection="column" height={rows} width={columns}>
       <ScrollView followKey={followKey} isActive={setupMode === null} onViewport={selection.setViewport}>
-        <Transcript items={items} version={version} cwd={cwd} instructions={Boolean(instructions)} skills={skills.length} />
+        <Transcript
+          items={items}
+          version={version}
+          cwd={cwd}
+          instructions={Boolean(instructions)}
+          skills={skills.length}
+          memories={memories ? memories.personal.length + memories.project.length : 0}
+        />
 
         {streaming !== null &&
           (streaming === "" ? (

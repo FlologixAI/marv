@@ -9,6 +9,7 @@ export function Welcome({
   cwd,
   instructions,
   skills = 0,
+  memories = 0,
   animate = true,
 }: {
   version: string;
@@ -17,6 +18,8 @@ export function Welcome({
   instructions?: boolean;
   /** How many skills were found. */
   skills?: number;
+  /** How many memories were loaded. */
+  memories?: number;
   animate?: boolean;
 }) {
   return (
@@ -29,9 +32,15 @@ export function Welcome({
         </Text>
         <Text color={theme.dim}>/help for commands</Text>
         <Text color={theme.dim}>cwd: {cwd}</Text>
-        {(instructions || skills > 0) && (
+        {(instructions || skills > 0 || memories > 0) && (
           <Text color={theme.dim}>
-            {[instructions && "AGENTS.md loaded", skills > 0 && `${skills} skill${skills === 1 ? "" : "s"} (/skills)`].filter(Boolean).join(" · ")}
+            {[
+              instructions && "AGENTS.md loaded",
+              skills > 0 && `${skills} skill${skills === 1 ? "" : "s"} (/skills)`,
+              memories > 0 && `${memories} memor${memories === 1 ? "y" : "ies"} (/memory)`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           </Text>
         )}
       </Box>

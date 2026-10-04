@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { MemoryPaths } from "../memory.ts";
 import type { Skill } from "../skills.ts";
 
 /** One line of a diff, for showing a change before it's approved. */
@@ -13,7 +14,9 @@ export interface Preview {
   title: string;
   /** The change, as a diff. */
   diff?: DiffLine[];
-  /** Plain text, e.g. the command. */
+  /** A shell command, shown as "$ command". */
+  command?: string;
+  /** Plain text, e.g. a memory to save. */
   text?: string;
   /** A small detail line, e.g. "sandboxed · no network". */
   note?: string;
@@ -48,6 +51,8 @@ export interface ToolContext {
   sandbox?: boolean;
   /** Skills the `skill` tool can load. */
   skills?: Skill[];
+  /** Where the memory tool reads and writes. */
+  memory?: MemoryPaths;
 }
 
 export interface ToolResult {

@@ -130,7 +130,7 @@ describe("approval", () => {
   test("bash asks, shows the command, and scopes 'don't ask again' to that exact command", async () => {
     const result = await run("bash", { command: "echo hi" });
     expect(result.output).toContain("hi");
-    expect(asked[0]!.preview.text).toBe("echo hi");
+    expect(asked[0]!.preview.command).toBe("echo hi");
     expect(asked[0]!.scope).toEqual({ key: "bash:echo hi", description: "this exact command" });
   });
 

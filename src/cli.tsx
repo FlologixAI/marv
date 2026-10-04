@@ -11,6 +11,7 @@ import { shortenHome } from "./paths.ts";
 import { loadInstructions } from "./prompt.ts";
 import { loadSkills } from "./skills.ts";
 import { SessionStore } from "./sessions.ts";
+import { loadMemory, memoryPaths } from "./memory.ts";
 import { renderOptions } from "./render-options.ts";
 import { selection } from "./selection.ts";
 
@@ -46,6 +47,8 @@ if (args.includes("--help") || args.includes("-h")) {
 const root = process.cwd();
 const instructions = await loadInstructions(root);
 const { skills, problems: skillProblems } = await loadSkills({ root, home: homedir() });
+const memoryAt = memoryPaths(defaultConfigDir(process.env), root);
+const memory = { paths: memoryAt, initial: await loadMemory(memoryAt) };
 
 // Marv was called Ekko: carry its config over (only for the default location).
 if (!process.env.MARV_CONFIG_DIR) await migrateLegacyConfig();
@@ -80,6 +83,7 @@ const instance = render(
     skills={skills}
     skillProblems={skillProblems}
     sessions={new SessionStore(join(defaultConfigDir(process.env), "sessions"))}
+    memory={memory}
     resume={args.includes("-c") || args.includes("--continue") ? "latest" : args.includes("-r") || args.includes("--resume") ? "pick" : undefined}
   />,
   renderOptions,

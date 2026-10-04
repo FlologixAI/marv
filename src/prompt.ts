@@ -5,6 +5,7 @@
 // it's the start of every prompt, so any change would invalidate the
 // provider's prompt cache for everything after it.
 import { join } from "node:path";
+import { memorySection, type Memories } from "./memory.ts";
 
 export const INSTRUCTIONS_FILE = "AGENTS.md";
 const MAX_INSTRUCTION_CHARS = 20_000;
@@ -18,10 +19,12 @@ interface PromptInput {
   instructions?: string;
   /** Available skills: only names and descriptions go in the prompt. */
   skills?: { name: string; description: string }[];
+  /** What Marv remembers (personal and project), as of the start of the conversation. */
+  memory?: Memories;
   date?: Date;
 }
 
-export function systemPrompt({ cwd, tools, instructions, skills = [], date = new Date() }: PromptInput): string {
+export function systemPrompt({ cwd, tools, instructions, skills = [], memory, date = new Date() }: PromptInput): string {
   const base = `You are Marv, a coding agent running in the user's terminal.
 
 Working directory: ${cwd}
@@ -37,7 +40,8 @@ Your replies are rendered as Markdown in a terminal. Keep them concise and struc
     ? `\n\n# Skills\n\nSkills are detailed instructions for particular kinds of tasks. When a request matches one of these, load it with the skill tool before you start, then follow it:\n\n${skills.map((s) => `- ${s.name}: ${s.description}`).join("\n")}`
     : "";
   const project = instructions ? `\n\n# Project instructions (from ${INSTRUCTIONS_FILE})\n\n${instructions}` : "";
-  return base + skillList + project;
+  const remembered = memory ? `\n\n${memorySection(memory)}` : "";
+  return base + remembered + skillList + project;
 }
 
 /**

@@ -7,12 +7,13 @@ import { editFile } from "./edit-file.ts";
 import { projectPath } from "./files.ts";
 import { glob } from "./glob.ts";
 import { grep } from "./grep.ts";
+import { memory } from "./memory.ts";
 import { readFile } from "./read-file.ts";
 import { skill } from "./skill.ts";
 import { writeFile } from "./write-file.ts";
 import { ToolError, type Tool, type ToolContext, type ToolResult } from "./types.ts";
 
-export const tools: Tool[] = [readFile, glob, grep, skill, editFile, writeFile, bash] as Tool[];
+export const tools: Tool[] = [readFile, glob, grep, skill, editFile, writeFile, bash, memory] as Tool[];
 
 /**
  * What the model is told about each tool. Built once, so every request sends

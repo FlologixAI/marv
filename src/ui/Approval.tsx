@@ -28,14 +28,15 @@ export function Approval({ request, onDecide }: { request: ApprovalRequest; onDe
     <Box flexDirection="column" borderStyle="round" borderColor={preview.warning ? theme.warning : theme.accent} paddingX={1}>
       <Text bold>{preview.title}</Text>
 
-      {(shown.length > 0 || preview.text) && (
+      {(shown.length > 0 || preview.command || preview.text) && (
         <Box flexDirection="column" marginTop={1}>
-          {preview.text && (
+          {preview.command && (
             <Text color={theme.code}>
               <Text color={theme.dim}>$ </Text>
-              {preview.text}
+              {preview.command}
             </Text>
           )}
+          {preview.text && <Text>{preview.text}</Text>}
           {shown.map((line, i) => (
             <Text key={i} color={COLOR[line.kind]} wrap="truncate-end">
               {line.kind === "gap" ? "  …" : MARK[line.kind] + line.text}

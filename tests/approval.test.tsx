@@ -29,7 +29,7 @@ const COMMAND: ApprovalRequest = {
   tool: "bash",
   label: "bun test",
   scope: { key: "bash:bun test", description: "this exact command" },
-  preview: { title: "Run a command", text: "bun test", note: "sandboxed · no network" },
+  preview: { title: "Run a command", command: "bun test", note: "sandboxed · no network" },
 };
 
 describe("Approval", () => {
@@ -48,6 +48,13 @@ describe("Approval", () => {
     const frame = render(<Approval request={COMMAND} onDecide={() => {}} />).lastFrame()!;
     expect(frame).toContain("$ bun test");
     expect(frame).toContain("sandboxed · no network");
+  });
+
+  test("shows plain text (like a memory) without the $ prompt", () => {
+    const request = { ...COMMAND, preview: { title: "Remember (personal, all projects)", text: "Prefers short answers." } };
+    const frame = render(<Approval request={request} onDecide={() => {}} />).lastFrame()!;
+    expect(frame).toContain("Prefers short answers.");
+    expect(frame).not.toContain("$ Prefers");
   });
 
   test("shows a warning when a command isn't sandboxed", () => {

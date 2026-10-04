@@ -17,6 +17,9 @@ export type CommandAction =
   | { type: "thinking"; on: boolean }
   | { type: "sandbox"; on: boolean }
   | { type: "resume" }
+  | { type: "remember"; scope: "personal" | "project"; text: string }
+  | { type: "forget"; text: string }
+  | { type: "memory" }
   /** Summarize the conversation so far and continue from the summary. */
   | { type: "compact"; focus?: string }
   /** The user ran a skill: /<name> <args>. */
@@ -69,6 +72,26 @@ export const commands: Command[] = [
       if (arg && arg !== "on" && arg !== "off") return { type: "print", text: "Usage: /think, /think on, or /think off", isError: true };
       return { type: "thinking", on: arg ? arg === "on" : !config.thinking };
     },
+  },
+  {
+    name: "memory",
+    description: "Show what Marv remembers",
+    run: () => ({ type: "memory" }),
+  },
+  {
+    name: "remember",
+    description: "Save a note to memory (/remember <note>, or /remember project: <note>)",
+    run: (args) => {
+      const project = /^project:\s*/i.exec(args);
+      const text = project ? args.slice(project[0].length) : args;
+      if (!text.trim()) return { type: "print", text: "Usage: /remember <note> (personal), or /remember project: <note>", isError: true };
+      return { type: "remember", scope: project ? "project" : "personal", text };
+    },
+  },
+  {
+    name: "forget",
+    description: "Remove a memory (/forget <text from it>)",
+    run: (args) => (args.trim() ? { type: "forget", text: args } : { type: "print", text: "Usage: /forget <text from the memory>", isError: true }),
   },
   {
     name: "compact",

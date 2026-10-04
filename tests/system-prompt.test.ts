@@ -28,6 +28,13 @@ describe("systemPrompt", () => {
     expect(systemPrompt({ cwd: "~/proj", date: DATE, tools: [] })).not.toContain("# Skills");
   });
 
+  test("includes memory when given", () => {
+    const prompt = systemPrompt({ cwd: "~/proj", date: DATE, tools: ["memory"], memory: { personal: ["Prefers short answers."], project: [] } });
+    expect(prompt).toContain("# Memory");
+    expect(prompt).toContain("- Prefers short answers.");
+    expect(systemPrompt({ cwd: "~/proj", date: DATE, tools: [] })).not.toContain("# Memory");
+  });
+
   test("is identical for identical inputs (the prompt cache depends on it)", () => {
     const args = { cwd: "~/proj", date: DATE, tools: ["read_file"], instructions: "x" };
     expect(systemPrompt(args)).toBe(systemPrompt({ ...args }));

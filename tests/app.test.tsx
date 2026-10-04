@@ -12,6 +12,7 @@ import { selection } from "../src/selection.ts";
 import type { Skill } from "../src/skills.ts";
 import type { ModelInfo } from "../src/provider/models.ts";
 import { SessionStore } from "../src/sessions.ts";
+import { loadMemory, memoryPaths, type MemoryPaths } from "../src/memory.ts";
 import { FakeProvider, ScriptedProvider } from "./fake-provider.ts";
 
 const ENTER = "\r";
@@ -249,7 +250,7 @@ describe("App", () => {
     expect(frame).toContain("It says to remember the milk.");
     // The real tool ran on the project and its output went back to the model.
     expect(model.requests[1]!.history.at(-1)).toEqual({ role: "tool", callId: "c1", name: "read_file", text: "    1\tremember the milk" });
-    expect(model.requests[0]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "edit_file", "write_file", "bash"]);
+    expect(model.requests[0]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "edit_file", "write_file", "bash", "memory"]);
   });
 
   test("a failing tool shows its error, and the model gets it to recover from", async () => {
@@ -653,6 +654,89 @@ describe("App", () => {
       await type(stdin, "second");
       await tick(500);
       expect((await sessions.list(project)).map((s) => s.title)).toEqual(["second", "first"]);
+    });
+  });
+
+  describe("memory", () => {
+    let paths: MemoryPaths;
+    beforeEach(() => {
+      paths = memoryPaths(dir, project);
+    });
+
+    async function renderWithMemory(model: Provider) {
+      return render(
+        <App
+          store={store}
+          initialFile={LOCAL}
+          env={{}}
+          version="9.9.9"
+          cwd="~/x"
+          root={project}
+          splashMs={0}
+          makeProvider={() => model}
+          loadModels={async () => []}
+          memory={{ paths, initial: await loadMemory(paths) }}
+        />,
+      );
+    }
+
+    test("the model saves a memory (with approval), and the next conversation knows it", async () => {
+      const remember = [
+        { type: "tool_call", call: { id: "m1", name: "memory", arguments: JSON.stringify({ action: "add", scope: "personal", text: "Prefers short answers." }) } },
+        { type: "done" },
+      ] as AgentEvent[];
+      const first = new ScriptedProvider([remember, [{ type: "text_delta", text: "Noted." }, { type: "done" }]]);
+      const app = await renderWithMemory(first);
+      await type(app.stdin, "please keep answers short from now on");
+      await tick(150);
+      expect(app.lastFrame()).toContain("Remember (personal, all projects)");
+      expect(app.lastFrame()).toContain("Prefers short answers.");
+      app.stdin.write(ENTER); // approve
+      await tick(200);
+      expect((await loadMemory(paths)).personal).toEqual(["Prefers short answers."]);
+      app.unmount();
+
+      const next = new ScriptedProvider([[{ type: "text_delta", text: "ok" }, { type: "done" }]]);
+      const later = await renderWithMemory(next);
+      expect(later.lastFrame()).toContain("1 memory (/memory)");
+      await type(later.stdin, "hi");
+      await tick(100);
+      expect(next.requests[0]!.options.system).toContain("Personal (all projects):\n- Prefers short answers.");
+    });
+
+    test("/remember, /memory and /forget edit memory directly", async () => {
+      const { lastFrame, stdin } = await renderWithMemory(new ScriptedProvider([]));
+      await type(stdin, "/remember uses bun, not npm");
+      await tick();
+      await type(stdin, "/remember project: tests need Ollama running");
+      await tick();
+      expect(lastFrame()).toContain("Saved to project memory.");
+      expect(await loadMemory(paths)).toEqual({ personal: ["uses bun, not npm"], project: ["tests need Ollama running"] });
+
+      await type(stdin, "/memory");
+      await tick();
+      expect(lastFrame()).toContain("• uses bun, not npm");
+      expect(lastFrame()).toContain("• tests need Ollama running");
+
+      await type(stdin, "/forget ollama");
+      await tick();
+      expect(lastFrame()).toContain("Forgot: tests need Ollama running");
+      expect((await loadMemory(paths)).project).toEqual([]);
+    });
+
+    test("/clear starts a conversation that includes memories saved since", async () => {
+      const model = new ScriptedProvider([[{ type: "text_delta", text: "ok" }, { type: "done" }], [{ type: "text_delta", text: "ok" }, { type: "done" }]]);
+      const { stdin } = await renderWithMemory(model);
+      await type(stdin, "/remember likes tabs");
+      await tick();
+      await type(stdin, "hi");
+      await tick(100);
+      expect(model.requests[0]!.options.system).not.toContain("likes tabs"); // fixed for this conversation
+      await type(stdin, "/clear");
+      await tick(100);
+      await type(stdin, "hi again");
+      await tick(100);
+      expect(model.requests[1]!.options.system).toContain("- likes tabs");
     });
   });
 });

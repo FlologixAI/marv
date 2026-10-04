@@ -124,7 +124,7 @@ export const bash: Tool<typeof input> = {
     const notes = [sandboxed && "sandboxed", sandboxed && (network ? "network allowed" : "no network"), timeout && `timeout ${timeout}s`];
     return {
       title: "Run a command",
-      text: command,
+      command,
       note: notes.filter(Boolean).join(" · ") || undefined,
       warning: sandboxed
         ? undefined

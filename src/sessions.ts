@@ -10,6 +10,7 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { projectKey } from "./paths.ts";
 import type { ChatTurn } from "./provider/types.ts";
 import type { Message } from "./types.ts";
 import { emptyTotals, type Totals } from "./usage.ts";
@@ -45,8 +46,6 @@ export function newSession(root: string, { provider, model }: { provider: string
   return { version: VERSION, id, root, createdAt: now, updatedAt: now, provider, model, conversation: [], transcript: [], totals: emptyTotals() };
 }
 
-/** "/home/me/proj" → "-home-me-proj": one folder per project. */
-const projectFolder = (root: string) => root.replace(/[^a-zA-Z0-9]/g, "-");
 
 function titleOf(session: Session): string {
   const first = session.transcript.find((m) => m.role === "user")?.text ?? "(empty)";
@@ -58,7 +57,7 @@ export class SessionStore {
   constructor(readonly dir: string) {}
 
   private folder(root: string) {
-    return join(this.dir, projectFolder(root));
+    return join(this.dir, projectKey(root));
   }
 
   /** Saves (or overwrites) a session. Sessions without a user message aren't saved. */
