@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findAgent, GENERAL_PURPOSE, loadAgents, SUBAGENT_TOOLS } from "../src/agents.ts";
+import { agentsDir, findAgent, GENERAL_PURPOSE, loadAgents, SUBAGENT_TOOLS } from "../src/agents.ts";
 
 let root: string;
 let home: string;
@@ -74,6 +74,34 @@ describe("loadAgents", () => {
     const { agents } = await loadAgents({ root, home });
     expect(agents.find((x) => x.name === "a")!.tools).toEqual(["read_file", "grep", "glob"]);
     expect(agents.find((x) => x.name === "b")!.tools).toEqual(["read_file", "bash"]);
+  });
+
+  test("MultiEdit and LS map to edit_file and glob", async () => {
+    await agentFile(root, "c.md", md("name: c\ndescription: C.\ntools: MultiEdit, LS"));
+    expect((await loadAgents({ root, home })).agents.find((x) => x.name === "c")!.tools).toEqual(["edit_file", "glob"]);
+  });
+
+  test("Claude Code's model names (sonnet, opus, haiku) mean the session's model", async () => {
+    for (const m of ["sonnet", "opus", "haiku"]) await agentFile(root, `${m}.md`, md(`name: ${m}\ndescription: X.\nmodel: ${m}`));
+    const { agents } = await loadAgents({ root, home });
+    for (const m of ["sonnet", "opus", "haiku"]) expect(agents.find((a) => a.name === m)!.model).toBeUndefined();
+  });
+
+  test("a project file named general-purpose overrides the built-in", async () => {
+    await agentFile(root, "gp.md", md("name: general-purpose\ndescription: Mine.", "Be careful."));
+    const { agents } = await loadAgents({ root, home });
+    expect(agents).toHaveLength(1);
+    expect(agents[0]!.source).toBe("project");
+    expect(agents[0]!.body).toBe("Be careful.");
+  });
+
+  test("an unreadable entry is reported and the others still load", async () => {
+    await mkdir(join(agentsDir(root), "broken.md"), { recursive: true });
+    await agentFile(root, "ok.md", md("name: ok\ndescription: Fine."));
+    const { agents, problems } = await loadAgents({ root, home });
+    expect(agents.map((a) => a.name)).toEqual(["general-purpose", "ok"]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(".marv/agents/broken.md: couldn't be read");
   });
 
   test("a model other than inherit is kept", async () => {

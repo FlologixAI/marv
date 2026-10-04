@@ -18,7 +18,7 @@ export interface AgentType {
   /** Its own instructions ("You are a code reviewer…"); empty for general-purpose. */
   body: string;
   /** The tools it may use (Marv's names). */
-  tools: string[];
+  tools: readonly string[];
   /** A model on the same provider; undefined means the session's model. */
   model?: string;
   source: "built-in" | "project" | "personal";
@@ -29,7 +29,7 @@ export interface AgentType {
  * recursion) or `memory` (memory outlives the session, so only the main agent
  * changes it, with the user's approval).
  */
-export const SUBAGENT_TOOLS = ["read_file", "glob", "grep", "skill", "edit_file", "write_file", "bash"];
+export const SUBAGENT_TOOLS: readonly string[] = ["read_file", "glob", "grep", "skill", "edit_file", "write_file", "bash"];
 
 /** Claude Code's tool names, so agent files written for it work here. */
 const ALIASES: Record<string, string> = {
@@ -38,6 +38,8 @@ const ALIASES: Record<string, string> = {
   Grep: "grep",
   Edit: "edit_file",
   Write: "write_file",
+  MultiEdit: "edit_file",
+  LS: "glob",
   Bash: "bash",
   Skill: "skill",
 };
@@ -50,12 +52,14 @@ export const GENERAL_PURPOSE: AgentType = {
   source: "built-in",
 };
 
+/** Claude Code's model shorthands: not ids on Marv's providers, so they mean the session's model, like inherit. */
+const CLAUDE_CODE_MODELS = ["inherit", "sonnet", "opus", "haiku"];
 const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MAX_BODY_CHARS = 50_000;
 
 export const agentsDir = (base: string) => join(base, ".marv", "agents");
 
-function parseTools(value: unknown, shown: string): string[] | string {
+function parseTools(value: unknown, shown: string): readonly string[] | string {
   if (value === undefined || value === null) return SUBAGENT_TOOLS;
   const list = Array.isArray(value) ? value.map(String) : typeof value === "string" ? value.split(",") : null;
   if (!list) return `${shown}: tools should be a list of tool names.`;
@@ -81,7 +85,7 @@ async function readAgent(path: string, file: string, source: AgentType["source"]
   const rawModel = typeof fields.model === "string" ? fields.model.trim() : "";
   let body = parsed.body;
   if (body.length > MAX_BODY_CHARS) body = `${body.slice(0, MAX_BODY_CHARS)}\n\n(${file} was cut off here: it's longer than ${MAX_BODY_CHARS} characters.)`;
-  return { name, description, body, tools, model: rawModel && rawModel !== "inherit" ? rawModel : undefined, source };
+  return { name, description, body, tools, model: rawModel && !CLAUDE_CODE_MODELS.includes(rawModel) ? rawModel : undefined, source };
 }
 
 /** Built-in, then personal, then project agents (later wins a name clash). Skips broken ones, saying why. */
@@ -97,7 +101,13 @@ export async function loadAgents({ root, home }: { root: string; home: string })
     if (!existsSync(dir)) continue;
     for (const file of readdirSync(dir).sort()) {
       if (!file.endsWith(".md")) continue;
-      const result = await readAgent(join(dir, file), file, source, `${prefix}.marv/agents/${file}`);
+      const shown = `${prefix}.marv/agents/${file}`;
+      let result: AgentType | string;
+      try {
+        result = await readAgent(join(dir, file), file, source, shown);
+      } catch (err) {
+        result = `${shown}: couldn't be read (${(err as Error).message}).`;
+      }
       if (typeof result === "string") problems.push(result);
       else byName.set(result.name, result);
     }
