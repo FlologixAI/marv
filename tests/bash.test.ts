@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, realpathSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,24 +9,60 @@ import { sandboxArgs, sandboxAvailable } from "../src/sandbox.ts";
 describe("sandboxArgs", () => {
   const base = { root: "/home/me/proj", home: "/home/me", path: "/usr/bin", exists: (p: string) => p.endsWith(".bun") };
 
-  test("extra read-only folders (a worktree's shared .git) are mounted after the home is hidden and the root bound", () => {
-    const git = "/home/me/proj/.git";
-    const args = sandboxArgs({ ...base, network: false, readOnly: [git] });
-    expect(args.join(" ")).toContain(`--ro-bind ${git} ${git}`);
-    const at = args.lastIndexOf(git);
-    expect(at).toBeGreaterThan(args.indexOf(base.home)); // after the home tmpfs
-    expect(at).toBeGreaterThan(args.indexOf(base.root, args.indexOf("--bind"))); // after the root bind
-  });
+  describe("extra read-only folders", () => {
+    let tmp: string;
+    let home: string;
+    let root: string;
+    let git: string;
+    beforeEach(() => {
+      tmp = mkdtempSync(join(tmpdir(), "marv-extra-"));
+      home = join(tmp, "home");
+      root = join(home, "proj");
+      git = join(tmp, "repo", ".git");
+      mkdirSync(root, { recursive: true });
+      mkdirSync(git, { recursive: true });
+    });
+    afterEach(() => rmSync(tmp, { recursive: true, force: true }));
+    const args = (readOnly: string[]) => sandboxArgs({ root, home, path: "/usr/bin", network: false, readOnly });
 
-  test("extra folders never add a read-write bind", () => {
-    const args = sandboxArgs({ ...base, network: false, readOnly: ["/home/me/proj/.git"] });
-    expect(args.filter((a) => a === "--bind")).toHaveLength(1);
-  });
+    test("(a worktree's shared .git) are mounted after the home is hidden and the root bound", () => {
+      const a = args([git]);
+      expect(a.join(" ")).toContain(`--ro-bind ${git} ${git}`);
+      const at = a.lastIndexOf(git);
+      expect(at).toBeGreaterThan(a.indexOf(home)); // after the home tmpfs
+      expect(at).toBeGreaterThan(a.indexOf(root, a.indexOf("--bind"))); // after the root bind
+    });
 
-  test("extra folders that would expose the home folder or the whole system are refused", () => {
-    for (const dir of ["/", "/home", base.home, "relative"]) {
-      expect(() => sandboxArgs({ ...base, network: false, readOnly: [dir] })).toThrow();
-    }
+    test("never add a read-write bind", () => {
+      expect(args([git]).filter((x) => x === "--bind")).toHaveLength(1);
+    });
+
+    test("that would expose the home folder or the whole system are refused", () => {
+      for (const dir of ["/", tmp, home, "relative"]) expect(() => args([dir])).toThrow();
+    });
+
+    test("that are symlinks to the home folder are refused, and others are bound by their real path", () => {
+      const link = join(tmp, "link");
+      symlinkSync(home, link);
+      expect(() => args([link])).toThrow();
+      const alias = join(tmp, "alias");
+      symlinkSync(git, alias);
+      const a = args([alias]);
+      const real = realpathSync(git);
+      expect(a.join(" ")).toContain(`--ro-bind ${real} ${alias}`);
+    });
+
+    test("that equal the project or contain it are refused", () => {
+      expect(() => args([root])).toThrow();
+      expect(() => args([home])).toThrow();
+      const inner = join(root, "sub");
+      mkdirSync(inner);
+      expect(args([inner]).join(" ")).toContain(`--ro-bind ${realpathSync(inner)} ${inner}`); // inside the project is fine
+    });
+
+    test("that are missing fail and name the folder", () => {
+      expect(() => args([join(tmp, "nope")])).toThrow(/nope/);
+    });
   });
 
   test("read-only system, hidden home, writable project, no network, clean env", () => {

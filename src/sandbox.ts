@@ -12,7 +12,7 @@
 //   - the environment starts empty, so API keys can't leak into commands.
 // Approval decides *whether* a command runs; the sandbox limits *what an
 // approved command can touch*.
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 
 /** Folders from the hidden home folder a command may need, mounted read-only. */
@@ -43,11 +43,39 @@ interface SandboxOptions {
   exists?: (path: string) => boolean;
 }
 
-function checkExtra(dir: string, home: string): void {
-  // Mounting these, even read-only, would expose the hidden home folder (and the API key in it).
-  const rel = relative(dir, home);
-  if (!isAbsolute(dir) || dir === "/" || rel === "" || !rel.startsWith("..")) {
-    throw new Error(`Refusing to make ${dir} visible in the sandbox: it must be an absolute path that is not the home folder or one of its parents.`);
+/** The real path of an extra folder, after checking that mounting it is safe. bwrap follows symlinks, so the check must too. */
+function resolveExtra(dir: string, home: string, root: string): string {
+  if (!isAbsolute(dir)) throw new Error(`Extra sandbox folder ${dir} must be an absolute path.`);
+  let real: string;
+  try {
+    real = realpathSync(dir);
+  } catch {
+    throw new Error(`Extra sandbox folder ${dir} doesn't exist.`);
+  }
+  const realHome = realOrSelf(home);
+  const realRoot = realOrSelf(root);
+  // Mounting the home folder or a parent of it (even read-only) would expose the hidden home, with the API key in it.
+  if (real === "/" || contains(real, realHome)) {
+    throw new Error(`Refusing to make ${dir} visible in the sandbox: it is, or leads to, the home folder or one of its parents.`);
+  }
+  // Mounted after the root bind, the project itself would silently turn read-only.
+  if (contains(real, realRoot)) {
+    throw new Error(`Refusing to make ${dir} visible in the sandbox: it is the project folder or one of its parents.`);
+  }
+  return real;
+}
+
+/** Whether `outer` is `inner` or a parent of it. */
+function contains(outer: string, inner: string): boolean {
+  const rel = relative(outer, inner);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function realOrSelf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
   }
 }
 
@@ -59,10 +87,8 @@ export function sandboxArgs({ root, home, network, path, readOnly = [], exists =
     if (exists(full)) args.push("--ro-bind", full, full);
   }
   args.push("--bind", root, root);
-  for (const dir of readOnly) {
-    checkExtra(dir, home);
-    args.push("--ro-bind", dir, dir); // not -try: a missing path should fail loudly
-  }
+  // Bind the resolved path (what was checked), at the path the caller gave.
+  for (const dir of readOnly) args.push("--ro-bind", resolveExtra(dir, home, root), dir);
   if (!network) args.push("--unshare-net");
   args.push(
     "--unshare-pid", // its processes can't see or signal ours, and all die with it
