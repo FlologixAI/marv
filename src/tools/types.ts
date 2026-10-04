@@ -1,5 +1,7 @@
 import type { z } from "zod";
+import type { AgentType } from "../agents.ts";
 import type { MemoryPaths } from "../memory.ts";
+import type { Provider, Usage } from "../provider/types.ts";
 import type { Skill } from "../skills.ts";
 
 /** One line of a diff, for showing a change before it's approved. */
@@ -36,6 +38,10 @@ export interface ApprovalRequest {
   label: string;
   preview: Preview;
   scope: Scope;
+  /** Which subagent is asking ("implementer · Task 2"); absent for the main agent. */
+  agent?: string;
+  /** The action can reach the network (bash with network: true). */
+  network?: boolean;
 }
 
 /** yes: run it. always: run it, and everything in its scope this session. no: don't. */
@@ -53,6 +59,12 @@ export interface ToolContext {
   skills?: Skill[];
   /** Where the memory tool reads and writes. */
   memory?: MemoryPaths;
+  /** The id of the call being run (set by runTool). */
+  callId?: string;
+  /** More folders bash may write to besides root: a worktree's shared .git, so commits work. */
+  writable?: string[];
+  /** Lets the agent tool start subagents. Only the main agent has one, so subagents can't start subagents. */
+  agentHost?: AgentHost;
 }
 
 export interface ToolResult {
@@ -78,6 +90,12 @@ export interface Tool<S extends z.ZodType = z.ZodType> {
   label(input: z.infer<S>): string;
   /** "read" (the default) runs freely; "write" and "execute" need the user's approval first. */
   kind?: "read" | "write" | "execute";
+  /** Calls of this tool that come together in one reply run at the same time (subagents). */
+  parallel?: boolean;
+  /** Overrides `kind` for one call: whether it needs the user's approval. */
+  needsApproval?(input: z.infer<S>): boolean;
+  /** Whether this call can reach the network (approvals inside a worktree still ask then). */
+  usesNetwork?(input: z.infer<S>): boolean;
   /** What the approval prompt shows. Throw a ToolError here for a call that can't succeed, so the user isn't asked to approve it. */
   preview?(input: z.infer<S>, ctx: ToolContext): Promise<Preview>;
   /** What "don't ask again" covers. */
@@ -87,3 +105,26 @@ export interface Tool<S extends z.ZodType = z.ZodType> {
 
 /** An expected failure (bad path, missing file); its message goes to the model as-is. */
 export class ToolError extends Error {}
+
+/** A running subagent's state, for its transcript entry. */
+export interface AgentProgress {
+  /** "worktree marv/x-1a2b · 3 tools · read_file src/a.ts" */
+  line: string;
+  /** Its finished tool calls, newest last ("read_file src/a.ts · 120 lines"). */
+  steps: string[];
+}
+
+/** What the agent tool needs from the session to start subagents. */
+export interface AgentHost {
+  agents: AgentType[];
+  /** The session's provider, or a new one when an agent type names another model. */
+  providerFor(model?: string): Provider;
+  /** For the subagent's system prompt. */
+  cwd: string;
+  instructions?: string;
+  /** Where worktrees go (~/.marv/worktrees/<project>); without it, isolation isn't available. */
+  worktreesDir?: string;
+  /** A subagent's request, for the session's tokens and cost. */
+  onUsage(usage: Usage): void;
+  onProgress(callId: string, progress: AgentProgress): void;
+}

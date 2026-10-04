@@ -3,7 +3,10 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTool, toolSpecs } from "../src/tools/index.ts";
+import { z } from "zod";
 import type { ToolCall } from "../src/provider/types.ts";
+import { readFile } from "../src/tools/read-file.ts";
+import type { ApprovalRequest, Tool } from "../src/tools/types.ts";
 
 let root: string;
 let outside: string;
@@ -144,5 +147,41 @@ describe("toolSpecs", () => {
       expect(spec.parameters).toMatchObject({ type: "object" });
       expect(spec.parameters).not.toHaveProperty("$schema");
     }
+  });
+});
+
+describe("runTool: subagent support", () => {
+  const sometimes: Tool = {
+    name: "sometimes",
+    description: "Needs approval only when asked to.",
+    input: z.object({ ask: z.boolean() }),
+    label: () => "x",
+    needsApproval: ({ ask }: { ask: boolean }) => ask,
+    preview: async () => ({ title: "Sometimes" }),
+    run: async (_input, ctx) => ({ output: `ran as ${ctx.callId}`, summary: "ok" }),
+  };
+  const call = (name: string, args: unknown, id = "c1") => ({ id, name, arguments: JSON.stringify(args) });
+
+  test("only the tools in `available` can be called", async () => {
+    const result = await runTool(call("memory", { action: "add", text: "x" }), { root }, [readFile as Tool]);
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain('Unknown tool "memory". Available tools: read_file.');
+  });
+
+  test("needsApproval decides per call, and run() gets the call's id", async () => {
+    const asked: ApprovalRequest[] = [];
+    const ctx = { root, approve: async (r: ApprovalRequest) => (asked.push(r), "yes" as const) };
+    expect((await runTool(call("sometimes", { ask: false }), ctx, [sometimes])).output).toBe("ran as c1");
+    expect(asked).toHaveLength(0);
+    expect((await runTool(call("sometimes", { ask: true }, "c2"), ctx, [sometimes])).output).toBe("ran as c2");
+    expect(asked).toHaveLength(1);
+  });
+
+  test("a bash call with network: true is flagged in its approval request", async () => {
+    const asked: ApprovalRequest[] = [];
+    const approve = async (r: ApprovalRequest) => (asked.push(r), "no" as const);
+    await runTool(call("bash", { command: "curl example.com", network: true }), { root, approve });
+    await runTool(call("bash", { command: "ls" }), { root, approve });
+    expect(asked.map((r) => r.network)).toEqual([true, undefined]);
   });
 });

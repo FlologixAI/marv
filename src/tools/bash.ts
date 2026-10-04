@@ -118,6 +118,7 @@ export const bash: Tool<typeof input> = {
   kind: "execute",
   label: ({ command }) => command,
   scope: ({ command, network }) => ({ key: `bash:${network ? "net:" : ""}${command}`, description: "this exact command" }),
+  usesNetwork: ({ network }) => Boolean(network),
 
   async preview({ command, network, timeout }, { sandbox = true }) {
     const sandboxed = sandbox && sandboxAvailable();

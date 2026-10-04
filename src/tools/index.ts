@@ -29,11 +29,15 @@ export function toolSpecsFor({ hasSkills }: { hasSkills: boolean }): ToolSpec[] 
   return hasSkills ? toolSpecs : toolSpecs.filter((spec) => spec.name !== "skill");
 }
 
-/** Runs a call. Never throws: every failure becomes a result the model can read and recover from. */
-export async function runTool(call: ToolCall, ctx: ToolContext): Promise<ToolResult & { label: string }> {
-  const tool = tools.find((t) => t.name === call.name);
+/**
+ * Runs a call. Never throws: every failure becomes a result the model can read
+ * and recover from. `available` is what this agent was offered (a subagent
+ * gets fewer tools); anything else is unknown, even if the model names it.
+ */
+export async function runTool(call: ToolCall, ctx: ToolContext, available: Tool[] = tools): Promise<ToolResult & { label: string }> {
+  const tool = available.find((t) => t.name === call.name);
   const fail = (output: string, label = call.name) => ({ output, summary: "error", isError: true, label });
-  if (!tool) return fail(`Unknown tool "${call.name}". Available tools: ${tools.map((t) => t.name).join(", ")}.`);
+  if (!tool) return fail(`Unknown tool "${call.name}". Available tools: ${available.map((t) => t.name).join(", ")}.`);
 
   let raw: unknown;
   try {
@@ -48,11 +52,13 @@ export async function runTool(call: ToolCall, ctx: ToolContext): Promise<ToolRes
   try {
     // Tools that change something need the user's go-ahead. The preview runs
     // first, so a call that can't succeed fails here instead of being approved.
-    if (tool.kind && tool.kind !== "read") {
+    const gated = tool.needsApproval ? tool.needsApproval(parsed.data) : Boolean(tool.kind && tool.kind !== "read");
+    if (gated) {
       if (!ctx.approve) return fail(`${call.name} needs the user's approval, and there's no one to ask.`, label);
       const preview = await tool.preview!(parsed.data, ctx);
       const scope = tool.scope?.(parsed.data) ?? { key: call.name, description: call.name };
-      const decision = await ctx.approve({ tool: call.name, label, preview, scope });
+      const network = tool.usesNetwork?.(parsed.data) ? { network: true } : {};
+      const decision = await ctx.approve({ tool: call.name, label, preview, scope, ...network });
       if (decision === "no") {
         return {
           output: "The user declined this. Don't retry it: stop and wait for them to say how to proceed.",
@@ -62,7 +68,7 @@ export async function runTool(call: ToolCall, ctx: ToolContext): Promise<ToolRes
         };
       }
     }
-    return { ...(await tool.run(parsed.data, ctx)), label };
+    return { ...(await tool.run(parsed.data, { ...ctx, callId: call.id })), label };
   } catch (err) {
     if (err instanceof ToolError) return fail(err.message, label);
     return fail(`${call.name} failed: ${(err as Error).message}`, label);
