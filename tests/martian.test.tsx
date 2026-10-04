@@ -46,7 +46,7 @@ test("the welcome banner shows the martian beside the text", () => {
   const { lastFrame } = render(<Welcome version="9.9.9" cwd="~/x" animate={false} />);
   const frame = lastFrame()!;
   expect(frame).toContain("│ ◉ ◉ │");
-  const textRow = frame.split("\n").find((line) => line.includes("Welcome to ekko"));
-  expect(textRow).toMatch(/[│╭╰].*[│╮╯].*Welcome to ekko v9\.9\.9/);
+  const textRow = frame.split("\n").find((line) => line.includes("Welcome to Ekko"));
+  expect(textRow).toMatch(/[│╭╰].*[│╮╯].*Welcome to Ekko v9\.9\.9/);
   expect(frame).toContain("cwd: ~/x");
 });

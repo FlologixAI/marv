@@ -31,7 +31,7 @@ describe("ConfigStore", () => {
     await expect(store.load()).rejects.toBeInstanceOf(ConfigError);
   });
 
-  test("drops a provider ekko no longer has (like the old echo), keeping the rest", async () => {
+  test("drops a provider Ekko no longer has (like the old echo), keeping the rest", async () => {
     await store.save({ provider: "ollama" });
     await writeFile(store.path, JSON.stringify({ provider: "echo", apiKey: "sk-or-keep" }));
     const file = await store.load();

@@ -1,5 +1,5 @@
 // Mouse text selection. In the alternate screen with mouse reporting on, the
-// terminal no longer selects text itself, so ekko does it: it remembers each
+// terminal no longer selects text itself, so Ekko does it: it remembers each
 // frame Ink renders (via the `transformOutput` hook we patched into Ink), and
 // while you drag it inverts the selected cells in that frame. On release the
 // selected text is read back out of the remembered frame.

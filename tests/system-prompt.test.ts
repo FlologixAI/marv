@@ -7,9 +7,9 @@ import { loadInstructions, systemPrompt } from "../src/prompt.ts";
 const DATE = new Date("2026-10-03T12:00:00Z");
 
 describe("systemPrompt", () => {
-  test("says who ekko is, where it is, and which tools it has", () => {
+  test("says who Ekko is, where it is, and which tools it has", () => {
     const prompt = systemPrompt({ cwd: "~/proj", date: DATE, tools: ["read_file", "glob", "grep"] });
-    expect(prompt).toContain("You are ekko");
+    expect(prompt).toContain("You are Ekko");
     expect(prompt).toContain("Working directory: ~/proj");
     expect(prompt).toContain("2026-10-03");
     expect(prompt).toContain("read_file, glob, grep");

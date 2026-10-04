@@ -1,5 +1,5 @@
 // A single entry in the transcript the user sees.
-// "system" is for ekko's own notices (help text, errors) — not the LLM system prompt.
+// "system" is for Ekko's own notices (help text, errors) — not the LLM system prompt.
 // "tool" is a tool call the agent made, shown with its outcome.
 export type Role = "user" | "assistant" | "system" | "tool";
 

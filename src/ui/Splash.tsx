@@ -43,7 +43,7 @@ export function Splash({ version, cwd, durationMs, onDone }: Props) {
         ))
       ) : (
         <Text bold color={theme.accent}>
-          ekko
+          Ekko
         </Text>
       )}
       <Box marginTop={1}>

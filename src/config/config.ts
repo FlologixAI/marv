@@ -38,8 +38,8 @@ export const PRESETS: Record<ProviderId, Preset> = {
 const isProvider = (value: unknown): value is ProviderId => PROVIDERS.includes(value as ProviderId);
 
 const FileConfigSchema = z.object({
-  // A provider ekko no longer has (e.g. the old "echo") is dropped rather than
-  // rejected, so setup opens instead of ekko refusing to start.
+  // A provider Ekko no longer has (e.g. the old "echo") is dropped rather than
+  // rejected, so setup opens instead of Ekko refusing to start.
   provider: z.preprocess((v) => (isProvider(v) ? v : undefined), z.enum(PROVIDERS).optional()),
   model: z.string().min(1).optional(),
   /** The OpenRouter key (the only provider that needs one so far). */

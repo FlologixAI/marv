@@ -82,7 +82,7 @@ export function Setup({ initial, env, loadModels, startStep = "provider", onComp
   const load = useCallback(() => loadModels(provider), [loadModels, provider]);
 
   const steps: Step[] = ["provider", "model", ...(needsKeyStep ? (["apiKey"] as const) : [])];
-  const title = startStep === "model" ? `Switch ${preset.label} model` : "ekko setup";
+  const title = startStep === "model" ? `Switch ${preset.label} model` : "Ekko setup";
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
@@ -101,7 +101,7 @@ export function Setup({ initial, env, loadModels, startStep = "provider", onComp
       <Box marginTop={1} flexDirection="column">
         {step === "provider" && (
           <>
-            <Text>Which AI provider should ekko use?</Text>
+            <Text>Which AI provider should Ekko use?</Text>
             <Select items={PROVIDER_ITEMS} initialValue={provider} onSelect={chooseProvider} />
           </>
         )}

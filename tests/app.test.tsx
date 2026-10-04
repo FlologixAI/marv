@@ -73,13 +73,13 @@ describe("App", () => {
 
     stdin.write("x");
     await tick();
-    expect(lastFrame()).toContain("Welcome to ekko");
+    expect(lastFrame()).toContain("Welcome to Ekko");
   });
 
   test("first run opens setup and saves the result", async () => {
     const { lastFrame, frames, stdin } = renderApp(null);
     await tick();
-    expect(lastFrame()).toContain("ekko setup");
+    expect(lastFrame()).toContain("Ekko setup");
 
     stdin.write(DOWN);
     await tick();
@@ -155,7 +155,7 @@ describe("App", () => {
     await type(stdin, "second");
     await tick(100);
 
-    expect(calls[0]!.options?.system).toContain("You are ekko");
+    expect(calls[0]!.options?.system).toContain("You are Ekko");
     expect(calls[0]!.options?.system).toContain("~/x");
     // Stateless API: the second request carries the whole conversation so far.
     expect(calls[1]!.history).toEqual([

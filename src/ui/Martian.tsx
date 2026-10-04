@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import { theme } from "./theme.ts";
 
-// ekko's mascot: a little martian with two antennae and big eyes.
+// Ekko's mascot: a little martian with two antennae and big eyes.
 // Every frame is the same 7×7 block, so swapping frames never moves the layout.
 export const FRAMES = {
   idle: [

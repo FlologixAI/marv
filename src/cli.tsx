@@ -9,7 +9,7 @@ import { shortenHome } from "./paths.ts";
 import { loadInstructions } from "./prompt.ts";
 import { renderOptions } from "./render-options.ts";
 
-const HELP = `ekko v${pkg.version}: a terminal coding agent
+const HELP = `Ekko v${pkg.version}: a terminal coding agent
 
 Usage:
   ekko              start an interactive session
@@ -34,7 +34,7 @@ if (args.includes("--help") || args.includes("-h")) {
   process.exit(0);
 }
 
-// The project is wherever ekko was started; the tools can't reach outside it.
+// The project is wherever Ekko was started; the tools can't reach outside it.
 const root = process.cwd();
 const instructions = await loadInstructions(root);
 
@@ -50,7 +50,7 @@ try {
 
 // Mouse wheel scrolling and drag-to-select (see src/mouse.ts, src/selection.ts). Mouse reporting is a terminal-wide
 // mode, so it must be switched off on every way out, or the shell would start
-// receiving mouse codes after ekko quits.
+// receiving mouse codes after Ekko quits.
 if (process.stdin.isTTY && process.stdout.isTTY) {
   filterMouseInput(process.stdin);
   process.stdout.write(MOUSE_ON);

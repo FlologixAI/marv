@@ -11,7 +11,7 @@ interface Props {
   isActive?: boolean;
 }
 
-// The alternate screen has no terminal scrollback, so ekko scrolls its own
+// The alternate screen has no terminal scrollback, so Ekko scrolls its own
 // transcript. The viewport fills whatever height its parent gives it and
 // clips the content, which is shifted up by `contentOffsetY` rows.
 //

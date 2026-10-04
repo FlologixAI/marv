@@ -1,13 +1,13 @@
 import type { RenderOptions } from "ink";
 import { selection } from "./selection.ts";
 
-// How ekko asks Ink to draw. Kept separate from cli.tsx so tests can render
+// How Ekko asks Ink to draw. Kept separate from cli.tsx so tests can render
 // with exactly these options.
 export const renderOptions = {
   // ctrl+c is handled inside the app (interrupt / clear / confirm exit).
   exitOnCtrlC: false,
   // Draw on the terminal's separate full-screen buffer (like vim or htop).
-  // Your shell's screen is restored untouched when ekko exits.
+  // Your shell's screen is restored untouched when Ekko exits.
   alternateScreen: true,
   // Rewrite only the lines that changed. Without this Ink erases and redraws
   // the whole screen on every update (each martian frame, each keystroke),

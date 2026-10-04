@@ -62,7 +62,7 @@ export const commands: Command[] = [
   },
   {
     name: "exit",
-    description: "Quit ekko",
+    description: "Quit Ekko",
     run: () => ({ type: "exit" }),
   },
 ];
