@@ -109,7 +109,7 @@ export function runCommand(input: string, ctx: CommandContext): CommandAction {
 function helpText(): string {
   const width = Math.max(...commands.map((c) => c.name.length)) + 2;
   const lines = commands.map((c) => `  /${c.name.padEnd(width)}${c.description}`);
-  return ["Commands:", ...lines, "", "Shortcuts:", "  ↑/↓       input history", "  ctrl+c    clear input · press twice to exit"].join("\n");
+  return ["Commands:", ...lines, "", "Shortcuts:", "  ↑/↓       input history", "  esc       stop a reply or tool", "  ctrl+c    clear input · press twice to exit"].join("\n");
 }
 
 function configText({ config, configPath }: CommandContext): string {

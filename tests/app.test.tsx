@@ -415,4 +415,25 @@ describe("App", () => {
       expect(lastFrame()).toContain("1 skill couldn't be loaded (see /skills)");
     });
   });
+
+  test("Esc interrupts a running reply", async () => {
+    const slow: Provider = {
+      name: "slow",
+      async *stream(_history, options) {
+        for (let i = 0; i < 100 && !options?.signal?.aborted; i++) {
+          await Bun.sleep(20);
+          yield { type: "text_delta", text: "word " };
+        }
+        yield { type: "done" };
+      },
+    };
+    const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => slow);
+    await type(stdin, "go");
+    await tick(150);
+    expect(lastFrame()).toContain("esc to interrupt");
+    stdin.write("\x1b");
+    await tick(250); // a lone ESC is held briefly to tell it apart from escape sequences
+    expect(lastFrame()).toContain("Interrupted.");
+    expect(lastFrame()).toContain("Type a message");
+  });
 });

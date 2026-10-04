@@ -372,6 +372,15 @@ export function App({
   // On first run there is nothing to go back to, so cancelling setup quits.
   const cancelSetup = () => (setupMode === "first-run" ? exit() : setSetupMode(null));
 
+  // Esc stops a running reply or tool. (At an approval prompt, Esc means "no",
+  // which the prompt handles, and which stops the run too.)
+  useInput(
+    (_char, key) => {
+      if (key.escape && abortRef.current && !approvalRef.current) abortRef.current.abort();
+    },
+    { isActive: phase === "main" && setupMode === null },
+  );
+
   // ctrl+c: interrupt a reply → clear the prompt → ask to confirm → exit.
   // (While setup is open, Setup handles ctrl+c itself.)
   useInput(

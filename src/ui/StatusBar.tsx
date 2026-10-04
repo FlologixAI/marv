@@ -35,7 +35,7 @@ export function StatusBar({ model, cwd, usage, confirmExit, notice, busy }: Prop
     : notice
       ? notice
       : busy
-      ? "ctrl+c to interrupt"
+      ? "esc to interrupt"
       : "/help · PgUp/PgDn to scroll · ctrl+c to exit";
 
   return (
