@@ -92,6 +92,7 @@ async function* runGroup(
   let active = 0;
   let settled = 0;
   let declined = false;
+  const notRun = (call: ToolCall): Result => ({ output: declined ? NOT_RUN.declined : NOT_RUN.aborted, summary: "not run", label: call.name });
   /** Reserves free slots for queued calls (or answers them, after an interrupt or a "no"). Runs nothing. */
   const startMore = () => {
     while (active < limit && next < group.length) {
@@ -99,7 +100,7 @@ async function* runGroup(
       const call = group[index]!;
       if (signal.aborted || declined) {
         settled++;
-        emit({ type: "skip", index, result: { output: declined ? NOT_RUN.declined : NOT_RUN.aborted, summary: "not run", label: call.name } });
+        emit({ type: "skip", index, result: notRun(call) });
         continue;
       }
       active++;
@@ -107,10 +108,16 @@ async function* runGroup(
     }
   };
   const launch = (index: number, call: ToolCall) => {
-    // Inside a promise chain, so even a runTool that throws synchronously ends
-    // as an error result instead of a call that never settles.
-    void Promise.resolve()
-      .then(() => runTool(call))
+    // Called right away, so whatever the tool does first (e.g. ask for
+    // approval) happens before the next call is considered; a synchronous
+    // throw becomes an error result instead of a call that never settles.
+    let running: Promise<Result>;
+    try {
+      running = runTool(call);
+    } catch (err) {
+      running = Promise.reject(err);
+    }
+    void running
       .catch((err: unknown): Result => ({
         output: `${call.name} failed: ${err instanceof Error ? err.message : String(err)}`,
         summary: "error",
@@ -130,6 +137,15 @@ async function* runGroup(
     if (ready.length === 0) await new Promise<void>((resolve) => (wake = resolve));
     while (ready.length > 0) {
       const event = ready.shift()!;
+      if (event.type === "start" && (signal.aborted || declined)) {
+        // Reserved before the interrupt or the "no", but not shown yet: answer
+        // it instead (no tool_start after either), and let the rest follow.
+        active--;
+        settled++;
+        yield { type: "skip", index: event.index, result: notRun(event.call) };
+        startMore();
+        continue;
+      }
       yield event;
       // A call runs only once its start has been delivered: a consumer that
       // stops at tool_start (it threw, or the user quit) never sees a tool

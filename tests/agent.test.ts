@@ -276,7 +276,7 @@ describe("runAgent", () => {
       expect(events.at(-1)).toEqual({ type: "done", reason: "end" });
     });
 
-    test("an interrupt lets the running calls finish and answers the queued one", async () => {
+    test("after an interrupt, reserved and queued calls are answered without a tool_start", async () => {
       const controller = new AbortController();
       const provider = new ScriptedProvider([useTools(sub("a", 10), sub("b", 10), sub("c", 10))]);
       const history: ChatTurn[] = [{ role: "user", text: "go" }];
@@ -292,10 +292,12 @@ describe("runAgent", () => {
           return { output: `out ${c.id}`, summary: "ok", label: c.id };
         },
       });
-      expect(started).toEqual(["a", "b"]);
+      // b had a slot too, but the interrupt came before its tool_start was delivered.
+      expect(started).toEqual(["a"]);
+      expect(events.filter((e) => e.type === "tool_start").map((e) => e.type === "tool_start" && e.call.id)).toEqual(["a"]);
       expect(history.filter((t) => t.role === "tool").map((t) => t.role === "tool" && t.text)).toEqual([
         "out a",
-        "out b",
+        "Interrupted by the user before this tool ran.",
         "Interrupted by the user before this tool ran.",
       ]);
       expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
