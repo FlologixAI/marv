@@ -122,12 +122,12 @@ describe("OpenAICompatProvider", () => {
         tc([{ index: 1, id: "c2", type: "function", function: { name: "glob", arguments: '{"pattern":"*"}' } }]),
         tc([{ index: 0, function: { arguments: 'th":"a.ts"}' } }]),
         { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
-        { choices: [], usage: { prompt_tokens: 1200, completion_tokens: 30, prompt_tokens_details: { cached_tokens: 1000 } } },
+        { choices: [], usage: { prompt_tokens: 1200, completion_tokens: 30, prompt_tokens_details: { cached_tokens: 1000 }, cost: 0.00042 } },
         "[DONE]",
       ),
     );
     expect(await collect(provider(url).stream([{ role: "user", text: "go" }]))).toEqual([
-      { type: "usage", usage: { promptTokens: 1200, completionTokens: 30, cachedTokens: 1000 } },
+      { type: "usage", usage: { promptTokens: 1200, completionTokens: 30, cachedTokens: 1000, cost: 0.00042 } },
       { type: "tool_call", call: { id: "c1", name: "read_file", arguments: '{"path":"a.ts"}' } },
       { type: "tool_call", call: { id: "c2", name: "glob", arguments: '{"pattern":"*"}' } },
       { type: "done", reason: "tool_calls" },

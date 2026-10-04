@@ -1,6 +1,8 @@
 import { maskKey, PRESETS, type Config } from "../config/config.ts";
 import { sandboxAvailable } from "../sandbox.ts";
 import type { Skill } from "../skills.ts";
+import { usageReport, type Totals } from "../usage.ts";
+import type { Usage } from "../provider/types.ts";
 
 // Slash commands are handled locally and never reach the LLM.
 // Each command returns an action; the App decides how to apply it,
@@ -25,6 +27,8 @@ export interface CommandContext {
   skills?: Skill[];
   /** Skills that couldn't be loaded, and why. */
   skillProblems?: string[];
+  /** Tokens and cost so far, for /cost. */
+  usage?: { totals: Totals; last: Usage | null; contextLength?: number };
 }
 
 interface Command {
@@ -62,6 +66,14 @@ export const commands: Command[] = [
       if (arg && arg !== "on" && arg !== "off") return { type: "print", text: "Usage: /think, /think on, or /think off", isError: true };
       return { type: "thinking", on: arg ? arg === "on" : !config.thinking };
     },
+  },
+  {
+    name: "cost",
+    description: "Show tokens used and cost so far",
+    run: (_args, { usage }) => ({
+      type: "print",
+      text: usage ? usageReport(usage.totals, usage.last, usage.contextLength) : "No requests yet this session.",
+    }),
   },
   {
     name: "skills",

@@ -22,7 +22,7 @@ describe("listModels", () => {
           {
             id: "anthropic/claude-sonnet-5.5",
             context_length: 1000000,
-            pricing: { prompt: "0.000002", completion: "0.00001" },
+            pricing: { prompt: "0.000002", completion: "0.00001", input_cache_read: "0.0000002" },
             supported_parameters: ["tools", "temperature"],
           },
           { id: "some/image-model", pricing: { prompt: "0", completion: "0" }, supported_parameters: ["temperature"] },
@@ -31,7 +31,7 @@ describe("listModels", () => {
       },
     });
     expect(await listModels({ provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" }, fetch)).toEqual([
-      { id: "anthropic/claude-sonnet-5.5", tools: true, priceIn: 2, priceOut: 10, context: 1000000 },
+      { id: "anthropic/claude-sonnet-5.5", tools: true, priceIn: 2, priceOut: 10, priceCacheRead: 0.2, context: 1000000 },
     ]);
   });
 

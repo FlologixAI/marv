@@ -34,6 +34,8 @@ export interface Usage {
   completionTokens: number;
   /** How many prompt tokens the provider served from its cache, when it reports that. */
   cachedTokens?: number;
+  /** What the request cost in USD, when the provider reports it (OpenRouter does). */
+  cost?: number;
 }
 
 export type AgentEvent =

@@ -1,9 +1,7 @@
 import { Box, Text } from "ink";
 import type { Usage } from "../provider/types.ts";
+import { tokens } from "../usage.ts";
 import { theme } from "./theme.ts";
-
-const tokens = (n: number) =>
-  n < 1000 ? String(n) : n < 100_000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : `${Math.round(n / 1000)}k`;
 
 /**
  * The latest request's size: against the context window when we know it

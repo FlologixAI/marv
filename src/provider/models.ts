@@ -8,6 +8,8 @@ export interface ModelInfo {
   /** USD per million tokens. */
   priceIn?: number;
   priceOut?: number;
+  /** For input served from the provider's cache. */
+  priceCacheRead?: number;
   context?: number;
   /** Runs on this machine (Ollama). */
   local?: boolean;
@@ -16,7 +18,7 @@ export interface ModelInfo {
 interface OpenRouterModel {
   id: string;
   context_length?: number;
-  pricing?: { prompt?: string; completion?: string };
+  pricing?: { prompt?: string; completion?: string; input_cache_read?: string };
   supported_parameters?: string[];
 }
 
@@ -36,6 +38,7 @@ export async function listModels(
           tools: true,
           priceIn: perMillion(m.pricing?.prompt),
           priceOut: perMillion(m.pricing?.completion),
+          ...(m.pricing?.input_cache_read !== undefined ? { priceCacheRead: perMillion(m.pricing.input_cache_read) } : {}),
           context: m.context_length,
         }));
     }

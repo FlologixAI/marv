@@ -10,6 +10,7 @@ import { mouse } from "../src/mouse.ts";
 import type { AgentEvent, ChatTurn, Provider, StreamOptions } from "../src/provider/types.ts";
 import { selection } from "../src/selection.ts";
 import type { Skill } from "../src/skills.ts";
+import type { ModelInfo } from "../src/provider/models.ts";
 import { FakeProvider, ScriptedProvider } from "./fake-provider.ts";
 
 const ENTER = "\r";
@@ -435,5 +436,66 @@ describe("App", () => {
     await tick(250); // a lone ESC is held briefly to tell it apart from escape sequences
     expect(lastFrame()).toContain("Interrupted.");
     expect(lastFrame()).toContain("Type a message");
+  });
+
+  describe("tokens and cost", () => {
+    const reply = (usage: Record<string, number>) =>
+      [{ type: "text_delta", text: "ok" }, { type: "usage", usage }, { type: "done" }] as AgentEvent[];
+
+    function renderOpenRouter(model: Provider, models: ModelInfo[]) {
+      return render(
+        <App
+          store={store}
+          initialFile={{ provider: "openrouter", model: "acme/model", apiKey: "sk-or-test" }}
+          env={{}}
+          version="9.9.9"
+          cwd="~/x"
+          root={project}
+          splashMs={0}
+          makeProvider={() => model}
+          loadModels={async () => models}
+        />,
+      );
+    }
+
+    test("shows the reported cost, and the context window from the model list", async () => {
+      const model = new ScriptedProvider([
+        reply({ promptTokens: 12_000, completionTokens: 300, cachedTokens: 0, cost: 0.0251 }),
+        reply({ promptTokens: 12_400, completionTokens: 200, cachedTokens: 12_000, cost: 0.0042 }),
+      ]);
+      const { lastFrame, stdin } = renderOpenRouter(model, [{ id: "acme/model", tools: true, context: 200_000 }]);
+      await tick();
+      await type(stdin, "one");
+      await tick(150);
+      expect(lastFrame()).toContain("12.3k/200k ctx · 0% cached · $0.025");
+      await type(stdin, "two");
+      await tick(150);
+      expect(lastFrame()).toContain("$0.029"); // the session total
+
+      await type(stdin, "/cost");
+      await tick();
+      const frame = lastFrame()!;
+      expect(frame).toContain("This session: 2 requests");
+      expect(frame).toContain("24.4k input tokens (12k from the cache, 49%)");
+      expect(frame).toContain("Cost: $0.029");
+      expect(frame).toContain("Context: 12.6k of 200k tokens (6%)");
+    });
+
+    test("estimates the cost from the model's prices when none is reported", async () => {
+      const model = new ScriptedProvider([reply({ promptTokens: 10_000, completionTokens: 1000 })]);
+      const { lastFrame, stdin } = renderOpenRouter(model, [{ id: "acme/model", tools: true, priceIn: 2, priceOut: 10 }]);
+      await tick();
+      await type(stdin, "hi");
+      await tick(150);
+      expect(lastFrame()).toContain("~$0.030"); // 10k in at $2/M + 1k out at $10/M
+    });
+
+    test("a local model costs nothing", async () => {
+      const model = new ScriptedProvider([reply({ promptTokens: 900, completionTokens: 10 })], 32_768);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "hi");
+      await tick(150);
+      expect(lastFrame()).toContain("910/32.8k ctx · local");
+    });
   });
 });

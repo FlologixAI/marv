@@ -41,7 +41,8 @@ interface Chunk {
     };
     finish_reason?: string | null;
   }[];
-  usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+  // OpenRouter adds `cost` (USD, what the request actually cost) to every final usage chunk.
+  usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; cost?: number };
   error?: { message?: string };
 }
 
@@ -131,10 +132,15 @@ export class OpenAICompatProvider implements Provider {
           return;
         }
         if (chunk.usage) {
-          const { prompt_tokens = 0, completion_tokens = 0, prompt_tokens_details } = chunk.usage;
+          const { prompt_tokens = 0, completion_tokens = 0, prompt_tokens_details, cost } = chunk.usage;
           yield {
             type: "usage",
-            usage: { promptTokens: prompt_tokens, completionTokens: completion_tokens, cachedTokens: prompt_tokens_details?.cached_tokens },
+            usage: {
+              promptTokens: prompt_tokens,
+              completionTokens: completion_tokens,
+              cachedTokens: prompt_tokens_details?.cached_tokens,
+              ...(typeof cost === "number" ? { cost } : {}),
+            },
           };
         }
         const choice = chunk.choices?.[0];

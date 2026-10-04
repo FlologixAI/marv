@@ -20,6 +20,7 @@ import { listModels, type ModelInfo } from "./provider/models.ts";
 import type { ChatTurn, Provider, Usage } from "./provider/types.ts";
 import { selection } from "./selection.ts";
 import { systemPrompt } from "./prompt.ts";
+import { addUsage, costText, emptyTotals, type Prices, type Totals } from "./usage.ts";
 import { skillMessage, type Skill } from "./skills.ts";
 import { runTool, toolSpecsFor } from "./tools/index.ts";
 import type { ApprovalRequest, Decision } from "./tools/types.ts";
@@ -111,8 +112,28 @@ export function App({
   );
   // Skills show up in the / menu next to the built-in commands.
   const menu = useMemo(() => [...commands, ...skills.map(({ name, description }) => ({ name, description }))], [skills]);
-  // Token counts from the latest request, for the status bar.
+  // Token counts from the latest request (how full the context is)…
   const [usage, setUsage] = useState<Usage | null>(null);
+  // …and for the whole session (survives /clear: that's money spent).
+  const [totals, setTotals] = useState<Totals>(emptyTotals);
+  // The model's context window and prices, looked up once per model (OpenRouter's list has them).
+  const [modelInfo, setModelInfo] = useState<{ id: string; context?: number; prices: Prices } | null>(null);
+  useEffect(() => {
+    if (config.provider !== "openrouter") return;
+    let cancelled = false;
+    loadModels(config).then(
+      (models) => {
+        const m = models.find((model) => model.id === config.model);
+        if (!cancelled && m) setModelInfo({ id: m.id, context: m.context, prices: m });
+      },
+      () => {}, // offline: no context size or price estimates, that's all
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [config, loadModels]);
+  const info = modelInfo?.id === config.model ? modelInfo : null;
+  const contextLength = provider.contextLength ?? info?.context;
   const warnedFull = useRef(false);
 
   const [input, setInput] = useState("");
@@ -254,10 +275,13 @@ export function App({
               stepStarted = Date.now();
               break;
             }
-            case "usage":
+            case "usage": {
               lastUsage = event.usage;
               setUsage(event.usage);
+              const local = config.provider === "ollama";
+              setTotals((t) => ({ ...addUsage(t, event.usage, info?.prices), local: (t.requests === 0 || t.local) && local }));
               break;
+            }
             case "error":
               addMessage({ role: "system", text: event.message, isError: true });
               break;
@@ -279,7 +303,7 @@ export function App({
       }
 
       // Ollama silently drops the oldest messages once the window is full; say so before it happens.
-      const window = provider.contextLength;
+      const window = contextLength;
       if (window && lastUsage && !warnedFull.current) {
         const used = lastUsage.promptTokens + lastUsage.completionTokens;
         if (used >= window * CONTEXT_WARNING) {
@@ -292,7 +316,7 @@ export function App({
         }
       }
     },
-    [provider, addMessage, updateMessage, system, specs, skills, root, approve, config.sandbox],
+    [provider, addMessage, updateMessage, system, specs, skills, root, approve, config.sandbox, config.provider, info, contextLength],
   );
 
   const handleSubmit = (raw: string) => {
@@ -306,7 +330,13 @@ export function App({
       void send(text);
       return;
     }
-    const action = runCommand(text, { config, configPath: shortenHome(store.path), skills, skillProblems });
+    const action = runCommand(text, {
+      config,
+      configPath: shortenHome(store.path),
+      skills,
+      skillProblems,
+      usage: { totals, last: usage, contextLength },
+    });
     switch (action.type) {
       case "print":
         addMessage({ role: "system", text: action.text, isError: action.isError, markdown: action.markdown });
@@ -506,7 +536,7 @@ export function App({
             <StatusBar
               model={provider.name}
               cwd={cwd}
-              usage={usage ? formatUsage(usage, provider.contextLength) : undefined}
+              usage={[usage && formatUsage(usage, contextLength), costText(totals)].filter(Boolean).join(" · ") || undefined}
               confirmExit={confirmExit}
               notice={notice}
               busy={busy}
