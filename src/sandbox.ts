@@ -37,17 +37,20 @@ interface SandboxOptions {
   network: boolean;
   /** PATH inside the sandbox. */
   path: string;
+  /** More writable folders besides root, e.g. a worktree's shared .git. */
+  writable?: string[];
   exists?: (path: string) => boolean;
 }
 
 /** bwrap's arguments (everything before `-- command`). Order matters: later mounts sit on top of earlier ones. */
-export function sandboxArgs({ root, home, network, path, exists = existsSync }: SandboxOptions): string[] {
+export function sandboxArgs({ root, home, network, path, writable = [], exists = existsSync }: SandboxOptions): string[] {
   const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", home];
   for (const dir of TOOLCHAINS) {
     const full = join(home, dir);
     if (exists(full)) args.push("--ro-bind", full, full);
   }
   args.push("--bind", root, root);
+  for (const dir of writable) args.push("--bind", dir, dir);
   if (!network) args.push("--unshare-net");
   args.push(
     "--unshare-pid", // its processes can't see or signal ours, and all die with it

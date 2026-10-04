@@ -8,6 +8,12 @@ import { sandboxArgs, sandboxAvailable } from "../src/sandbox.ts";
 describe("sandboxArgs", () => {
   const base = { root: "/home/me/proj", home: "/home/me", path: "/usr/bin", exists: (p: string) => p.endsWith(".bun") };
 
+  test("extra writable folders (a worktree's shared .git) are mounted after the home is hidden", () => {
+    const args = sandboxArgs({ ...base, network: false, writable: ["/home/me/proj/.git"] });
+    expect(args.join(" ")).toContain("--bind /home/me/proj/.git /home/me/proj/.git");
+    expect(args.lastIndexOf("/home/me/proj/.git")).toBeGreaterThan(args.indexOf("--tmpfs", args.indexOf("/tmp") + 1));
+  });
+
   test("read-only system, hidden home, writable project, no network, clean env", () => {
     const args = sandboxArgs({ ...base, network: false }).join(" ");
     expect(args).toContain("--ro-bind / /");
