@@ -92,6 +92,7 @@ async function* runGroup(
   let active = 0;
   let settled = 0;
   let declined = false;
+  /** Reserves free slots for queued calls (or answers them, after an interrupt or a "no"). Runs nothing. */
   const startMore = () => {
     while (active < limit && next < group.length) {
       const index = next++;
@@ -103,24 +104,38 @@ async function* runGroup(
       }
       active++;
       emit({ type: "start", index, call });
-      // Started inside a promise chain, so even a runTool that throws
-      // synchronously ends as an error result instead of a call that never settles.
-      void Promise.resolve()
-        .then(() => runTool(call))
-        .catch((err: Error): Result => ({ output: `${call.name} failed: ${err.message}`, summary: "error", isError: true, label: call.name }))
-        .then((result) => {
-          active--;
-          settled++;
-          declined ||= Boolean(result.declined);
-          emit({ type: "end", index, call, result });
-          startMore();
-        });
     }
+  };
+  const launch = (index: number, call: ToolCall) => {
+    // Inside a promise chain, so even a runTool that throws synchronously ends
+    // as an error result instead of a call that never settles.
+    void Promise.resolve()
+      .then(() => runTool(call))
+      .catch((err: unknown): Result => ({
+        output: `${call.name} failed: ${err instanceof Error ? err.message : String(err)}`,
+        summary: "error",
+        isError: true,
+        label: call.name,
+      }))
+      .then((result) => {
+        active--;
+        settled++;
+        declined ||= Boolean(result.declined);
+        emit({ type: "end", index, call, result });
+        startMore();
+      });
   };
   startMore();
   while (settled < group.length || ready.length > 0) {
     if (ready.length === 0) await new Promise<void>((resolve) => (wake = resolve));
-    yield* ready.splice(0);
+    while (ready.length > 0) {
+      const event = ready.shift()!;
+      yield event;
+      // A call runs only once its start has been delivered: a consumer that
+      // stops at tool_start (it threw, or the user quit) never sees a tool
+      // run that it can't show or stop.
+      if (event.type === "start") launch(event.index, event.call);
+    }
   }
 }
 

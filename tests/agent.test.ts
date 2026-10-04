@@ -216,5 +216,114 @@ describe("runAgent", () => {
       expect(provider.requests).toHaveLength(1);
       expect(events.at(-1)).toEqual({ type: "done", reason: "declined" });
     });
+
+    /** Iterates the loop until the first tool_start, then stops (as a consumer whose handler throws would). */
+    async function stopAtFirstToolStart(provider: Provider, opts: Partial<Parameters<typeof runAgent>[0]>) {
+      for await (const event of runAgent({
+        provider,
+        history: [{ role: "user", text: "go" }],
+        system: "SYSTEM",
+        tools: SPECS,
+        runTool: fakeTool,
+        signal: new AbortController().signal,
+        ...opts,
+      }))
+        if (event.type === "tool_start") break;
+      await Bun.sleep(20); // anything already launched would have started by now
+    }
+
+    test("a tool doesn't start until its tool_start was delivered (single call)", async () => {
+      const { state, runTool } = tracked();
+      await stopAtFirstToolStart(new ScriptedProvider([useTools(call("r", "x.ts")), say("ok")]), { runTool, isParallel });
+      expect(state.started).toEqual([]);
+    });
+
+    test("a tool doesn't start until its tool_start was delivered (parallel group)", async () => {
+      const { state, runTool } = tracked();
+      await stopAtFirstToolStart(new ScriptedProvider([useTools(sub("a", 5), sub("b", 5)), say("ok")]), { runTool, isParallel });
+      expect(state.started).toEqual([]);
+    });
+
+    test("a no in a parallel group answers its queued calls without running them", async () => {
+      const provider = new ScriptedProvider([useTools(sub("a", 5), sub("b", 5), sub("c", 5)), say("never")]);
+      const history: ChatTurn[] = [{ role: "user", text: "go" }];
+      const { state, runTool } = tracked("a");
+      const events = await run(provider, history, { runTool, isParallel, maxParallel: 1 });
+      expect(state.started).toEqual(["a"]);
+      expect(history.filter((t) => t.role === "tool").map((t) => t.role === "tool" && t.text)).toEqual([
+        "out a",
+        "Not run: the user declined an earlier action.",
+        "Not run: the user declined an earlier action.",
+      ]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "declined" });
+    });
+
+    test("a tool that throws or rejects in a group becomes an error result, and the run goes on", async () => {
+      const provider = new ScriptedProvider([useTools(sub("a", 0), sub("b", 0), sub("c", 0)), say("Recovered.")]);
+      const history: ChatTurn[] = [{ role: "user", text: "go" }];
+      const runTool = (c: ToolCall): Promise<ToolResult & { label: string }> => {
+        if (c.id === "a") throw new Error("boom");
+        if (c.id === "b") return Promise.reject("not an Error");
+        return Promise.resolve({ output: "out c", summary: "ok", label: "c" });
+      };
+      const events = await run(provider, history, { runTool, isParallel });
+      expect(history.filter((t) => t.role === "tool").map((t) => t.role === "tool" && t.text)).toEqual([
+        "agent failed: boom",
+        "agent failed: not an Error",
+        "out c",
+      ]);
+      expect(provider.requests).toHaveLength(2);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "end" });
+    });
+
+    test("an interrupt lets the running calls finish and answers the queued one", async () => {
+      const controller = new AbortController();
+      const provider = new ScriptedProvider([useTools(sub("a", 10), sub("b", 10), sub("c", 10))]);
+      const history: ChatTurn[] = [{ role: "user", text: "go" }];
+      const started: string[] = [];
+      const events = await run(provider, history, {
+        signal: controller.signal,
+        isParallel,
+        maxParallel: 2,
+        runTool: async (c) => {
+          started.push(c.id);
+          controller.abort();
+          await Bun.sleep(10);
+          return { output: `out ${c.id}`, summary: "ok", label: c.id };
+        },
+      });
+      expect(started).toEqual(["a", "b"]);
+      expect(history.filter((t) => t.role === "tool").map((t) => t.role === "tool" && t.text)).toEqual([
+        "out a",
+        "out b",
+        "Interrupted by the user before this tool ran.",
+      ]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
+
+    test("a call after a declined parallel group isn't run", async () => {
+      const provider = new ScriptedProvider([useTools(sub("a", 5), sub("b", 5), call("r", "x.ts")), say("never")]);
+      const history: ChatTurn[] = [{ role: "user", text: "go" }];
+      const { state, runTool } = tracked("a");
+      const events = await run(provider, history, { runTool, isParallel });
+      expect(state.started).toEqual(["a", "b"]);
+      expect(history.filter((t) => t.role === "tool").map((t) => t.role === "tool" && t.text)).toEqual([
+        "out a",
+        "out b",
+        "Not run: the user declined an earlier action.",
+      ]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "declined" });
+    });
+
+    test("an agent call is labeled with its type and description while it runs", async () => {
+      const typed: ToolCall = { id: "t", name: "agent", arguments: JSON.stringify({ type: "explore", description: "Find the config" }) };
+      const provider = new ScriptedProvider([useTools(sub("Read notes", 0), typed), say("ok")]);
+      const { runTool } = tracked();
+      const events = await run(provider, [{ role: "user", text: "go" }], { runTool, isParallel });
+      expect(events.filter((e) => e.type === "tool_start").map((e) => e.type === "tool_start" && e.label)).toEqual([
+        "general-purpose · Read notes",
+        "explore · Find the config",
+      ]);
+    });
   });
 });
