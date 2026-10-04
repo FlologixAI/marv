@@ -111,9 +111,9 @@ agent({
 
 `run()`:
 
-1. Resolve the type; build the subagent's system prompt and tool specs (built
-   once per type per session and reused, so repeated dispatches of one type hit
-   the cache). Provider: the parent's, or
+1. Resolve the type; build the subagent's system prompt and tool specs
+   (deterministic: the same type produces the same bytes all day, so repeated
+   dispatches of one type hit the cache). Provider: the parent's, or
    `createProvider({ ...config, model })` when the type sets a model.
 2. If `isolation: "worktree"`, create the worktree (section 3).
 3. `runAgent()` with history `[{ role: "user", text: prompt }]`,
