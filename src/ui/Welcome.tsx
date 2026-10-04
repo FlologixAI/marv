@@ -2,7 +2,7 @@ import { Box, Text } from "ink";
 import { Martian } from "./Martian.tsx";
 import { theme } from "./theme.ts";
 
-// The banner at the top of the session: the Ekko martian, with the
+// The banner at the top of the session: the Marv martian, with the
 // welcome text centered beside it.
 export function Welcome({
   version,
@@ -21,7 +21,7 @@ export function Welcome({
       <Martian animate={animate} />
       <Box flexDirection="column" justifyContent="center">
         <Text>
-          <Text bold>Welcome to Ekko</Text>
+          <Text bold>Welcome to Marv</Text>
           <Text color={theme.dim}> v{version}</Text>
         </Text>
         <Text color={theme.dim}>/help for commands</Text>

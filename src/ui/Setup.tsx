@@ -82,7 +82,7 @@ export function Setup({ initial, env, loadModels, startStep = "provider", onComp
   const load = useCallback(() => loadModels(provider), [loadModels, provider]);
 
   const steps: Step[] = ["provider", "model", ...(needsKeyStep ? (["apiKey"] as const) : [])];
-  const title = startStep === "model" ? `Switch ${preset.label} model` : "Ekko setup";
+  const title = startStep === "model" ? `Switch ${preset.label} model` : "Marv setup";
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
@@ -101,7 +101,7 @@ export function Setup({ initial, env, loadModels, startStep = "provider", onComp
       <Box marginTop={1} flexDirection="column">
         {step === "provider" && (
           <>
-            <Text>Which AI provider should Ekko use?</Text>
+            <Text>Which AI provider should Marv use?</Text>
             <Select items={PROVIDER_ITEMS} initialValue={provider} onSelect={chooseProvider} />
           </>
         )}
@@ -125,7 +125,7 @@ export function Setup({ initial, env, loadModels, startStep = "provider", onComp
         {step === "apiKey" && (
           <>
             <Text>Paste your {preset.label} API key:</Text>
-            <Text color={theme.dim}>Get one at {preset.keyUrl}. It's saved to ~/.ekko/config.json, readable only by you.</Text>
+            <Text color={theme.dim}>Get one at {preset.keyUrl}. It's saved to ~/.marv/config.json, readable only by you.</Text>
             {initial?.apiKey && <Text color={theme.dim}>Press Enter to keep the current key ({maskKey(initial.apiKey)}).</Text>}
             <Box>
               <Text color={theme.accent}>{"> "}</Text>

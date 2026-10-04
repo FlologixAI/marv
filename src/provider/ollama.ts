@@ -47,7 +47,7 @@ async function* parseNDJSON(body: ReadableStream<Uint8Array>): AsyncGenerator<Li
   if (buffer.trim()) yield JSON.parse(buffer) as Line;
 }
 
-/** Ekko's conversation in Ollama's message format (tool arguments as objects, results tagged by tool name). */
+/** Marv's conversation in Ollama's message format (tool arguments as objects, results tagged by tool name). */
 function toMessages(history: ChatTurn[], system?: string) {
   const parse = (args: string) => {
     try {

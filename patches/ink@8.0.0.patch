@@ -4,6 +4,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/ink/.bun-tag-62faec16763ada06 b/.bun-tag-62faec16763ada06
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/ink/.bun-tag-f3308ddd892d5bea b/.bun-tag-f3308ddd892d5bea
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/build/ink.d.ts b/build/ink.d.ts
 index 3aca51bd7da892eb5cfb1df671c46155b5011892..913f265a6defefd0d79e119f0ffd9900d8922dad 100644
 --- a/build/ink.d.ts
@@ -17,14 +20,14 @@ index 3aca51bd7da892eb5cfb1df671c46155b5011892..913f265a6defefd0d79e119f0ffd9900
      waitUntilExit?: () => Promise<unknown>;
      maxFps?: number;
 diff --git a/build/ink.js b/build/ink.js
-index 550cdf00d2b15ac43f5d1cd708bc82c52c513569..c60cd82cbad9c867ef2125396bb9dfb7c2848090 100644
+index 550cdf00d2b15ac43f5d1cd708bc82c52c513569..807c7eb8a30936e4210aa8b0b6fa9374667ab6f6 100644
 --- a/build/ink.js
 +++ b/build/ink.js
 @@ -207,6 +207,17 @@ export default class Ink {
          this.fullStaticOutput = '';
          this.hasRenderedStaticOutput = false;
      };
-+    // ekko patch: redraw the last frame with transformOutput applied again,
++    // marv patch: redraw the last frame with transformOutput applied again,
 +    // without re-rendering React, re-running layout, or re-drawing nodes. For
 +    // changes that only affect the transform (moving a selection highlight).
 +    repaint = () => {
@@ -44,14 +47,14 @@ index 550cdf00d2b15ac43f5d1cd708bc82c52c513569..c60cd82cbad9c867ef2125396bb9dfb7
          const startTime = performance.now();
 -        const { output, outputHeight, staticOutput } = render(this.rootNode, this.isScreenReaderEnabled);
 +        const { output: rawOutput, outputHeight, staticOutput } = render(this.rootNode, this.isScreenReaderEnabled);
-+        // ekko patch: let the app post-process each frame (used for mouse text selection).
++        // marv patch: let the app post-process each frame (used for mouse text selection).
 +        const output = this.options.transformOutput ? this.options.transformOutput(rawOutput) : rawOutput;
 +        this.lastRawFrame = { output: rawOutput, height: outputHeight };
          const renderTime = performance.now() - startTime;
          this.renderFrame(output, outputHeight, staticOutput);
          this.options.onRender?.({ renderTime });
 diff --git a/build/render-node-to-output.js b/build/render-node-to-output.js
-index 6f48cd03d15de0f56aed72978579acea84f473ee..4bededd0f1191aaed919ad1990a9c016a920da75 100644
+index 6f48cd03d15de0f56aed72978579acea84f473ee..21eb299f8c96db7fe165b383ef3bbd48d0653fd5 100644
 --- a/build/render-node-to-output.js
 +++ b/build/render-node-to-output.js
 @@ -69,7 +69,7 @@ export const renderNodeToScreenReaderOutput = (node, options = {}) => {
@@ -67,7 +70,7 @@ index 6f48cd03d15de0f56aed72978579acea84f473ee..4bededd0f1191aaed919ad1990a9c016
      // Left and top positions in Yoga are relative to their parent node
      const x = offsetX + yogaNode.getComputedLeft();
      const y = offsetY + yogaNode.getComputedTop();
-+    // ekko patch: a node entirely outside the rows its ancestors clip to can't
++    // marv patch: a node entirely outside the rows its ancestors clip to can't
 +    // show a single cell, so skip it (and its whole subtree). Without this, a
 +    // long scrolled-away transcript is wrapped and drawn on every frame.
 +    if (y >= visibleBottom || y + yogaNode.getComputedHeight() <= visibleTop) {
@@ -106,14 +109,14 @@ index 6f48cd03d15de0f56aed72978579acea84f473ee..4bededd0f1191aaed919ad1990a9c016
      }
      if (isClipped) {
 diff --git a/build/render.d.ts b/build/render.d.ts
-index 63c59ec147214d98a2be2f73df390fd3ee59bb40..0f29ebe0a0c4897247f786d61c004a7884b53cc3 100644
+index 63c59ec147214d98a2be2f73df390fd3ee59bb40..29945bdda510bf671143a124384a3e463de128a5 100644
 --- a/build/render.d.ts
 +++ b/build/render.d.ts
 @@ -48,6 +48,10 @@ export type RenderOptions = {
      */
      onRender?: (metrics: RenderMetrics) => void;
      /**
-+    (ekko patch) Post-process each rendered frame before it is written. Must not change the frame's dimensions.
++    (marv patch) Post-process each rendered frame before it is written. Must not change the frame's dimensions.
 +    */
 +    transformOutput?: (output: string) => string;
 +    /**
@@ -125,21 +128,21 @@ index 63c59ec147214d98a2be2f73df390fd3ee59bb40..0f29ebe0a0c4897247f786d61c004a78
      */
      clear: () => void;
 +    /**
-+    (ekko patch) Redraw the last frame with `transformOutput` applied again, without re-rendering.
++    (marv patch) Redraw the last frame with `transformOutput` applied again, without re-rendering.
 +    */
 +    repaint: () => void;
  };
  /**
  Mount a component and render the output.
 diff --git a/build/render.js b/build/render.js
-index d531880f4be477a7f299c27f27a12a01ac7c1cce..c0b447314632817e4ff7386a12b4bdfcffc54db6 100644
+index d531880f4be477a7f299c27f27a12a01ac7c1cce..9660b96c1c2100bf5d7e7117095c3470b3c21d2d 100644
 --- a/build/render.js
 +++ b/build/render.js
 @@ -33,6 +33,8 @@ const render = (node, options) => {
              instance.unmount();
          },
          clear: instance.clear,
-+        // ekko patch: see Ink#repaint.
++        // marv patch: see Ink#repaint.
 +        repaint: instance.repaint,
      };
  };

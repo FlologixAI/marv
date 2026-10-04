@@ -3,12 +3,12 @@ import { Box, Text, useInput, useWindowSize } from "ink";
 import { theme } from "./theme.ts";
 
 const LOGO = [
-  "███████╗██╗  ██╗██╗  ██╗ ██████╗ ",
-  "██╔════╝██║ ██╔╝██║ ██╔╝██╔═══██╗",
-  "█████╗  █████╔╝ █████╔╝ ██║   ██║",
-  "██╔══╝  ██╔═██╗ ██╔═██╗ ██║   ██║",
-  "███████╗██║  ██╗██║  ██╗╚██████╔╝",
-  "╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ",
+  "███╗   ███╗ █████╗ ██████╗ ██╗   ██╗",
+  "████╗ ████║██╔══██╗██╔══██╗██║   ██║",
+  "██╔████╔██║███████║██████╔╝██║   ██║",
+  "██║╚██╔╝██║██╔══██║██╔══██╗╚██╗ ██╔╝",
+  "██║ ╚═╝ ██║██║  ██║██║  ██║ ╚████╔╝ ",
+  "╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ",
 ];
 const LOGO_WIDTH = LOGO[0]!.length;
 
@@ -43,7 +43,7 @@ export function Splash({ version, cwd, durationMs, onDone }: Props) {
         ))
       ) : (
         <Text bold color={theme.accent}>
-          Ekko
+          Marv
         </Text>
       )}
       <Box marginTop={1}>
@@ -52,7 +52,7 @@ export function Splash({ version, cwd, durationMs, onDone }: Props) {
       <Text color={theme.dim}>{cwd}</Text>
       <Box marginTop={1}>
         <Text color={theme.accent} italic>
-          "It's not how much time you have, it's how you use it."
+          "Take me to your codebase."
         </Text>
       </Box>
       <Box marginTop={1}>

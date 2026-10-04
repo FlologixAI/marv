@@ -1,11 +1,11 @@
-// The seam between Ekko and any LLM vendor.
+// The seam between Marv and any LLM vendor.
 //
 // Every provider (OpenRouter through the OpenAI-compatible adapter, Ollama
 // through its native one) turns its own streaming format into these events.
 // The UI and the agent loop only ever see these types, so swapping vendors
 // never touches them.
 
-/** A tool the model asked Ekko to run. */
+/** A tool the model asked Marv to run. */
 export interface ToolCall {
   /** Pairs the call with its result in the next request. */
   id: string;
@@ -48,7 +48,7 @@ export type AgentEvent =
   | { type: "error"; message: string };
 
 export interface StreamOptions {
-  /** Instructions sent ahead of the conversation ("You are Ekko…"). */
+  /** Instructions sent ahead of the conversation ("You are Marv…"). */
   system?: string;
   /** Tools the model may call. */
   tools?: ToolSpec[];
@@ -59,7 +59,7 @@ export interface StreamOptions {
 export interface Provider {
   /** Shown in the status bar, e.g. "openrouter · z-ai/glm-5.3". */
   readonly name: string;
-  /** Context window in tokens, when known (Ollama: the num_ctx Ekko asks for). */
+  /** Context window in tokens, when known (Ollama: the num_ctx Marv asks for). */
   readonly contextLength?: number;
   stream(history: ChatTurn[], options?: StreamOptions): AsyncIterable<AgentEvent>;
 }

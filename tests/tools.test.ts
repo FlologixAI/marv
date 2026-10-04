@@ -16,8 +16,8 @@ async function files(tree: Record<string, string | Buffer>) {
 }
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "ekko-tools-"));
-  outside = await mkdtemp(join(tmpdir(), "ekko-outside-"));
+  root = await mkdtemp(join(tmpdir(), "marv-tools-"));
+  outside = await mkdtemp(join(tmpdir(), "marv-outside-"));
   await files({
     "package.json": '{ "name": "demo" }\n',
     "src/app.ts": "export function main() {\n  return greet('world');\n}\n",

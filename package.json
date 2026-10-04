@@ -1,10 +1,10 @@
 {
-  "name": "ekko",
+  "name": "marv",
   "version": "0.1.0",
   "description": "A terminal coding agent",
   "type": "module",
   "bin": {
-    "ekko": "./src/cli.tsx"
+    "marv": "./src/cli.tsx"
   },
   "scripts": {
     "dev": "bun src/cli.tsx",

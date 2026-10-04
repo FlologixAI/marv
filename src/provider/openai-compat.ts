@@ -1,6 +1,6 @@
 // The adapter for "OpenAI-compatible" chat APIs (OpenRouter, and anything
 // else that speaks POST /chat/completions with streaming). It translates
-// their stream into Ekko's AgentEvents, so nothing above this file knows
+// their stream into Marv's AgentEvents, so nothing above this file knows
 // which vendor (or which wire format) is on the other end.
 import { errorMessage, httpError, unreachable } from "./errors.ts";
 import { parseSSE } from "./sse.ts";
@@ -45,7 +45,7 @@ interface Chunk {
   error?: { message?: string };
 }
 
-/** Ekko's conversation in OpenAI's message format. Deterministic, so repeated requests share a cacheable prefix. */
+/** Marv's conversation in OpenAI's message format. Deterministic, so repeated requests share a cacheable prefix. */
 function toMessages(history: ChatTurn[], system?: string) {
   return [
     ...(system ? [{ role: "system", content: system }] : []),

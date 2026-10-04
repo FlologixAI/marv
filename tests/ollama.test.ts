@@ -45,7 +45,7 @@ describe("OllamaProvider", () => {
     ]);
   });
 
-  test("turns tool calls (arguments as an object) into Ekko's ToolCalls", async () => {
+  test("turns tool calls (arguments as an object) into Marv's ToolCalls", async () => {
     const url = serve(() =>
       ndjson(msg({ tool_calls: [{ id: "call_x", function: { index: 0, name: "read_file", arguments: { path: "package.json" } } }] }), end),
     );
@@ -63,7 +63,7 @@ describe("OllamaProvider", () => {
           { role: "assistant", text: "", toolCalls: [{ id: "c1", name: "read_file", arguments: '{"path":"a.ts"}' }] },
           { role: "tool", callId: "c1", name: "read_file", text: "contents" },
         ],
-        { system: "You are Ekko.", tools },
+        { system: "You are Marv.", tools },
       ),
     );
     expect(lastRequest!.path).toBe("/api/chat");
@@ -73,7 +73,7 @@ describe("OllamaProvider", () => {
       think: true,
       options: { num_ctx: 32768 },
       messages: [
-        { role: "system", content: "You are Ekko." },
+        { role: "system", content: "You are Marv." },
         { role: "user", content: "read it" },
         { role: "assistant", content: "", tool_calls: [{ function: { name: "read_file", arguments: { path: "a.ts" } } }] },
         { role: "tool", tool_name: "read_file", content: "contents" },

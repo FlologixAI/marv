@@ -13,8 +13,8 @@ export function createProvider(config: Config): Provider {
         baseUrl: config.baseUrl,
         model: config.model,
         apiKey: config.apiKey,
-        // Optional attribution: shows "Ekko" in your OpenRouter activity log.
-        headers: { "X-Title": "Ekko" },
+        // Optional attribution: shows "Marv" in your OpenRouter activity log.
+        headers: { "X-Title": "Marv" },
       });
     case "ollama":
       // Ollama's native API, so we can set the context window (its default is 4096 tokens).

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import { theme } from "./theme.ts";
 
-// Ekko's mascot: a sturdy little martian, drawn in heavy box lines, with
+// Marv's mascot: a sturdy little martian, drawn in heavy box lines, with
 // antennae, arms and feet. One color (the theme accent).
 // Every frame is the same 12×7 block (the raised arm uses the last column),
 // so swapping frames never moves the layout.

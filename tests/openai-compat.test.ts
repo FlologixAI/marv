@@ -53,7 +53,7 @@ describe("OpenAICompatProvider", () => {
           { role: "assistant", text: "hello" },
           { role: "user", text: "again" },
         ],
-        { system: "You are Ekko." },
+        { system: "You are Marv." },
       ),
     );
     expect(lastRequest!.headers.get("authorization")).toBe("Bearer sk-test");
@@ -62,7 +62,7 @@ describe("OpenAICompatProvider", () => {
       stream: true,
       stream_options: { include_usage: true },
       messages: [
-        { role: "system", content: "You are Ekko." },
+        { role: "system", content: "You are Marv." },
         { role: "user", content: "hi" },
         { role: "assistant", content: "hello" },
         { role: "user", content: "again" },

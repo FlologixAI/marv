@@ -7,9 +7,9 @@ import { loadInstructions, systemPrompt } from "../src/prompt.ts";
 const DATE = new Date("2026-10-03T12:00:00Z");
 
 describe("systemPrompt", () => {
-  test("says who Ekko is, where it is, and which tools it has", () => {
+  test("says who Marv is, where it is, and which tools it has", () => {
     const prompt = systemPrompt({ cwd: "~/proj", date: DATE, tools: ["read_file", "glob", "grep"] });
-    expect(prompt).toContain("You are Ekko");
+    expect(prompt).toContain("You are Marv");
     expect(prompt).toContain("Working directory: ~/proj");
     expect(prompt).toContain("2026-10-03");
     expect(prompt).toContain("read_file, glob, grep");
@@ -30,7 +30,7 @@ describe("systemPrompt", () => {
 describe("loadInstructions", () => {
   let root: string;
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), "ekko-agents-md-"));
+    root = await mkdtemp(join(tmpdir(), "marv-agents-md-"));
   });
   afterEach(() => rm(root, { recursive: true, force: true }));
 

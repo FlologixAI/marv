@@ -389,7 +389,7 @@ export function App({
 
   const finishSplash = useCallback(() => setPhase("main"), []);
 
-  // Ekko runs in the alternate screen (see cli.tsx), so the root fills the
+  // Marv runs in the alternate screen (see cli.tsx), so the root fills the
   // terminal: the transcript takes the leftover height and scrolls, and the
   // prompt and status bar stay pinned to the bottom.
   if (phase === "splash") {

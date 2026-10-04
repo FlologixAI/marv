@@ -30,10 +30,10 @@ let project: string;
 let store: ConfigStore;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "ekko-app-"));
+  dir = await mkdtemp(join(tmpdir(), "marv-app-"));
   store = new ConfigStore(dir);
   // The project the agent works in: its tools can read files here.
-  project = await mkdtemp(join(tmpdir(), "ekko-project-"));
+  project = await mkdtemp(join(tmpdir(), "marv-project-"));
   await writeFile(join(project, "notes.txt"), "remember the milk\n");
 });
 afterEach(async () => {
@@ -73,13 +73,13 @@ describe("App", () => {
 
     stdin.write("x");
     await tick();
-    expect(lastFrame()).toContain("Welcome to Ekko");
+    expect(lastFrame()).toContain("Welcome to Marv");
   });
 
   test("first run opens setup and saves the result", async () => {
     const { lastFrame, frames, stdin } = renderApp(null);
     await tick();
-    expect(lastFrame()).toContain("Ekko setup");
+    expect(lastFrame()).toContain("Marv setup");
 
     stdin.write(DOWN);
     await tick();
@@ -155,7 +155,7 @@ describe("App", () => {
     await type(stdin, "second");
     await tick(100);
 
-    expect(calls[0]!.options?.system).toContain("You are Ekko");
+    expect(calls[0]!.options?.system).toContain("You are Marv");
     expect(calls[0]!.options?.system).toContain("~/x");
     // Stateless API: the second request carries the whole conversation so far.
     expect(calls[1]!.history).toEqual([

@@ -1,4 +1,4 @@
-// Mouse support. Ink only understands keyboard input, so Ekko turns on the
+// Mouse support. Ink only understands keyboard input, so Marv turns on the
 // terminal's mouse reporting itself and pulls the mouse codes out of stdin
 // before Ink sees them (otherwise they'd be typed into the prompt as text).
 import { EventEmitter } from "node:events";

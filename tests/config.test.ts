@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, ConfigStore, maskKey, needsSetup, PRESETS, resolveConfig } from "../src/config/config.ts";
+import { ConfigError, ConfigStore, maskKey, migrateLegacyConfig, needsSetup, PRESETS, resolveConfig } from "../src/config/config.ts";
 
 let dir: string;
 let store: ConfigStore;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "ekko-config-"));
+  dir = await mkdtemp(join(tmpdir(), "marv-config-"));
   store = new ConfigStore(join(dir, "nested"));
 });
 afterEach(() => rm(dir, { recursive: true, force: true }));
@@ -31,7 +31,7 @@ describe("ConfigStore", () => {
     await expect(store.load()).rejects.toBeInstanceOf(ConfigError);
   });
 
-  test("drops a provider Ekko no longer has (like the old echo), keeping the rest", async () => {
+  test("drops a provider Marv no longer has (like the old echo), keeping the rest", async () => {
     await store.save({ provider: "ollama" });
     await writeFile(store.path, JSON.stringify({ provider: "echo", apiKey: "sk-or-keep" }));
     const file = await store.load();
@@ -48,7 +48,7 @@ describe("resolveConfig", () => {
   });
 
   test("env vars override the file", () => {
-    const config = resolveConfig(file, { OPENROUTER_API_KEY: "sk-from-env", EKKO_MODEL: "openai/gpt-5.6-luna" });
+    const config = resolveConfig(file, { OPENROUTER_API_KEY: "sk-from-env", MARV_MODEL: "openai/gpt-5.6-luna" });
     expect(config).toMatchObject({ apiKey: "sk-from-env", apiKeySource: "env", model: "openai/gpt-5.6-luna" });
   });
 
@@ -95,4 +95,31 @@ describe("needsSetup", () => {
 test("maskKey hides the middle of a key", () => {
   expect(maskKey("sk-or-v1-abcdefghijklmnop-wxyz")).toBe("sk-or-v1-a…wxyz");
   expect(maskKey("short")).toBe("****");
+});
+
+describe("migrateLegacyConfig (Marv used to be called Ekko)", () => {
+  let home: string;
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "marv-home-"));
+  });
+  afterEach(() => rm(home, { recursive: true, force: true }));
+
+  test("copies ~/.ekko/config.json to ~/.marv/, privately, and leaves the old one", async () => {
+    await mkdir(join(home, ".ekko"));
+    await writeFile(join(home, ".ekko", "config.json"), '{"provider":"openrouter","apiKey":"sk-or-old"}');
+    expect(await migrateLegacyConfig(home)).toBe(true);
+    expect(await readFile(join(home, ".marv", "config.json"), "utf8")).toBe('{"provider":"openrouter","apiKey":"sk-or-old"}');
+    expect((await stat(join(home, ".marv", "config.json"))).mode & 0o777).toBe(0o600);
+    expect(await readFile(join(home, ".ekko", "config.json"), "utf8")).toContain("sk-or-old");
+  });
+
+  test("never overwrites an existing ~/.marv config, and does nothing without an old one", async () => {
+    expect(await migrateLegacyConfig(home)).toBe(false);
+    await mkdir(join(home, ".ekko"));
+    await writeFile(join(home, ".ekko", "config.json"), '{"provider":"openrouter"}');
+    await mkdir(join(home, ".marv"));
+    await writeFile(join(home, ".marv", "config.json"), '{"provider":"ollama"}');
+    expect(await migrateLegacyConfig(home)).toBe(false);
+    expect(await readFile(join(home, ".marv", "config.json"), "utf8")).toBe('{"provider":"ollama"}');
+  });
 });

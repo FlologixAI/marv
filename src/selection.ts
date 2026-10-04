@@ -1,5 +1,5 @@
 // Mouse text selection. In the alternate screen with mouse reporting on, the
-// terminal no longer selects text itself, so Ekko does.
+// terminal no longer selects text itself, so Marv does.
 //
 // The selection lives in *transcript* coordinates (row 1250 of the
 // conversation, not row 12 of the screen), so it stays on the same text as the

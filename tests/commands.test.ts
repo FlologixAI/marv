@@ -11,7 +11,7 @@ const ctx: CommandContext = {
     thinking: false,
     contextLength: 32768,
   },
-  configPath: "~/.ekko/config.json",
+  configPath: "~/.marv/config.json",
 };
 const runCommand = (input: string) => run(input, ctx);
 

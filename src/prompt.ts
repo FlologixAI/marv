@@ -20,7 +20,7 @@ interface PromptInput {
 }
 
 export function systemPrompt({ cwd, tools, instructions, date = new Date() }: PromptInput): string {
-  const base = `You are Ekko, a coding agent running in the user's terminal.
+  const base = `You are Marv, a coding agent running in the user's terminal.
 
 Working directory: ${cwd}
 Today's date: ${date.toISOString().slice(0, 10)}

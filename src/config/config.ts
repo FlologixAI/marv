@@ -1,11 +1,12 @@
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
 // Configuration comes from two layers, and the later one wins:
-//   1. ~/.ekko/config.json  (written by the setup screen)
-//   2. environment variables (OPENROUTER_API_KEY, EKKO_MODEL, OLLAMA_HOST)
+//   1. ~/.marv/config.json  (written by the setup screen)
+//   2. environment variables (OPENROUTER_API_KEY, MARV_MODEL, OLLAMA_HOST)
 // The file is what we save; the resolved Config is what the app runs with.
 
 export const PROVIDERS = ["openrouter", "ollama"] as const;
@@ -38,8 +39,8 @@ export const PRESETS: Record<ProviderId, Preset> = {
 const isProvider = (value: unknown): value is ProviderId => PROVIDERS.includes(value as ProviderId);
 
 const FileConfigSchema = z.object({
-  // A provider Ekko no longer has (e.g. the old "echo") is dropped rather than
-  // rejected, so setup opens instead of Ekko refusing to start.
+  // A provider Marv no longer has (e.g. the old "echo") is dropped rather than
+  // rejected, so setup opens instead of Marv refusing to start.
   provider: z.preprocess((v) => (isProvider(v) ? v : undefined), z.enum(PROVIDERS).optional()),
   model: z.string().min(1).optional(),
   /** The OpenRouter key (the only provider that needs one so far). */
@@ -74,7 +75,22 @@ export type Env = Record<string, string | undefined>;
 export class ConfigError extends Error {}
 
 export function defaultConfigDir(env: Env): string {
-  return env.EKKO_CONFIG_DIR ?? join(homedir(), ".ekko");
+  return env.MARV_CONFIG_DIR ?? join(homedir(), ".marv");
+}
+
+/**
+ * Marv used to be called Ekko and kept its config in ~/.ekko. The first time
+ * Marv runs, it copies that config (provider, model, API key) to ~/.marv,
+ * keeping it private. The old folder is left alone. Returns whether it copied.
+ */
+export async function migrateLegacyConfig(home = homedir()): Promise<boolean> {
+  const from = join(home, ".ekko", "config.json");
+  const to = join(home, ".marv", "config.json");
+  if (existsSync(to) || !existsSync(from)) return false;
+  await mkdir(dirname(to), { recursive: true, mode: 0o700 });
+  await copyFile(from, to);
+  await chmod(to, 0o600);
+  return true;
 }
 
 export class ConfigStore {
@@ -117,7 +133,7 @@ export function resolveConfig(file: FileConfig | null, env: Env): Config {
   const apiKey = preset.keyEnv ? (envKey ?? file?.apiKey) : undefined;
   return {
     provider,
-    model: env.EKKO_MODEL?.trim() || file?.model || preset.defaultModel,
+    model: env.MARV_MODEL?.trim() || file?.model || preset.defaultModel,
     baseUrl: file?.baseUrl ?? (provider === "ollama" ? ollamaUrl(env.OLLAMA_HOST) : preset.baseUrl),
     apiKey,
     apiKeySource: envKey ? "env" : apiKey ? "file" : undefined,
