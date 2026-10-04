@@ -1,3 +1,6 @@
+diff --git a/node_modules/ink/.bun-tag-2d4ebd6be5a4c917 b/.bun-tag-2d4ebd6be5a4c917
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/build/ink.d.ts b/build/ink.d.ts
 index 3aca51bd7da892eb5cfb1df671c46155b5011892..913f265a6defefd0d79e119f0ffd9900d8922dad 100644
 --- a/build/ink.d.ts
@@ -25,6 +28,61 @@ index 550cdf00d2b15ac43f5d1cd708bc82c52c513569..b67eb2409e425b59c49dda7c108e7976
          const renderTime = performance.now() - startTime;
          this.renderFrame(output, outputHeight, staticOutput);
          this.options.onRender?.({ renderTime });
+diff --git a/build/render-node-to-output.js b/build/render-node-to-output.js
+index 6f48cd03d15de0f56aed72978579acea84f473ee..4bededd0f1191aaed919ad1990a9c016a920da75 100644
+--- a/build/render-node-to-output.js
++++ b/build/render-node-to-output.js
+@@ -69,7 +69,7 @@ export const renderNodeToScreenReaderOutput = (node, options = {}) => {
+ };
+ // After nodes are laid out, render each to output object, which later gets rendered to terminal
+ const renderNodeToOutput = (node, output, options) => {
+-    const { offsetX = 0, offsetY = 0, transformers = [], skipStaticElements, } = options;
++    const { offsetX = 0, offsetY = 0, transformers = [], skipStaticElements, visibleTop = -Infinity, visibleBottom = Infinity, } = options;
+     if (skipStaticElements && node.internal_static) {
+         return;
+     }
+@@ -80,6 +80,12 @@ const renderNodeToOutput = (node, output, options) => {
+     // Left and top positions in Yoga are relative to their parent node
+     const x = offsetX + yogaNode.getComputedLeft();
+     const y = offsetY + yogaNode.getComputedTop();
++    // ekko patch: a node entirely outside the rows its ancestors clip to can't
++    // show a single cell, so skip it (and its whole subtree). Without this, a
++    // long scrolled-away transcript is wrapped and drawn on every frame.
++    if (y >= visibleBottom || y + yogaNode.getComputedHeight() <= visibleTop) {
++        return;
++    }
+     // Transformers are functions that transform final text output of each component
+     // See Output class for logic that applies transformers
+     const newTransformers = typeof node.internal_transform === 'function'
+@@ -100,6 +106,8 @@ const renderNodeToOutput = (node, output, options) => {
+         return;
+     }
+     let isClipped = false;
++    let childTop = visibleTop;
++    let childBottom = visibleBottom;
+     if (node.nodeName === 'ink-box') {
+         renderBackground(x, y, node, output);
+         renderBorder(x, y, node, output);
+@@ -124,6 +132,10 @@ const renderNodeToOutput = (node, output, options) => {
+                 : undefined;
+             output.clip({ x1, x2, y1, y2 });
+             isClipped = true;
++            if (shouldClipVertically) {
++                childTop = Math.max(childTop, y1);
++                childBottom = Math.min(childBottom, y2);
++            }
+         }
+     }
+     if (!(node.nodeName === 'ink-root' || node.nodeName === 'ink-box')) {
+@@ -135,6 +147,8 @@ const renderNodeToOutput = (node, output, options) => {
+             offsetY: y - normalizeContentOffset(node.style.contentOffsetY),
+             transformers: newTransformers,
+             skipStaticElements,
++            visibleTop: childTop,
++            visibleBottom: childBottom,
+         });
+     }
+     if (isClipped) {
 diff --git a/build/render.d.ts b/build/render.d.ts
 index 63c59ec147214d98a2be2f73df390fd3ee59bb40..642a49f6068a3d9c185c5c8f76e369f3279c1ad5 100644
 --- a/build/render.d.ts
