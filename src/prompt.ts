@@ -16,10 +16,12 @@ interface PromptInput {
   tools: string[];
   /** The project's AGENTS.md, if any. */
   instructions?: string;
+  /** Available skills: only names and descriptions go in the prompt. */
+  skills?: { name: string; description: string }[];
   date?: Date;
 }
 
-export function systemPrompt({ cwd, tools, instructions, date = new Date() }: PromptInput): string {
+export function systemPrompt({ cwd, tools, instructions, skills = [], date = new Date() }: PromptInput): string {
   const base = `You are Marv, a coding agent running in the user's terminal.
 
 Working directory: ${cwd}
@@ -31,7 +33,11 @@ You can change files with edit_file (replace exact text; copy it from read_file,
 
 Your replies are rendered as Markdown in a terminal. Keep them concise and structured: short paragraphs, bullet or numbered lists for several items, \`backticks\` for file paths, identifiers and commands, and fenced code blocks with a language for code. Use a small table only when comparing things side by side. Point to code as path:line.`;
 
-  return instructions ? `${base}\n\n# Project instructions (from ${INSTRUCTIONS_FILE})\n\n${instructions}` : base;
+  const skillList = skills.length
+    ? `\n\n# Skills\n\nSkills are detailed instructions for particular kinds of tasks. When a request matches one of these, load it with the skill tool before you start, then follow it:\n\n${skills.map((s) => `- ${s.name}: ${s.description}`).join("\n")}`
+    : "";
+  const project = instructions ? `\n\n# Project instructions (from ${INSTRUCTIONS_FILE})\n\n${instructions}` : "";
+  return base + skillList + project;
 }
 
 /**

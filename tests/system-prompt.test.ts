@@ -21,6 +21,13 @@ describe("systemPrompt", () => {
     expect(prompt).toEndWith("# Project instructions (from AGENTS.md)\n\nUse tabs. Run bun test.");
   });
 
+  test("lists skills by name and description only", () => {
+    const prompt = systemPrompt({ cwd: "~/proj", date: DATE, tools: ["skill"], skills: [{ name: "review", description: "Review code for bugs." }] });
+    expect(prompt).toContain("# Skills");
+    expect(prompt).toContain("- review: Review code for bugs.");
+    expect(systemPrompt({ cwd: "~/proj", date: DATE, tools: [] })).not.toContain("# Skills");
+  });
+
   test("is identical for identical inputs (the prompt cache depends on it)", () => {
     const args = { cwd: "~/proj", date: DATE, tools: ["read_file"], instructions: "x" };
     expect(systemPrompt(args)).toBe(systemPrompt({ ...args }));

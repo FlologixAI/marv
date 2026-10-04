@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { Skill } from "../skills.ts";
 
 /** One line of a diff, for showing a change before it's approved. */
 export interface DiffLine {
@@ -45,6 +46,8 @@ export interface ToolContext {
   approve?: (request: ApprovalRequest) => Promise<Decision>;
   /** Run bash in the bubblewrap sandbox (default true). */
   sandbox?: boolean;
+  /** Skills the `skill` tool can load. */
+  skills?: Skill[];
 }
 
 export interface ToolResult {

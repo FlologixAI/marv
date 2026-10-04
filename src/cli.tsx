@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Entrypoint for the `marv` command (see "bin" in package.json).
+import { homedir } from "node:os";
 import { render } from "ink";
 import pkg from "../package.json";
 import { App } from "./app.tsx";
@@ -7,6 +8,7 @@ import { ConfigError, ConfigStore, defaultConfigDir, migrateLegacyConfig } from 
 import { filterMouseInput, MOUSE_OFF, MOUSE_ON } from "./mouse.ts";
 import { shortenHome } from "./paths.ts";
 import { loadInstructions } from "./prompt.ts";
+import { loadSkills } from "./skills.ts";
 import { renderOptions } from "./render-options.ts";
 import { selection } from "./selection.ts";
 
@@ -38,6 +40,7 @@ if (args.includes("--help") || args.includes("-h")) {
 // The project is wherever Marv was started; the tools can't reach outside it.
 const root = process.cwd();
 const instructions = await loadInstructions(root);
+const { skills, problems: skillProblems } = await loadSkills({ root, home: homedir() });
 
 // Marv was called Ekko: carry its config over (only for the default location).
 if (!process.env.MARV_CONFIG_DIR) await migrateLegacyConfig();
@@ -69,6 +72,8 @@ const instance = render(
     cwd={shortenHome(root)}
     root={root}
     instructions={instructions}
+    skills={skills}
+    skillProblems={skillProblems}
   />,
   renderOptions,
 );

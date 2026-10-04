@@ -14,8 +14,22 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-/** Read-only toolchains a command may need from the hidden home folder. */
-const TOOLCHAINS = [".bun", ".cargo", ".rustup", ".local/bin", ".local/share/pnpm", ".nvm", ".volta", ".deno", ".pyenv", ".gitconfig", ".config/git"];
+/** Folders from the hidden home folder a command may need, mounted read-only. */
+const TOOLCHAINS = [
+  ".bun",
+  ".cargo",
+  ".rustup",
+  ".local/bin",
+  ".local/share/pnpm",
+  ".nvm",
+  ".volta",
+  ".deno",
+  ".pyenv",
+  ".gitconfig",
+  ".config/git",
+  // Personal skills, so their scripts can run (the rest of ~/.marv, with the API key, stays hidden).
+  ".marv/skills",
+];
 
 interface SandboxOptions {
   root: string;

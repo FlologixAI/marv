@@ -20,7 +20,8 @@ import { listModels, type ModelInfo } from "./provider/models.ts";
 import type { ChatTurn, Provider, Usage } from "./provider/types.ts";
 import { selection } from "./selection.ts";
 import { systemPrompt } from "./prompt.ts";
-import { runTool, toolSpecs } from "./tools/index.ts";
+import { skillMessage, type Skill } from "./skills.ts";
+import { runTool, toolSpecsFor } from "./tools/index.ts";
 import type { ApprovalRequest, Decision } from "./tools/types.ts";
 import type { Message } from "./types.ts";
 import { Approval } from "./ui/Approval.tsx";
@@ -56,6 +57,9 @@ interface Props {
   root: string;
   /** The project's AGENTS.md, read at startup. */
   instructions?: string;
+  /** Skills found at startup, and any that couldn't be loaded. */
+  skills?: Skill[];
+  skillProblems?: string[];
   /** 0 skips the splash entirely (used by tests). */
   splashMs?: number;
   /** Swappable so tests can inject an instant provider. */
@@ -77,6 +81,8 @@ export function App({
   cwd,
   root,
   instructions,
+  skills = [],
+  skillProblems = [],
   splashMs = 1200,
   makeProvider = createProvider,
   copy = copyToClipboard,
@@ -97,8 +103,14 @@ export function App({
   // …versus what the model sees: user and assistant turns, tool calls and results.
   // Only ever appended to (until /clear): see the prompt cache note in agent.ts.
   const conversation = useRef<ChatTurn[]>([]);
-  // Built once per session, so it's byte-identical in every request.
-  const system = useMemo(() => systemPrompt({ cwd, tools: toolSpecs.map((t) => t.name), instructions }), [cwd, instructions]);
+  // Built once per session, so they're byte-identical in every request.
+  const specs = useMemo(() => toolSpecsFor({ hasSkills: skills.length > 0 }), [skills]);
+  const system = useMemo(
+    () => systemPrompt({ cwd, tools: specs.map((t) => t.name), instructions, skills }),
+    [cwd, specs, instructions, skills],
+  );
+  // Skills show up in the / menu next to the built-in commands.
+  const menu = useMemo(() => [...commands, ...skills.map(({ name, description }) => ({ name, description }))], [skills]);
   // Token counts from the latest request, for the status bar.
   const [usage, setUsage] = useState<Usage | null>(null);
   const warnedFull = useRef(false);
@@ -160,9 +172,10 @@ export function App({
   }, []);
 
   const send = useCallback(
-    async (text: string) => {
+    // `forModel`: what the model gets, when it differs from what the user typed (a /skill).
+    async (text: string, forModel = text) => {
       addMessage({ role: "user", text });
-      conversation.current.push({ role: "user", text });
+      conversation.current.push({ role: "user", text: forModel });
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -201,8 +214,8 @@ export function App({
           provider,
           history: conversation.current,
           system,
-          tools: toolSpecs,
-          runTool: (call) => runTool(call, { root, signal: controller.signal, approve, sandbox: config.sandbox }),
+          tools: specs,
+          runTool: (call) => runTool(call, { root, signal: controller.signal, approve, sandbox: config.sandbox, skills }),
           signal: controller.signal,
         })) {
           switch (event.type) {
@@ -279,7 +292,7 @@ export function App({
         }
       }
     },
-    [provider, addMessage, updateMessage, system, root, approve, config.sandbox],
+    [provider, addMessage, updateMessage, system, specs, skills, root, approve, config.sandbox],
   );
 
   const handleSubmit = (raw: string) => {
@@ -293,7 +306,7 @@ export function App({
       void send(text);
       return;
     }
-    const action = runCommand(text, { config, configPath: shortenHome(store.path) });
+    const action = runCommand(text, { config, configPath: shortenHome(store.path), skills, skillProblems });
     switch (action.type) {
       case "print":
         addMessage({ role: "system", text: action.text, isError: action.isError });
@@ -311,6 +324,9 @@ export function App({
             ? "Thinking on: models may reason before answering (slower, often better)."
             : "Thinking off: models answer directly.",
         );
+        break;
+      case "skill":
+        void send(text, skillMessage(action.skill, action.args));
         break;
       case "sandbox":
         void saveConfig(
@@ -420,6 +436,13 @@ export function App({
   // Typing anything clears the highlight, like in a terminal.
   useInput(() => selection.clear(), { isActive: phase === "main" });
 
+  // Skills that couldn't be loaded are reported once, not silently skipped.
+  useEffect(() => {
+    if (skillProblems.length === 0) return;
+    const count = skillProblems.length;
+    addMessage({ role: "system", isError: true, text: `${count} skill${count === 1 ? "" : "s"} couldn't be loaded (see /skills):\n${skillProblems.join("\n")}` });
+  }, [skillProblems, addMessage]);
+
   const finishSplash = useCallback(() => setPhase("main"), []);
 
   // Marv runs in the alternate screen (see cli.tsx), so the root fills the
@@ -436,7 +459,7 @@ export function App({
   return (
     <Box flexDirection="column" height={rows} width={columns}>
       <ScrollView followKey={followKey} isActive={setupMode === null} onViewport={selection.setViewport}>
-        <Transcript items={items} version={version} cwd={cwd} instructions={Boolean(instructions)} />
+        <Transcript items={items} version={version} cwd={cwd} instructions={Boolean(instructions)} skills={skills.length} />
 
         {streaming !== null &&
           (streaming === "" ? (
@@ -469,7 +492,7 @@ export function App({
               onSubmit={handleSubmit}
               history={history}
               busy={busy}
-              commands={commands}
+              commands={menu}
             />
             <StatusBar
               model={provider.name}

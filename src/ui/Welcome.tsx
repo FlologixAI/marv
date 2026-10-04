@@ -8,12 +8,15 @@ export function Welcome({
   version,
   cwd,
   instructions,
+  skills = 0,
   animate = true,
 }: {
   version: string;
   cwd: string;
   /** An AGENTS.md was loaded. */
   instructions?: boolean;
+  /** How many skills were found. */
+  skills?: number;
   animate?: boolean;
 }) {
   return (
@@ -26,7 +29,11 @@ export function Welcome({
         </Text>
         <Text color={theme.dim}>/help for commands</Text>
         <Text color={theme.dim}>cwd: {cwd}</Text>
-        {instructions && <Text color={theme.dim}>AGENTS.md loaded</Text>}
+        {(instructions || skills > 0) && (
+          <Text color={theme.dim}>
+            {[instructions && "AGENTS.md loaded", skills > 0 && `${skills} skill${skills === 1 ? "" : "s"} (/skills)`].filter(Boolean).join(" · ")}
+          </Text>
+        )}
       </Box>
     </Box>
   );

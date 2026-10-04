@@ -62,6 +62,22 @@ describe("slash commands", () => {
     expect(runCommand("/sandbox maybe")).toMatchObject({ type: "print", isError: true });
   });
 
+  test("/skills lists skills, or explains how to add one", () => {
+    const review = { name: "review", description: "Review code.", body: "b", dir: "/x", files: [], source: "project" as const };
+    const listed = run("/skills", { ...ctx, skills: [review], skillProblems: ["bad/SKILL.md needs a description"] });
+    if (listed.type !== "print") throw new Error("expected print");
+    expect(listed.text).toContain("/review  Review code.");
+    expect(listed.text).toContain("Couldn't load:");
+    expect(run("/skills", ctx)).toMatchObject({ type: "print", text: expect.stringContaining("SKILL.md") });
+  });
+
+  test("/<skill> runs that skill with the rest as its request; built-in commands win", () => {
+    const review = { name: "review", description: "d", body: "b", dir: "/x", files: [], source: "project" as const };
+    const help = { ...review, name: "help" };
+    expect(run("/review src/app.tsx now", { ...ctx, skills: [review] })).toEqual({ type: "skill", skill: review, args: "src/app.tsx now" });
+    expect(run("/help", { ...ctx, skills: [help] }).type).toBe("print");
+  });
+
   test("/think toggles, or takes on/off", () => {
     expect(runCommand("/think")).toEqual({ type: "thinking", on: true });
     expect(run("/think", { ...ctx, config: { ...ctx.config, thinking: true } })).toEqual({ type: "thinking", on: false });

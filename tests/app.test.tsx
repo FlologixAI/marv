@@ -9,6 +9,7 @@ import { ConfigStore, type Config, type FileConfig } from "../src/config/config.
 import { mouse } from "../src/mouse.ts";
 import type { AgentEvent, ChatTurn, Provider, StreamOptions } from "../src/provider/types.ts";
 import { selection } from "../src/selection.ts";
+import type { Skill } from "../src/skills.ts";
 import { FakeProvider, ScriptedProvider } from "./fake-provider.ts";
 
 const ENTER = "\r";
@@ -49,6 +50,8 @@ function renderApp(
   copy = async (_text: string) => "test",
   makeProvider: (config: Config) => Provider = () => new FakeProvider(),
   instructions?: string,
+  skills: Skill[] = [],
+  skillProblems: string[] = [],
 ) {
   return render(
     <App
@@ -59,6 +62,8 @@ function renderApp(
       cwd="~/x"
       root={project}
       instructions={instructions}
+      skills={skills}
+      skillProblems={skillProblems}
       splashMs={splashMs}
       makeProvider={makeProvider}
       copy={copy}
@@ -361,6 +366,53 @@ describe("App", () => {
       expect(existsSync(join(project, "made.txt"))).toBe(false);
       expect(lastFrame()).toContain("Interrupted.");
       expect(lastFrame()).toContain("Type a message");
+    });
+  });
+
+  describe("skills", () => {
+    const review: Skill = { name: "review", description: "Review code for bugs.", body: "Look for off-by-one errors.", dir: "/x/review", files: [], source: "project" };
+
+    test("the model is offered the skill tool and the list of skills", async () => {
+      const model = new ScriptedProvider([[{ type: "text_delta", text: "ok" }, { type: "done" }]]);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model, undefined, [review]);
+      expect(lastFrame()).toContain("1 skill (/skills)");
+      await type(stdin, "hi");
+      await tick(100);
+      expect(model.requests[0]!.options.tools!.map((t) => t.name)).toContain("skill");
+      expect(model.requests[0]!.options.system).toContain("- review: Review code for bugs.");
+    });
+
+    test("without skills, there's no skill tool", async () => {
+      const model = new ScriptedProvider([[{ type: "text_delta", text: "ok" }, { type: "done" }]]);
+      const { stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "hi");
+      await tick(100);
+      expect(model.requests[0]!.options.tools!.map((t) => t.name)).not.toContain("skill");
+    });
+
+    test("/review args sends the skill's instructions with the request, but shows what you typed", async () => {
+      const model = new ScriptedProvider([[{ type: "text_delta", text: "Reviewed." }, { type: "done" }]]);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model, undefined, [review]);
+      stdin.write("/rev");
+      await tick();
+      expect(lastFrame()).toContain("/review"); // in the / menu
+      expect(lastFrame()).toContain("Review code for bugs.");
+      stdin.write("iew src/app.tsx");
+      await tick();
+      stdin.write(ENTER);
+      await tick(150);
+      const sent = model.requests[0]!.history.at(-1)!;
+      expect(sent.role).toBe("user");
+      expect((sent as { text: string }).text).toContain("Look for off-by-one errors.");
+      expect((sent as { text: string }).text).toContain("src/app.tsx");
+      expect(lastFrame()).toContain("> /review src/app.tsx");
+      expect(lastFrame()).not.toContain("off-by-one");
+    });
+
+    test("skills that couldn't be loaded are reported at startup", async () => {
+      const { lastFrame } = renderApp(LOCAL, 0, undefined, undefined, undefined, [], [".marv/skills/x/SKILL.md needs a description"]);
+      await tick();
+      expect(lastFrame()).toContain("1 skill couldn't be loaded (see /skills)");
     });
   });
 });

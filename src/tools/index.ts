@@ -8,10 +8,11 @@ import { projectPath } from "./files.ts";
 import { glob } from "./glob.ts";
 import { grep } from "./grep.ts";
 import { readFile } from "./read-file.ts";
+import { skill } from "./skill.ts";
 import { writeFile } from "./write-file.ts";
 import { ToolError, type Tool, type ToolContext, type ToolResult } from "./types.ts";
 
-export const tools: Tool[] = [readFile, glob, grep, editFile, writeFile, bash] as Tool[];
+export const tools: Tool[] = [readFile, glob, grep, skill, editFile, writeFile, bash] as Tool[];
 
 /**
  * What the model is told about each tool. Built once, so every request sends
@@ -21,6 +22,11 @@ export const toolSpecs: ToolSpec[] = tools.map((tool) => {
   const { $schema: _, ...parameters } = z.toJSONSchema(tool.input) as Record<string, unknown>;
   return { name: tool.name, description: tool.description, parameters };
 });
+
+/** The specs for a session: the skill tool only when there are skills to load. Same objects every time (cache). */
+export function toolSpecsFor({ hasSkills }: { hasSkills: boolean }): ToolSpec[] {
+  return hasSkills ? toolSpecs : toolSpecs.filter((spec) => spec.name !== "skill");
+}
 
 /** Runs a call. Never throws: every failure becomes a result the model can read and recover from. */
 export async function runTool(call: ToolCall, ctx: ToolContext): Promise<ToolResult & { label: string }> {

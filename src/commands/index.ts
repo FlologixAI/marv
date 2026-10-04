@@ -1,5 +1,6 @@
 import { maskKey, PRESETS, type Config } from "../config/config.ts";
 import { sandboxAvailable } from "../sandbox.ts";
+import type { Skill } from "../skills.ts";
 
 // Slash commands are handled locally and never reach the LLM.
 // Each command returns an action; the App decides how to apply it,
@@ -13,12 +14,17 @@ export type CommandAction =
   | { type: "model"; id?: string }
   | { type: "thinking"; on: boolean }
   | { type: "sandbox"; on: boolean }
+  /** The user ran a skill: /<name> <args>. */
+  | { type: "skill"; skill: Skill; args: string }
   | { type: "exit" };
 
 /** Read-only facts a command may need. */
 export interface CommandContext {
   config: Config;
   configPath: string;
+  skills?: Skill[];
+  /** Skills that couldn't be loaded, and why. */
+  skillProblems?: string[];
 }
 
 interface Command {
@@ -58,6 +64,11 @@ export const commands: Command[] = [
     },
   },
   {
+    name: "skills",
+    description: "List the skills Marv can use",
+    run: (_args, { skills = [], skillProblems = [] }) => ({ type: "print", text: skillsText(skills, skillProblems) }),
+  },
+  {
     name: "sandbox",
     description: "Show or set the bash sandbox (/sandbox on, /sandbox off)",
     run: (args, { config }) => {
@@ -87,6 +98,8 @@ export function runCommand(input: string, ctx: CommandContext): CommandAction {
   const [rawName = "", ...rest] = input.slice(1).trim().split(/\s+/);
   const name = rawName.toLowerCase();
   const command = commands.find((c) => c.name === name);
+  const skill = ctx.skills?.find((s) => s.name === name);
+  if (!command && skill) return { type: "skill", skill, args: rest.join(" ") };
   if (!command) {
     return { type: "print", text: `Unknown command: /${name}. Type /help for a list.`, isError: true };
   }
@@ -123,4 +136,12 @@ function sandboxStatus(config: Config): string {
   return sandboxAvailable()
     ? "on: bash runs in bubblewrap (project writable, home hidden, no network unless asked)"
     : "on, but bubblewrap isn't available here, so bash runs WITHOUT a sandbox";
+}
+
+function skillsText(skills: Skill[], problems: string[]): string {
+  const lines = skills.length
+    ? ["Skills (run one with /<name>, or let Marv pick):", ...skills.map((s) => `  /${s.name}  ${s.description}${s.source === "personal" ? "  (personal)" : ""}`)]
+    : ["No skills yet. Add one as .marv/skills/<name>/SKILL.md (or ~/.marv/skills/ for all projects):", "  ---", "  name: <name>", "  description: <what it does, and when to use it>", "  ---", "  <instructions>"];
+  if (problems.length) lines.push("", "Couldn't load:", ...problems.map((p) => `  ${p}`));
+  return lines.join("\n");
 }

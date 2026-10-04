@@ -20,6 +20,12 @@ describe("sandboxArgs", () => {
     expect(args).toContain("--chdir /home/me/proj");
   });
 
+  test("personal skills are readable, the rest of ~/.marv is not", () => {
+    const args = sandboxArgs({ ...base, network: false, exists: (p) => p.endsWith(".marv/skills") }).join(" ");
+    expect(args).toContain("--ro-bind /home/me/.marv/skills /home/me/.marv/skills");
+    expect(args).not.toContain("/home/me/.marv /home/me/.marv");
+  });
+
   test("network can be allowed per command", () => {
     expect(sandboxArgs({ ...base, network: true })).not.toContain("--unshare-net");
   });
