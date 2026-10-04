@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Box, Text } from "ink";
 import type { Message } from "../types.ts";
 import { Markdown } from "./Markdown.tsx";
@@ -19,7 +20,16 @@ function Gutter({ mark, color }: { mark: string; color: string }) {
 
 // How one transcript entry looks. Used both for finished messages
 // and for the assistant message that is still streaming in.
-export function MessageView({ message }: { message: Pick<Message, "role" | "text" | "isError" | "tool"> }) {
+// memo: when the transcript changes (a new message, a tool line updating),
+// only the entries whose message object changed re-render, not all of them.
+export const MessageView = memo(function MessageView({
+  message,
+  streaming = false,
+}: {
+  message: Pick<Message, "role" | "text" | "isError" | "tool">;
+  /** The assistant reply still coming in (parsed incrementally). */
+  streaming?: boolean;
+}) {
   switch (message.role) {
     case "user":
       return (
@@ -35,7 +45,7 @@ export function MessageView({ message }: { message: Pick<Message, "role" | "text
         <Box marginBottom={1}>
           <Gutter mark="●" color={theme.assistant} />
           <Box flexShrink={1} flexDirection="column">
-            <Markdown text={message.text} />
+            <Markdown text={message.text} streaming={streaming} />
           </Box>
         </Box>
       );
@@ -65,4 +75,4 @@ export function MessageView({ message }: { message: Pick<Message, "role" | "text
         </Box>
       );
   }
-}
+});

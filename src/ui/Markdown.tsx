@@ -3,7 +3,7 @@
 // rule, aligned tables. `marked` parses the text into tokens (paragraph,
 // list, code…); each token becomes Ink boxes, so wrapping and indentation
 // come from the layout instead of from the raw text.
-import { memo, useMemo, type ReactNode } from "react";
+import { memo, useMemo, useRef, type ReactNode } from "react";
 import { Box, Text } from "ink";
 import { marked, type Token, type Tokens } from "marked";
 import stringWidth from "string-width";
@@ -191,8 +191,59 @@ function Blocks({ tokens, depth, gap = 1 }: { tokens: Token[]; depth: number; ga
   );
 }
 
-/** Markdown text as terminal output. Re-parsed when the text changes (e.g. while a reply streams in). */
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  const tokens = useMemo(() => marked.lexer(text, { gfm: true }), [text]);
+const lex = (text: string) => marked.lexer(text, { gfm: true });
+const FENCE = /^ {0,3}(```|~~~)/;
+
+/**
+ * Parses a reply as it streams in without re-parsing all of it each time:
+ * parsing grows faster than the text (~20 ms at 11 KB, ~110 ms at 30 KB), and
+ * streaming re-renders many times a second. Text only ever grows at the end,
+ * so everything before the last finished block is parsed once and cached;
+ * each update parses just the unfinished end.
+ *
+ * A block ends at a blank line that is outside a code fence and followed by
+ * an unindented line (so a list item's indented continuation stays with it).
+ * Splitting there can turn one "loose" list into two lists, which looks the
+ * same; the finished reply is parsed whole anyway.
+ */
+export function createStreamLexer() {
+  let done = ""; // the parsed prefix: always ends at a block boundary, outside any fence
+  let doneTokens: Token[] = [];
+
+  return (text: string): Token[] => {
+    if (!text.startsWith(done)) {
+      done = "";
+      doneTokens = [];
+    }
+    // Find the last block boundary after the parsed prefix.
+    let boundary = done.length;
+    let inFence = false;
+    let lineStart = done.length;
+    for (let nl = text.indexOf("\n", lineStart); nl !== -1; nl = text.indexOf("\n", lineStart)) {
+      const line = text.slice(lineStart, nl);
+      if (FENCE.test(line)) inFence = !inFence;
+      const next = text[nl + 1];
+      if (line.trim() === "" && !inFence && next !== undefined && !/\s/.test(next)) boundary = nl + 1;
+      lineStart = nl + 1;
+    }
+    if (boundary > done.length) {
+      doneTokens = [...doneTokens, ...lex(text.slice(done.length, boundary))];
+      done = text.slice(0, boundary);
+    }
+    return [...doneTokens, ...lex(text.slice(done.length))];
+  };
+}
+
+/**
+ * Markdown text as terminal output. Finished messages are parsed once;
+ * `streaming` (the reply still coming in) parses incrementally.
+ */
+export const Markdown = memo(function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  const streamLexer = useRef<ReturnType<typeof createStreamLexer> | null>(null);
+  const tokens = useMemo(() => {
+    if (!streaming) return lex(text);
+    streamLexer.current ??= createStreamLexer();
+    return streamLexer.current(text);
+  }, [text, streaming]);
   return <Blocks tokens={tokens} depth={0} />;
 });

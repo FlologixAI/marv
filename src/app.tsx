@@ -33,6 +33,12 @@ import { Transcript, type TranscriptItem } from "./ui/Transcript.tsx";
 
 const EXIT_CONFIRM_MS = 1500;
 const NOTICE_MS = 2000;
+/**
+ * Streamed text is shown at most this often (Ink draws at most 30 frames/s
+ * anyway). Updating React on every token re-parsed the whole Markdown reply
+ * for frames nobody would see.
+ */
+const STREAM_FLUSH_MS = 33;
 /** Warn once when the conversation fills this much of a known context window. */
 const CONTEXT_WARNING = 0.85;
 
@@ -156,6 +162,17 @@ export function App({
       };
       const toolLines = new Map<string, number>();
       let lastUsage: Usage | null = null;
+      // Tokens accumulate in `reply`/`thought` and reach React in batches.
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
+      const flush = () => {
+        if (flushTimer) clearTimeout(flushTimer);
+        flushTimer = null;
+        setStreaming(reply);
+        setThinking(thought);
+      };
+      const scheduleFlush = () => {
+        flushTimer ??= setTimeout(flush, STREAM_FLUSH_MS);
+      };
 
       try {
         for await (const event of runAgent({
@@ -169,20 +186,22 @@ export function App({
           switch (event.type) {
             case "thinking_delta":
               thought += event.text;
-              setThinking(thought);
+              scheduleFlush();
               break;
             case "text_delta":
               if (thought && !thoughtMs) thoughtMs = Date.now() - stepStarted;
               reply += event.text;
-              setStreaming(reply);
+              scheduleFlush();
               break;
             case "assistant":
+              flush(); // a step ended: show everything before moving on
               noteThought();
               addMessage({ role: "assistant", text: event.text });
               reply = "";
               setStreaming("");
               break;
             case "tool_start":
+              flush();
               noteThought();
               setToolRunning(true);
               toolLines.set(
@@ -215,6 +234,7 @@ export function App({
       } catch (err) {
         addMessage({ role: "system", text: `Error: ${(err as Error).message}`, isError: true });
       } finally {
+        if (flushTimer) clearTimeout(flushTimer);
         noteThought();
         abortRef.current = null;
         setStreaming(null);
@@ -389,7 +409,7 @@ export function App({
           (streaming === "" ? (
             !toolRunning && <ThinkingView thought={thinking} />
           ) : (
-            <MessageView message={{ role: "assistant", text: streaming }} />
+            <MessageView message={{ role: "assistant", text: streaming }} streaming />
           ))}
       </ScrollView>
 

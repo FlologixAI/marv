@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Box } from "ink";
 import { cleanup, render } from "ink-testing-library";
 import stripAnsi from "strip-ansi";
-import { Markdown } from "../src/ui/Markdown.tsx";
+import { marked } from "marked";
+import { createStreamLexer, Markdown } from "../src/ui/Markdown.tsx";
 
 afterEach(cleanup);
 
@@ -87,5 +88,55 @@ describe("Markdown", () => {
 
   test("escaped characters come out plain", () => {
     expect(show("2 \\* 3 and a < b & c")).toEqual(["2 * 3 and a < b & c"]);
+  });
+});
+
+describe("createStreamLexer (parsing a reply as it streams in)", () => {
+  /** Feeds `text` in chunks, like a stream, and returns the final tokens. */
+  function stream(text: string, chunk = 7) {
+    const lex = createStreamLexer();
+    let tokens = lex("");
+    for (let i = chunk; i < text.length + chunk; i += chunk) tokens = lex(text.slice(0, i));
+    return tokens;
+  }
+  const types = (tokens: { type: string }[]) => tokens.filter((t) => t.type !== "space").map((t) => t.type);
+
+  test("gives the same blocks as parsing the whole text", () => {
+    const text = "Intro paragraph.\n\n## Heading\n\nSome `code` here.\n\n- one\n- two\n\nOutro.";
+    expect(types(stream(text))).toEqual(types(marked.lexer(text)));
+  });
+
+  test("never splits a code block at a blank line inside it", () => {
+    const text = "Before.\n\n```ts\nconst a = 1;\n\nconst b = 2;\n```\n\nAfter.";
+    const code = stream(text).filter((t) => t.type === "code");
+    expect(code).toHaveLength(1);
+    expect((code[0] as { text: string }).text).toBe("const a = 1;\n\nconst b = 2;");
+  });
+
+  test("keeps indented continuations with their list item", () => {
+    const text = "- item one\n\n  more about item one\n\n- item two";
+    const lists = stream(text).filter((t) => t.type === "list");
+    expect(JSON.stringify(lists)).toContain("more about item one");
+    expect(stream(text).some((t) => t.type === "code")).toBe(false); // not mistaken for an indented code block
+  });
+
+  test("starts over when the text is replaced (a new reply)", () => {
+    const lex = createStreamLexer();
+    lex("First reply.\n\nSecond paragraph.");
+    expect(types(lex("Something else entirely."))).toEqual(["paragraph"]);
+  });
+
+  test("re-parses only the unfinished end, so long replies stay fast", () => {
+    const sample = "Some text with `code` and **bold**.\n\n- a list item\n- another one\n\n";
+    const text = sample.repeat(300); // ~20 KB
+    const lex = createStreamLexer();
+    let slowest = 0;
+    for (let i = 50; i <= text.length; i += 50) {
+      const t0 = performance.now();
+      lex(text.slice(0, i));
+      slowest = Math.max(slowest, performance.now() - t0);
+    }
+    // Re-parsing the whole reply on each update takes ~30 ms at this size, and grows with it.
+    expect(slowest).toBeLessThan(10);
   });
 });

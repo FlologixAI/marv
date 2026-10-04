@@ -1,6 +1,13 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { EventEmitter } from "node:events";
-import { useEffect, useState } from "react";
+import { Profiler, useEffect, useState } from "react";
+import { render as renderForTest } from "ink-testing-library";
+import { App } from "../src/app.tsx";
+import { ConfigStore } from "../src/config/config.ts";
+import type { AgentEvent, Provider } from "../src/provider/types.ts";
 import { Box, render, Text } from "ink";
 import { renderOptions } from "../src/render-options.ts";
 import { ScrollView } from "../src/ui/ScrollView.tsx";
@@ -89,4 +96,35 @@ test("a keystroke stays fast however long the transcript gets", async () => {
   // Before off-screen messages were skipped, 600 entries took ~2400 ms per keystroke.
   expect(long).toBeLessThan(150);
   expect(long).toBeLessThan(short * 3 + 50);
+}, 30000);
+
+test("streamed tokens reach React in batches, not one render per token", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "marv-stream-"));
+  const tokens = 300;
+  const model: Provider = {
+    name: "fast",
+    async *stream() {
+      for (let i = 0; i < tokens; i++) {
+        await Bun.sleep(1); // a token every ~1 ms
+        yield { type: "text_delta", text: "word " } as AgentEvent;
+      }
+      yield { type: "done" } as AgentEvent;
+    },
+  };
+  let renders = 0;
+  const { stdin, lastFrame, unmount } = renderForTest(
+    <Profiler id="app" onRender={() => renders++}>
+      <App store={new ConfigStore(dir)} initialFile={{ provider: "ollama", model: "m" }} env={{}} version="0" cwd="~" root={dir} splashMs={0} makeProvider={() => model} loadModels={async () => []} />
+    </Profiler>,
+  );
+  await Bun.sleep(50);
+  stdin.write("go");
+  await Bun.sleep(20);
+  renders = 0;
+  stdin.write("\r");
+  while (!lastFrame()!.includes("word word word") || lastFrame()!.includes("ctrl+c to interrupt")) await Bun.sleep(10);
+  unmount();
+  await rm(dir, { recursive: true, force: true });
+  // Unbatched, this was one render per token (~300). At ~30 updates a second it's a few dozen at most.
+  expect(renders).toBeLessThan(tokens / 3);
 }, 30000);
