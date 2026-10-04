@@ -29,7 +29,7 @@ class FakeKeyboard extends EventEmitter {
   unref() {}
 }
 
-async function renderAt(width: number, message: Pick<Message, "role" | "text" | "tool">) {
+async function renderAt(width: number, message: Pick<Message, "role" | "text" | "tool" | "markdown">) {
   const stdout = new FakeTerminal(width);
   const { unmount } = render(
     <Box width={width} flexDirection="column">
@@ -71,6 +71,13 @@ describe("MessageView wrapping", () => {
     for (const width of [30, 57, 80, 121]) {
       for (const line of await renderAt(width, { role: "assistant", text })) expect(stringWidth(line)).toBeLessThanOrEqual(width);
     }
+  });
+
+  test("a Markdown notice (like /skills) wraps with a hanging indent", async () => {
+    const text = "- `/count-lines`: Count lines of code in the project, broken down by file type. Use when asked how big the project is.";
+    const lines = await renderAt(40, { role: "system", text, markdown: true });
+    expect(lines[0]).toStartWith("• /count-lines: Count");
+    for (const line of lines.slice(1)) expect(line).toStartWith("  "); // continuation lines stay under the text
   });
 
   test("tool lines stay within the terminal too", async () => {

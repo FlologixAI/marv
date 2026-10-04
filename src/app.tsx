@@ -309,7 +309,7 @@ export function App({
     const action = runCommand(text, { config, configPath: shortenHome(store.path), skills, skillProblems });
     switch (action.type) {
       case "print":
-        addMessage({ role: "system", text: action.text, isError: action.isError });
+        addMessage({ role: "system", text: action.text, isError: action.isError, markdown: action.markdown });
         break;
       case "clear":
         clearTranscript();

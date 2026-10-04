@@ -26,7 +26,7 @@ export const MessageView = memo(function MessageView({
   message,
   streaming = false,
 }: {
-  message: Pick<Message, "role" | "text" | "isError" | "tool">;
+  message: Pick<Message, "role" | "text" | "isError" | "tool" | "markdown">;
   /** The assistant reply still coming in (parsed incrementally). */
   streaming?: boolean;
 }) {
@@ -70,6 +70,13 @@ export const MessageView = memo(function MessageView({
       );
     }
     case "system":
+      if (message.markdown) {
+        return (
+          <Box marginBottom={1} flexDirection="column">
+            <Markdown text={message.text} />
+          </Box>
+        );
+      }
       return (
         <Box marginBottom={1}>
           <Text color={message.isError ? theme.error : theme.dim}>{message.text}</Text>

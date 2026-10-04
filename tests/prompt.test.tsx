@@ -7,6 +7,7 @@ const ENTER = "\r";
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const TAB = "\t";
+const RIGHT = "\x1b[C";
 const ESC = "\x1b";
 const tick = (ms = 30) => Bun.sleep(ms);
 
@@ -75,6 +76,16 @@ describe("slash command menu", () => {
     expect(lastFrame()).not.toContain("Toggle thinking"); // menu closes once there's a space
     await press(stdin, "on", ENTER);
     expect(onSubmit).toHaveBeenCalledWith("/think on");
+  });
+
+  test("→ completes the highlighted command too, so you can keep typing", async () => {
+    const onSubmit = mock();
+    const { stdin, lastFrame } = render(<Harness onSubmit={onSubmit} />);
+    await press(stdin, "/", DOWN, RIGHT); // highlight /model, then complete it
+    expect(lastFrame()).toContain("> /model");
+    expect(lastFrame()).not.toContain("Switch model"); // the menu closed
+    await press(stdin, "qwen3.5:9b", ENTER);
+    expect(onSubmit).toHaveBeenCalledWith("/model qwen3.5:9b");
   });
 
   test("Esc hides the menu, and Enter then submits exactly what was typed", async () => {

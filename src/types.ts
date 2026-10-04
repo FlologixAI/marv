@@ -18,5 +18,7 @@ export interface Message {
   text: string;
   /** Renders a system message in the error color. */
   isError?: boolean;
+  /** Render a system message as Markdown (lists get hanging indents). */
+  markdown?: boolean;
   tool?: ToolStatus;
 }

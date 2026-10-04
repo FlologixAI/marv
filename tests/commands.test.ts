@@ -66,7 +66,8 @@ describe("slash commands", () => {
     const review = { name: "review", description: "Review code.", body: "b", dir: "/x", files: [], source: "project" as const };
     const listed = run("/skills", { ...ctx, skills: [review], skillProblems: ["bad/SKILL.md needs a description"] });
     if (listed.type !== "print") throw new Error("expected print");
-    expect(listed.text).toContain("/review  Review code.");
+    expect(listed.markdown).toBe(true); // rendered as a list, with hanging indents
+    expect(listed.text).toContain("- `/review`: Review code.");
     expect(listed.text).toContain("Couldn't load:");
     expect(run("/skills", ctx)).toMatchObject({ type: "print", text: expect.stringContaining("SKILL.md") });
   });

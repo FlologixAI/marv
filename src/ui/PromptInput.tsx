@@ -59,7 +59,8 @@ export function PromptInput({ value, onChange, onSubmit, history, busy, commands
     if (menuOpen) {
       if (key.upArrow) setMenuIndex((i) => (i - 1 + matches.length) % matches.length);
       else if (key.downArrow) setMenuIndex((i) => (i + 1) % matches.length);
-      else if (key.tab && highlighted) replace(`/${highlighted.name} `);
+      // Tab or → completes the highlighted command (plus a space), so you can type its arguments.
+      else if ((key.tab || key.rightArrow) && highlighted) replace(`/${highlighted.name} `);
       else if (key.escape) setDismissedAt(value);
       return;
     }
@@ -113,7 +114,7 @@ export function PromptInput({ value, onChange, onSubmit, history, busy, commands
               </Text>
             );
           })}
-          <Text color={theme.dim}>{"  "}↑/↓ select · Enter run · Tab complete · Esc hide</Text>
+          <Text color={theme.dim}>{"  "}↑/↓ select · Enter run · Tab/→ complete · Esc hide</Text>
         </Box>
       )}
     </Box>

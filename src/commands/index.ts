@@ -7,7 +7,7 @@ import type { Skill } from "../skills.ts";
 // which keeps this module pure and easy to test.
 
 export type CommandAction =
-  | { type: "print"; text: string; isError?: boolean }
+  | { type: "print"; text: string; isError?: boolean; markdown?: boolean }
   | { type: "clear" }
   | { type: "setup" }
   /** With an id: switch straight to it. Without: open the model picker. */
@@ -66,7 +66,7 @@ export const commands: Command[] = [
   {
     name: "skills",
     description: "List the skills Marv can use",
-    run: (_args, { skills = [], skillProblems = [] }) => ({ type: "print", text: skillsText(skills, skillProblems) }),
+    run: (_args, { skills = [], skillProblems = [] }) => ({ type: "print", text: skillsText(skills, skillProblems), markdown: true }),
   },
   {
     name: "sandbox",
@@ -138,10 +138,17 @@ function sandboxStatus(config: Config): string {
     : "on, but bubblewrap isn't available here, so bash runs WITHOUT a sandbox";
 }
 
+/** Markdown, so long descriptions wrap with a hanging indent under each skill. */
 function skillsText(skills: Skill[], problems: string[]): string {
-  const lines = skills.length
-    ? ["Skills (run one with /<name>, or let Marv pick):", ...skills.map((s) => `  /${s.name}  ${s.description}${s.source === "personal" ? "  (personal)" : ""}`)]
-    : ["No skills yet. Add one as .marv/skills/<name>/SKILL.md (or ~/.marv/skills/ for all projects):", "  ---", "  name: <name>", "  description: <what it does, and when to use it>", "  ---", "  <instructions>"];
-  if (problems.length) lines.push("", "Couldn't load:", ...problems.map((p) => `  ${p}`));
-  return lines.join("\n");
+  const parts = skills.length
+    ? [
+        "**Skills**: run one with `/<name>`, or let Marv pick when a request matches.",
+        skills.map((s) => `- \`/${s.name}\`: ${s.description}${s.source === "personal" ? " *(personal)*" : ""}`).join("\n"),
+      ]
+    : [
+        "**No skills yet.** Add one as `.marv/skills/<name>/SKILL.md` in the project, or in `~/.marv/skills/` for all projects:",
+        "```markdown\n---\nname: <name>\ndescription: <what it does, and when to use it>\n---\n\n<instructions>\n```",
+      ];
+  if (problems.length) parts.push("**Couldn't load:**", problems.map((p) => `- ${p}`).join("\n"));
+  return parts.join("\n\n");
 }
