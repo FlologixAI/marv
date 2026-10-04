@@ -8,6 +8,7 @@ import { filterMouseInput, MOUSE_OFF, MOUSE_ON } from "./mouse.ts";
 import { shortenHome } from "./paths.ts";
 import { loadInstructions } from "./prompt.ts";
 import { renderOptions } from "./render-options.ts";
+import { selection } from "./selection.ts";
 
 const HELP = `Ekko v${pkg.version}: a terminal coding agent
 
@@ -69,6 +70,8 @@ const instance = render(
   />,
   renderOptions,
 );
+// Moving the selection highlight redraws the last frame instead of re-rendering.
+selection.repaint = instance.repaint;
 
 await instance.waitUntilExit();
 process.exit(0);

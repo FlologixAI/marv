@@ -1,6 +1,9 @@
 diff --git a/node_modules/ink/.bun-tag-2d4ebd6be5a4c917 b/.bun-tag-2d4ebd6be5a4c917
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/ink/.bun-tag-62faec16763ada06 b/.bun-tag-62faec16763ada06
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/build/ink.d.ts b/build/ink.d.ts
 index 3aca51bd7da892eb5cfb1df671c46155b5011892..913f265a6defefd0d79e119f0ffd9900d8922dad 100644
 --- a/build/ink.d.ts
@@ -14,10 +17,28 @@ index 3aca51bd7da892eb5cfb1df671c46155b5011892..913f265a6defefd0d79e119f0ffd9900
      waitUntilExit?: () => Promise<unknown>;
      maxFps?: number;
 diff --git a/build/ink.js b/build/ink.js
-index 550cdf00d2b15ac43f5d1cd708bc82c52c513569..b67eb2409e425b59c49dda7c108e79766fae1b43 100644
+index 550cdf00d2b15ac43f5d1cd708bc82c52c513569..c60cd82cbad9c867ef2125396bb9dfb7c2848090 100644
 --- a/build/ink.js
 +++ b/build/ink.js
-@@ -233,7 +233,9 @@ export default class Ink {
+@@ -207,6 +207,17 @@ export default class Ink {
+         this.fullStaticOutput = '';
+         this.hasRenderedStaticOutput = false;
+     };
++    // ekko patch: redraw the last frame with transformOutput applied again,
++    // without re-rendering React, re-running layout, or re-drawing nodes. For
++    // changes that only affect the transform (moving a selection highlight).
++    repaint = () => {
++        if (this.isUnmounted || this.isSuspended || !this.lastRawFrame) {
++            return;
++        }
++        const { output: rawOutput, height } = this.lastRawFrame;
++        const output = this.options.transformOutput ? this.options.transformOutput(rawOutput) : rawOutput;
++        this.renderFrame(output, height, '');
++    };
+     onRender = () => {
+         this.hasPendingThrottledRender = false;
+         if (this.isUnmounted) {
+@@ -233,7 +244,10 @@ export default class Ink {
              this.lastOutputToRender = '';
          }
          const startTime = performance.now();
@@ -25,6 +46,7 @@ index 550cdf00d2b15ac43f5d1cd708bc82c52c513569..b67eb2409e425b59c49dda7c108e7976
 +        const { output: rawOutput, outputHeight, staticOutput } = render(this.rootNode, this.isScreenReaderEnabled);
 +        // ekko patch: let the app post-process each frame (used for mouse text selection).
 +        const output = this.options.transformOutput ? this.options.transformOutput(rawOutput) : rawOutput;
++        this.lastRawFrame = { output: rawOutput, height: outputHeight };
          const renderTime = performance.now() - startTime;
          this.renderFrame(output, outputHeight, staticOutput);
          this.options.onRender?.({ renderTime });
@@ -84,7 +106,7 @@ index 6f48cd03d15de0f56aed72978579acea84f473ee..4bededd0f1191aaed919ad1990a9c016
      }
      if (isClipped) {
 diff --git a/build/render.d.ts b/build/render.d.ts
-index 63c59ec147214d98a2be2f73df390fd3ee59bb40..642a49f6068a3d9c185c5c8f76e369f3279c1ad5 100644
+index 63c59ec147214d98a2be2f73df390fd3ee59bb40..0f29ebe0a0c4897247f786d61c004a7884b53cc3 100644
 --- a/build/render.d.ts
 +++ b/build/render.d.ts
 @@ -48,6 +48,10 @@ export type RenderOptions = {
@@ -98,3 +120,27 @@ index 63c59ec147214d98a2be2f73df390fd3ee59bb40..642a49f6068a3d9c185c5c8f76e369f3
      Enable screen reader support. See https://github.com/vadimdemedes/ink/blob/master/readme.md#screen-reader-support
  
      @default process.env['INK_SCREEN_READER'] === 'true'
+@@ -171,6 +175,10 @@ export type Instance = {
+     Clear output.
+     */
+     clear: () => void;
++    /**
++    (ekko patch) Redraw the last frame with `transformOutput` applied again, without re-rendering.
++    */
++    repaint: () => void;
+ };
+ /**
+ Mount a component and render the output.
+diff --git a/build/render.js b/build/render.js
+index d531880f4be477a7f299c27f27a12a01ac7c1cce..c0b447314632817e4ff7386a12b4bdfcffc54db6 100644
+--- a/build/render.js
++++ b/build/render.js
+@@ -33,6 +33,8 @@ const render = (node, options) => {
+             instance.unmount();
+         },
+         clear: instance.clear,
++        // ekko patch: see Ink#repaint.
++        repaint: instance.repaint,
+     };
+ };
+ export default render;

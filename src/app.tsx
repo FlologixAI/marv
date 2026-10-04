@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, useApp, useInput, useWindowSize } from "ink";
 import { runAgent } from "./agent.ts";
 import { copyToClipboard } from "./clipboard.ts";
@@ -124,6 +124,7 @@ export function App({
   }, []);
 
   const clearTranscript = useCallback(() => {
+    selection.reset();
     conversation.current = [];
     warnedFull.current = false;
     setUsage(null);
@@ -333,33 +334,28 @@ export function App({
     return () => clearTimeout(timer);
   }, [notice]);
 
-  // Mouse selection: drag to highlight, release to copy. The highlight is drawn
-  // by selection.transformOutput (hooked into Ink in cli.tsx); subscribing here
-  // re-renders on every change so Ink produces a frame with the new highlight.
-  useSyncExternalStore(selection.subscribe, () => selection.current);
+  // Mouse selection: drag to highlight (past the top or bottom to auto-scroll),
+  // release to copy. The selection store draws the highlight itself through
+  // Ink's patched transformOutput/repaint, so a drag doesn't re-render React.
   useEffect(() => {
     const onMouse = (event: MouseEvent) => {
       switch (event.type) {
         case "press":
-          selection.start({ x: event.x, y: event.y });
+          selection.press({ x: event.x, y: event.y });
           break;
         case "drag":
-          selection.extend({ x: event.x, y: event.y });
+          selection.drag({ x: event.x, y: event.y });
           break;
         case "release": {
-          const text = selection.text();
-          if (!text) {
-            selection.clear(); // just a click
-            break;
-          }
+          const text = selection.release();
+          if (!text) break; // just a click
           void copy(text).then((how) =>
             setNotice(how === "osc52" ? `Sent ${text.length} chars to the terminal clipboard` : `Copied ${text.length} chars`),
           );
           break;
         }
         case "scroll":
-          selection.clear(); // the text under the highlight is moving
-          break;
+          break; // the highlight is attached to the text, so it scrolls along
       }
     };
     mouse.on("event", onMouse);
@@ -386,7 +382,7 @@ export function App({
 
   return (
     <Box flexDirection="column" height={rows} width={columns}>
-      <ScrollView followKey={followKey} isActive={setupMode === null}>
+      <ScrollView followKey={followKey} isActive={setupMode === null} onViewport={selection.setViewport}>
         <Transcript items={items} version={version} cwd={cwd} instructions={Boolean(instructions)} />
 
         {streaming !== null &&

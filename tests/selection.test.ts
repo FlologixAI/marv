@@ -1,87 +1,134 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import stripAnsi from "strip-ansi";
-import { highlightLines, SelectionStore, selectedText, type Selection } from "../src/selection.ts";
+import { highlightRow, SelectionStore, type Viewport } from "../src/selection.ts";
 
 const INVERSE = "\x1b[7m";
-const sel = (ax: number, ay: number, fx: number, fy: number): Selection => ({
-  anchor: { x: ax, y: ay },
-  focus: { x: fx, y: fy },
+
+/** A transcript of numbered lines; the screen shows `height` of them from `scrollTop`, then a prompt line. */
+const TRANSCRIPT = Array.from({ length: 30 }, (_, i) => `line ${i}`);
+
+function screenFor(store: SelectionStore, scrollTop: number, height = 5) {
+  const viewport: Viewport = { top: 0, height, scrollTop, contentHeight: TRANSCRIPT.length, width: 40 };
+  store.setViewport(viewport, (rows) => scrolled.push(rows));
+  return [...TRANSCRIPT.slice(scrollTop, scrollTop + height), "> prompt"].join("\n");
+}
+let scrolled: number[] = [];
+afterEach(() => {
+  scrolled = [];
 });
 
-const SCREEN = ["hello world", "second line   ", "third"];
+/** Renders a frame and returns the rows that were highlighted (by their plain text). */
+function highlighted(frame: string): string[] {
+  return frame.split("\n").filter((line) => line.includes(INVERSE)).map((line) => stripAnsi(line));
+}
 
-describe("selectedText", () => {
-  test("selects within one row, including the cell under the cursor", () => {
-    expect(selectedText(SCREEN, sel(0, 0, 4, 0))).toBe("hello");
-  });
-
-  test("works when dragging backwards", () => {
-    expect(selectedText(SCREEN, sel(4, 0, 0, 0))).toBe("hello");
-  });
-
-  test("spans rows like a terminal: rest of first row, whole middle rows, start of last", () => {
-    expect(selectedText(SCREEN, sel(6, 0, 2, 2))).toBe("world\nsecond line\nthi");
-  });
-
-  test("ignores colors and trims trailing spaces on each row", () => {
-    expect(selectedText(["\x1b[31mred\x1b[39m text   "], sel(0, 0, 20, 0))).toBe("red text");
+describe("highlightRow", () => {
+  test("inverts only the given columns and keeps the original colors around them", () => {
+    const line = highlightRow("\x1b[31mabcdef\x1b[39m", [2, 4]);
+    expect(stripAnsi(line)).toBe("abcdef");
+    expect(line).toContain(`${INVERSE}cd\x1b[27m`);
+    expect(line).toStartWith("\x1b[31mab");
   });
 
   test("counts wide characters by their screen width", () => {
-    // "●" is 1 column, "日" is 2.
-    expect(selectedText(["● 日本 ok"], sel(2, 0, 5, 0))).toBe("日本");
-  });
-});
-
-describe("highlightLines", () => {
-  test("inverts only the selected cells and keeps the text identical", () => {
-    const out = highlightLines(SCREEN, sel(6, 0, 2, 1));
-    expect(out.map((l) => stripAnsi(l))).toEqual(SCREEN);
-    expect(out[0]).toBe(`hello ${INVERSE}world\x1b[27m`);
-    expect(out[1]).toStartWith(`${INVERSE}sec\x1b[27m`);
-    expect(out[2]).toBe("third");
-  });
-
-  test("keeps the original colors around the highlight", () => {
-    const [line] = highlightLines(["\x1b[31mabcdef\x1b[39m"], sel(2, 0, 3, 0));
-    expect(stripAnsi(line!)).toBe("abcdef");
-    expect(line).toContain(`${INVERSE}cd\x1b[27m`);
-    expect(line).toStartWith("\x1b[31mab");
+    expect(stripAnsi(highlightRow("● 日本 ok", [2, 6]))).toBe("● 日本 ok");
+    expect(highlightRow("● 日本 ok", [2, 6])).toContain(`${INVERSE}日本\x1b[27m`);
   });
 });
 
 describe("SelectionStore", () => {
-  test("highlights the frame while selecting and copies text from the unhighlighted frame", () => {
+  test("drag selects like a terminal and copies the text", () => {
     const store = new SelectionStore();
-    const frame = SCREEN.join("\n");
-    expect(store.transformOutput(frame)).toBe(frame);
-
-    store.start({ x: 0, y: 0 });
-    store.extend({ x: 4, y: 0 });
-    expect(store.transformOutput(frame)).toContain(INVERSE);
-    expect(store.text()).toBe("hello");
-
-    store.clear();
-    expect(store.transformOutput(frame)).toBe(frame);
-    expect(store.text()).toBe("");
+    store.transformOutput(screenFor(store, 0));
+    store.press({ x: 5, y: 1 }); // "line 1", from the "1"
+    store.drag({ x: 3, y: 3 }); // to "line" of "line 3"
+    expect(highlighted(store.transformOutput(screenFor(store, 0)))).toEqual(["line 1", "line 2", "line 3"]);
+    expect(store.release()).toBe("1\nline 2\nline");
   });
 
-  test("a click without a drag is not a selection", () => {
+  test("the highlight stays on the same text when the transcript scrolls", () => {
     const store = new SelectionStore();
-    store.transformOutput(SCREEN.join("\n"));
-    store.start({ x: 3, y: 0 });
-    expect(store.text()).toBe("");
+    store.transformOutput(screenFor(store, 10));
+    store.press({ x: 0, y: 0 });
+    store.drag({ x: 5, y: 0 }); // "line 10"
+    const after = store.transformOutput(screenFor(store, 8)); // scrolled up 2 rows: "line 10" is now on screen row 2
+    expect(after.split("\n")[2]).toContain(INVERSE);
+    expect(highlighted(after)).toEqual(["line 10"]);
   });
 
-  test("notifies subscribers when the selection changes", () => {
+  test("copies rows that have scrolled out of view, from what was seen", () => {
     const store = new SelectionStore();
-    let calls = 0;
-    const unsubscribe = store.subscribe(() => calls++);
-    store.start({ x: 0, y: 0 });
-    store.extend({ x: 1, y: 0 });
-    store.clear();
-    store.clear(); // already clear: no change, no notification
-    unsubscribe();
-    expect(calls).toBe(3);
+    store.transformOutput(screenFor(store, 0)); // rows 0-4 seen
+    store.press({ x: 0, y: 1 });
+    store.transformOutput(screenFor(store, 5)); // scrolled: rows 5-9 seen, row 1 now off screen
+    store.drag({ x: 5, y: 2 }); // to "line 7"
+    expect(store.release()).toBe("line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7");
+  });
+
+  test("dragging below the transcript auto-scrolls and extends the selection", async () => {
+    const store = new SelectionStore({ autoScrollMs: 10 });
+    store.transformOutput(screenFor(store, 0));
+    store.press({ x: 0, y: 3 });
+    store.drag({ x: 2, y: 5 }); // the prompt row, just below the 5-row transcript
+    await Bun.sleep(45);
+    expect(scrolled.length).toBeGreaterThanOrEqual(2);
+    expect(scrolled.every((rows) => rows === 1)).toBe(true);
+
+    store.drag({ x: 2, y: 4 }); // back inside: auto-scroll stops
+    const count = scrolled.length;
+    await Bun.sleep(30);
+    expect(scrolled.length).toBe(count);
+    store.release();
+  });
+
+  test("dragging above the transcript scrolls up", async () => {
+    const store = new SelectionStore({ autoScrollMs: 10 });
+    store.transformOutput(screenFor(store, 10, 5));
+    store.setViewport({ top: 2, height: 5, scrollTop: 10, contentHeight: 30, width: 40 }, (rows) => scrolled.push(rows));
+    store.press({ x: 0, y: 4 });
+    store.drag({ x: 0, y: 0 }); // above the transcript's first row
+    await Bun.sleep(25);
+    expect(scrolled[0]).toBe(-1);
+    store.release();
+  });
+
+  test("a click without a drag selects nothing, and a click outside the transcript is ignored", () => {
+    const store = new SelectionStore();
+    store.transformOutput(screenFor(store, 0));
+    store.press({ x: 3, y: 1 });
+    expect(store.release()).toBe("");
+    store.press({ x: 3, y: 5 }); // the prompt row
+    store.drag({ x: 8, y: 5 });
+    expect(store.release()).toBe("");
+  });
+
+  test("selection changes ask for a repaint, batched per burst of mouse events", async () => {
+    const store = new SelectionStore();
+    let repaints = 0;
+    store.repaint = () => repaints++;
+    store.transformOutput(screenFor(store, 0));
+    store.press({ x: 0, y: 0 });
+    for (let x = 1; x < 10; x++) store.drag({ x, y: 1 });
+    await Bun.sleep(0);
+    expect(repaints).toBe(1);
+  });
+
+  test("a resize forgets the remembered rows and the selection (the text reflows)", () => {
+    const store = new SelectionStore();
+    store.transformOutput(screenFor(store, 0));
+    store.press({ x: 0, y: 0 });
+    store.drag({ x: 4, y: 0 });
+    store.setViewport({ top: 0, height: 5, scrollTop: 0, contentHeight: 30, width: 60 }, () => {});
+    store.transformOutput(TRANSCRIPT.slice(0, 5).join("\n"));
+    expect(store.release()).toBe("");
+  });
+
+  test("reset forgets everything (used by /clear)", () => {
+    const store = new SelectionStore();
+    store.transformOutput(screenFor(store, 0));
+    store.press({ x: 0, y: 0 });
+    store.drag({ x: 4, y: 0 });
+    store.reset();
+    expect(store.release()).toBe("");
   });
 });

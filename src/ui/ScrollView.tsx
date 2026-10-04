@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Box, useBoxMetrics, useInput } from "ink";
 import { mouse, type MouseEvent } from "../mouse.ts";
+import type { Viewport } from "../selection.ts";
 
 const WHEEL_ROWS = 3;
 
@@ -9,6 +10,8 @@ interface Props {
   /** Change this to jump back to the bottom (e.g. when the user sends a message). */
   followKey?: number;
   isActive?: boolean;
+  /** Told where the viewport is and how far it's scrolled on every render, plus how to scroll it (used by mouse selection). */
+  onViewport?: (viewport: Viewport, scrollBy: (rows: number) => void) => void;
 }
 
 // The alternate screen has no terminal scrollback, so Ekko scrolls its own
@@ -18,7 +21,7 @@ interface Props {
 // It follows the bottom (like a chat) until you press PgUp or scroll up. Then
 // it stays where you scrolled, even while a reply streams in, until you scroll
 // back down or `followKey` changes.
-export function ScrollView({ children, followKey = 0, isActive = true }: Props) {
+export function ScrollView({ children, followKey = 0, isActive = true, onViewport }: Props) {
   const viewportRef = useRef(null);
   const contentRef = useRef(null);
   const viewport = useBoxMetrics(viewportRef);
@@ -42,6 +45,12 @@ export function ScrollView({ children, followKey = 0, isActive = true }: Props) 
       const next = Math.max(0, current + rows);
       return next >= maxTop ? null : next;
     });
+
+  // The frame Ink draws after this render uses exactly this scrollTop.
+  onViewport?.(
+    { top: viewport.top, height: viewport.clientHeight, scrollTop, contentHeight: content.height, width: viewport.width },
+    scrollBy,
+  );
 
   useInput(
     (_input, key) => {
