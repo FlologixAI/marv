@@ -158,11 +158,20 @@ subagents. A subagent's approval requests carry `ApprovalRequest.agent` (who ask
   main folder has uncommitted changes: they won't be in the worktree.
 - **Create:** `git worktree add -b marv/<slug>-<4 hex> <dir> HEAD`; slug from
   `description` (lowercase, dashes, ≤40 chars).
-- **Sandbox:** `sandboxArgs` gains `extraWritable: string[]`; for a worktree
-  subagent it holds the repo's common git dir (`git rev-parse
-  --git-common-dir`, absolute), because commits write objects and refs there.
-  Caveat (accepted, documented): with `.git` writable, a subagent could move
-  other branches; the same trust an approved `bash` in the main folder has.
+- **Sandbox:** `sandboxArgs` gains `writable: string[]` and `readOnly: string[]`
+  (mounted in that order, both after the hidden home). A worktree subagent's
+  bash gets the repo's common git dir (`git rev-parse --git-common-dir`) as
+  writable, because commits write objects and refs there, and read-only on top:
+  `.git/hooks`, `.git/config`, and its admin folder's `commondir` and `gitdir`.
+  Why: hooks and config can make git run programs, and they'd run *outside*
+  the sandbox the next time Marv or the user runs git; the pointers could
+  redirect git to a fake repository. Second layer: Marv's own git calls on a
+  worktree name its admin folder explicitly (`--git-dir`, `--work-tree`,
+  ignoring the worktree's `.git` file) and pass `-c core.hooksPath=/dev/null
+  -c core.fsmonitor=false`. Remaining, accepted: with `.git` writable a
+  subagent could move other branches (e.g. `git branch -f main`), which the
+  parent's merge would show; the same trust an approved `bash` in the main
+  folder has.
 - **Finish** (always, including error and abort): if the worktree has
   uncommitted changes, `git add -A && git commit -m "marv: <description>"`
   (`(interrupted)` appended after an abort or error), run outside the sandbox

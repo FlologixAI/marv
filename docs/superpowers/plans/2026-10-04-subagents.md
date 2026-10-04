@@ -1027,7 +1027,7 @@ git commit -m "Prompts: list agent types; a system prompt for subagents"
 ```ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ToolError } from "../src/tools/types.ts";
@@ -1079,7 +1079,32 @@ describe("createWorktree / finishWorktree", () => {
     expect(existsSync(join(wt.dir, "a.txt"))).toBe(true);
     expect(git(repo, "branch", "--list", wt.branch)).toContain(wt.branch);
     expect(wt.gitDir).toBe(join(repo, ".git"));
+    expect(wt.adminDir).toStartWith(join(repo, ".git", "worktrees"));
+    expect(wt.protectedPaths).toEqual([
+      join(repo, ".git", "hooks"),
+      join(repo, ".git", "config"),
+      join(wt.adminDir, "commondir"),
+      join(wt.adminDir, "gitdir"),
+    ]);
     expect(wt.base).toBe(git(repo, "rev-parse", "--short", "HEAD"));
+  });
+
+  test("Marv's own git ignores a planted hook and a redirected .git file", async () => {
+    const wt = createWorktree({ root: repo, baseDir: trees, description: "Sneaky" });
+    const pwned = join(trees, "PWNED");
+    // A hook in the shared .git. (In real use the sandbox keeps hooks read-only; this is the second layer.)
+    await mkdir(join(wt.gitDir, "hooks"), { recursive: true });
+    await writeFile(join(wt.gitDir, "hooks", "pre-commit"), `#!/bin/sh\ntouch ${pwned}\n`, { mode: 0o755 });
+    // The worktree's .git file pointed at a fake repository whose config runs a program.
+    const fake = join(trees, "fake.git");
+    git(trees, "init", "-q", "--bare", fake);
+    git(fake, "config", "core.fsmonitor", `touch ${pwned}`);
+    await writeFile(join(wt.dir, ".git"), `gitdir: ${fake}\n`);
+    await writeFile(join(wt.dir, "b.txt"), "bee\n");
+
+    finishWorktree(wt, { description: "Sneaky", interrupted: false });
+    expect(existsSync(pwned)).toBe(false);
+    expect(git(repo, "show", `${wt.branch}:b.txt`)).toBe("bee"); // committed to the real branch, not the fake repo
   });
 
   test("leftover changes are committed, the folder removed, the branch kept", async () => {
@@ -1142,6 +1167,15 @@ export interface Worktree {
   repo: string;
   /** The repository's shared .git folder: the sandbox must let commits write there. */
   gitDir: string;
+  /** This worktree's own folder inside the shared .git (.git/worktrees/<id>). */
+  adminDir: string;
+  /**
+   * Inside the writable .git, what the sandbox keeps read-only: hooks and
+   * config would make git run a program outside the sandbox the next time
+   * anyone uses it, and the admin folder's pointers could redirect git to a
+   * fake repository.
+   */
+  protectedPaths: string[];
 }
 
 export const NOT_A_REPO =
@@ -1152,6 +1186,18 @@ function git(cwd: string, ...args: string[]): { ok: boolean; out: string } {
   const ok = result.exitCode === 0;
   return { ok, out: (ok ? result.stdout : result.stderr).toString().trim() };
 }
+
+/** Hooks and fsmonitor are how a repository makes git run a program; Marv's own git calls on worktrees turn both off. */
+const NO_PROGRAMS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
+
+/**
+ * Git on a worktree a subagent has used, run by Marv outside the sandbox. It
+ * names the worktree's admin folder itself instead of trusting the `.git` file
+ * in the worktree, which the subagent could have rewritten to point at a fake
+ * repository with its own config.
+ */
+const worktreeGit = (wt: Worktree, ...args: string[]) => git(wt.dir, "--git-dir", wt.adminDir, "--work-tree", wt.dir, ...NO_PROGRAMS, ...args);
+const repoGit = (wt: Worktree, ...args: string[]) => git(wt.repo, ...NO_PROGRAMS, ...args);
 
 /** What a worktree would start from, and how many uncommitted changes it would leave behind. Null outside a repo. */
 export function inspectRepo(root: string): { base: string; dirty: number } | null {
@@ -1181,8 +1227,11 @@ export function createWorktree({ root, baseDir, description }: { root: string; b
   mkdirSync(baseDir, { recursive: true });
   const added = git(root, "worktree", "add", "-q", "-b", branch, dir, "HEAD");
   if (!added.ok) throw new ToolError(`Couldn't create a worktree: ${added.out}`);
-  const common = git(dir, "rev-parse", "--git-common-dir").out;
-  return { dir, branch, base: repo.base, repo: root, gitDir: isAbsolute(common) ? common : resolve(dir, common) };
+  const absolute = (path: string) => (isAbsolute(path) ? path : resolve(dir, path));
+  const gitDir = absolute(git(dir, "rev-parse", "--git-common-dir").out);
+  const adminDir = absolute(git(dir, "rev-parse", "--git-dir").out);
+  const protectedPaths = [join(gitDir, "hooks"), join(gitDir, "config"), join(adminDir, "commondir"), join(adminDir, "gitdir")];
+  return { dir, branch, base: repo.base, repo: root, gitDir, adminDir, protectedPaths };
 }
 
 /**
@@ -1192,16 +1241,16 @@ export function createWorktree({ root, baseDir, description }: { root: string; b
  * no work is lost.
  */
 export function finishWorktree(wt: Worktree, { description, interrupted }: { description: string; interrupted: boolean }): string {
-  if (git(wt.dir, "status", "--porcelain").out) {
-    git(wt.dir, "add", "-A");
-    const committed = git(wt.dir, "commit", "-q", "-m", `marv: ${description}${interrupted ? " (interrupted)" : ""}`);
+  if (worktreeGit(wt, "status", "--porcelain").out) {
+    worktreeGit(wt, "add", "-A");
+    const committed = worktreeGit(wt, "commit", "-q", "-m", `marv: ${description}${interrupted ? " (interrupted)" : ""}`);
     if (!committed.ok) return `Branch ${wt.branch}: couldn't commit the remaining changes (${committed.out}). They're still in ${wt.dir}.`;
   }
-  const count = Number(git(wt.repo, "rev-list", "--count", `${wt.base}..${wt.branch}`).out) || 0;
-  const removed = git(wt.repo, "worktree", "remove", wt.dir);
+  const count = Number(repoGit(wt, "rev-list", "--count", `${wt.base}..${wt.branch}`).out) || 0;
+  const removed = repoGit(wt, "worktree", "remove", wt.dir);
   if (!removed.ok) return `Branch ${wt.branch}: ${count} commit(s) on ${wt.base}. The worktree couldn't be removed (${removed.out}); it's still at ${wt.dir}.`;
   if (count === 0) {
-    git(wt.repo, "branch", "-D", wt.branch);
+    repoGit(wt, "branch", "-D", wt.branch);
     return `No changes (branch ${wt.branch} removed).`;
   }
   return `Branch ${wt.branch}: ${count} commit${count === 1 ? "" : "s"} on ${wt.base}. Review it with \`git diff ${wt.base}...${wt.branch}\`, then merge it.`;
@@ -1580,6 +1629,7 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
     sandbox: ctx.sandbox,
     skills: ctx.skills,
     writable: worktree ? [worktree.gitDir] : undefined,
+    readOnly: worktree?.protectedPaths,
     approve: subagentApprove(ctx.approve, who, Boolean(worktree) && sandboxed),
   };
   const system = subagentPrompt({
@@ -2421,7 +2471,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sandboxAvailable } from "../src/sandbox.ts";
 import { runCommand } from "../src/tools/bash.ts";
-import { createWorktree, finishWorktree } from "../src/worktree.ts";
+import { createWorktree, finishWorktree, type Worktree } from "../src/worktree.ts";
 
 // The real sandbox, so only where bubblewrap works.
 const sandboxed = sandboxAvailable() ? test : test.skip;
@@ -2448,8 +2498,19 @@ afterEach(async () => {
   await rm(trees, { recursive: true, force: true });
 });
 
-const inWorktree = (wt: { dir: string; gitDir: string }, command: string, network = false) =>
-  runCommand({ command, root: wt.dir, sandbox: true, network, timeoutMs: 120_000, writable: [wt.gitDir] });
+const inWorktree = (wt: Worktree, command: string, network = false) =>
+  runCommand({ command, root: wt.dir, sandbox: true, network, timeoutMs: 120_000, writable: [wt.gitDir], readOnly: wt.protectedPaths });
+
+sandboxed("inside the sandbox, the shared .git's hooks and config stay read-only", async () => {
+  const wt = createWorktree({ root: repo, baseDir: trees, description: "escape check" });
+  const hook = await inWorktree(wt, `echo 'touch /tmp/x' > ${join(wt.gitDir, "hooks", "pre-commit")}`);
+  expect(hook.exitCode).not.toBe(0);
+  const config = await inWorktree(wt, "git config core.fsmonitor 'touch /tmp/x'");
+  expect(config.exitCode).not.toBe(0);
+  const pointer = await inWorktree(wt, `echo /elsewhere > ${join(wt.adminDir, "commondir")}`);
+  expect(pointer.exitCode).not.toBe(0);
+  finishWorktree(wt, { description: "escape check", interrupted: false });
+}, 130_000);
 
 sandboxed("commits and runs tests inside the sandbox", async () => {
   const wt = createWorktree({ root: repo, baseDir: trees, description: "sandbox check" });
