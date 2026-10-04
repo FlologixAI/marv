@@ -2387,8 +2387,9 @@ The `tool_start` and `tool_end` cases:
             }
 ```
 
-In the `finally` block replace `setToolRunning(false);` with:
+In the `finally` block replace `setToolRunning(false);` with the lines below. The abort matters when the loop ends early (an exception): subagents still running in a parallel group would otherwise carry on unseen, and could even ask for approvals.
 ```tsx
+        controller.abort(); // stop anything still running (no-op after a normal end)
         setToolsRunning(0);
         setAgentsRunning(0);
 ```
