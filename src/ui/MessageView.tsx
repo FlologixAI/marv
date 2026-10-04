@@ -18,7 +18,7 @@ function Gutter({ mark, color }: { mark: string; color: string }) {
 
 // How one transcript entry looks. Used both for finished messages
 // and for the assistant message that is still streaming in.
-export function MessageView({ message }: { message: Pick<Message, "role" | "text" | "isError"> }) {
+export function MessageView({ message }: { message: Pick<Message, "role" | "text" | "isError" | "tool"> }) {
   switch (message.role) {
     case "user":
       return (
@@ -38,6 +38,25 @@ export function MessageView({ message }: { message: Pick<Message, "role" | "text
           </Box>
         </Box>
       );
+    case "tool": {
+      // ● read_file src/app.tsx
+      //   ⎿ 250 lines
+      const tool = message.tool!;
+      const failed = tool.status === "error";
+      return (
+        <Box flexDirection="column" marginBottom={1}>
+          <Text wrap="truncate-end">
+            <Text color={failed ? theme.error : theme.accent}>{"● "}</Text>
+            <Text bold>{message.text}</Text>
+            <Text color={theme.dim}> {tool.label}</Text>
+          </Text>
+          <Text color={failed ? theme.error : theme.dim} wrap="truncate-end">
+            {"  ⎿ "}
+            {tool.status === "running" ? "running…" : tool.summary}
+          </Text>
+        </Box>
+      );
+    }
     case "system":
       return (
         <Box marginBottom={1}>

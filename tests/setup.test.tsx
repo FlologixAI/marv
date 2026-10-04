@@ -112,12 +112,12 @@ describe("Setup", () => {
   });
 
   test("/model mode: just the picker, keeps the key and endpoint", async () => {
-    const initial = { provider: "ollama" as const, model: "tiny:1b", baseUrl: "http://gpu:11434/v1" };
+    const initial = { provider: "ollama" as const, model: "tiny:1b", baseUrl: "http://gpu:11434" };
     const { stdin, lastFrame, onComplete } = renderSetup({ initial, startStep: "model" });
     await tick();
     expect(lastFrame()).toContain("Switch Ollama model");
     await press(stdin, "qwen", ENTER);
-    expect(onComplete).toHaveBeenCalledWith({ provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://gpu:11434/v1" });
+    expect(onComplete).toHaveBeenCalledWith({ provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://gpu:11434" });
   });
 
   test("Esc cancels", async () => {

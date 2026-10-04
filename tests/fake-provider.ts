@@ -15,3 +15,22 @@ export class FakeProvider implements Provider {
     yield { type: "done" };
   }
 }
+
+/** A model that follows a script: each request gets the next list of events. Records every request. */
+export class ScriptedProvider implements Provider {
+  readonly name = "scripted";
+  requests: { history: ChatTurn[]; options: StreamOptions }[] = [];
+  constructor(
+    private steps: AgentEvent[][],
+    readonly contextLength?: number,
+  ) {}
+
+  async *stream(history: ChatTurn[], options: StreamOptions = {}) {
+    this.requests.push({ history: structuredClone(history), options });
+    const step = this.steps.shift() ?? [{ type: "text_delta", text: "(script ended)" }, { type: "done" }];
+    for (const event of step) {
+      await Bun.sleep(0);
+      yield event as AgentEvent;
+    }
+  }
+}

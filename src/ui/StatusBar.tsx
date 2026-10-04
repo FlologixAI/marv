@@ -1,5 +1,21 @@
 import { Box, Text } from "ink";
+import type { Usage } from "../provider/types.ts";
 import { theme } from "./theme.ts";
+
+const tokens = (n: number) =>
+  n < 1000 ? String(n) : n < 100_000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : `${Math.round(n / 1000)}k`;
+
+/**
+ * The latest request's size: against the context window when we know it
+ * (Ollama), plus how much the provider served from its prompt cache when it
+ * reports that (OpenRouter).
+ */
+export function formatUsage(usage: Usage, contextLength?: number): string {
+  const used = usage.promptTokens + usage.completionTokens;
+  const size = contextLength ? `${tokens(used)}/${tokens(contextLength)} ctx` : `${tokens(usage.promptTokens)} tokens`;
+  if (usage.cachedTokens === undefined || usage.promptTokens === 0) return size;
+  return `${size} · ${Math.round((100 * usage.cachedTokens) / usage.promptTokens)}% cached`;
+}
 
 interface Props {
   model: string;
@@ -8,10 +24,12 @@ interface Props {
   confirmExit: boolean;
   /** A short-lived message, e.g. after copying a selection. */
   notice?: string | null;
+  /** From formatUsage(), once a request has been made. */
+  usage?: string;
   busy: boolean;
 }
 
-export function StatusBar({ model, cwd, confirmExit, notice, busy }: Props) {
+export function StatusBar({ model, cwd, usage, confirmExit, notice, busy }: Props) {
   const hint = confirmExit
     ? "Press ctrl+c again to exit"
     : notice
@@ -27,6 +45,7 @@ export function StatusBar({ model, cwd, confirmExit, notice, busy }: Props) {
       </Box>
       {/* On a narrow terminal the model/cwd side gets cut off, not the hint. */}
       <Text color={theme.dim} wrap="truncate-start">
+        {usage && `${usage} · `}
         {model} · {cwd}
       </Text>
     </Box>

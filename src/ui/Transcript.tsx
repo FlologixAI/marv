@@ -9,15 +9,17 @@ interface Props {
   items: TranscriptItem[];
   version: string;
   cwd: string;
+  /** Whether an AGENTS.md was loaded (shown in the welcome banner). */
+  instructions?: boolean;
 }
 
 // In the alternate screen every frame is redrawn from the React tree, so the
 // whole transcript stays mounted (inside a ScrollView) instead of being printed
 // once with <Static>. memo() skips re-rendering it on every keystroke.
-export const Transcript = memo(function Transcript({ items, version, cwd }: Props) {
+export const Transcript = memo(function Transcript({ items, version, cwd, instructions }: Props) {
   return items.map((item) =>
     item.kind === "welcome" ? (
-      <Welcome key={item.id} version={version} cwd={cwd} />
+      <Welcome key={item.id} version={version} cwd={cwd} instructions={instructions} />
     ) : (
       <MessageView key={item.id} message={item.message} />
     ),

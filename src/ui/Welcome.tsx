@@ -4,7 +4,18 @@ import { theme } from "./theme.ts";
 
 // The banner at the top of the session: the ekko martian, with the
 // welcome text centered beside it.
-export function Welcome({ version, cwd, animate = true }: { version: string; cwd: string; animate?: boolean }) {
+export function Welcome({
+  version,
+  cwd,
+  instructions,
+  animate = true,
+}: {
+  version: string;
+  cwd: string;
+  /** An AGENTS.md was loaded. */
+  instructions?: boolean;
+  animate?: boolean;
+}) {
   return (
     <Box borderStyle="round" borderColor={theme.accent} paddingX={2} marginBottom={1} gap={3}>
       <Martian animate={animate} />
@@ -15,6 +26,7 @@ export function Welcome({ version, cwd, animate = true }: { version: string; cwd
         </Text>
         <Text color={theme.dim}>/help for commands</Text>
         <Text color={theme.dim}>cwd: {cwd}</Text>
+        {instructions && <Text color={theme.dim}>AGENTS.md loaded</Text>}
       </Box>
     </Box>
   );

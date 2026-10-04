@@ -6,6 +6,7 @@ import { App } from "./app.tsx";
 import { ConfigError, ConfigStore, defaultConfigDir } from "./config/config.ts";
 import { filterMouseInput, MOUSE_OFF, MOUSE_ON } from "./mouse.ts";
 import { shortenHome } from "./paths.ts";
+import { loadInstructions } from "./prompt.ts";
 import { renderOptions } from "./render-options.ts";
 
 const HELP = `ekko v${pkg.version}: a terminal coding agent
@@ -33,6 +34,10 @@ if (args.includes("--help") || args.includes("-h")) {
   process.exit(0);
 }
 
+// The project is wherever ekko was started; the tools can't reach outside it.
+const root = process.cwd();
+const instructions = await loadInstructions(root);
+
 const store = new ConfigStore(defaultConfigDir(process.env));
 let initialFile;
 try {
@@ -53,7 +58,15 @@ if (process.stdin.isTTY && process.stdout.isTTY) {
 }
 
 const instance = render(
-  <App store={store} initialFile={initialFile} env={process.env} version={pkg.version} cwd={shortenHome(process.cwd())} />,
+  <App
+    store={store}
+    initialFile={initialFile}
+    env={process.env}
+    version={pkg.version}
+    cwd={shortenHome(root)}
+    root={root}
+    instructions={instructions}
+  />,
   renderOptions,
 );
 

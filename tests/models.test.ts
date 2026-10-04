@@ -41,7 +41,7 @@ describe("listModels", () => {
       'http://localhost:11434/api/show {"model":"qwen3.5:9b"}': { capabilities: ["completion", "tools"] },
       'http://localhost:11434/api/show {"model":"tiny:1b"}': { capabilities: ["completion"] },
     });
-    expect(await listModels({ provider: "ollama", baseUrl: "http://localhost:11434/v1" }, fetch)).toEqual([
+    expect(await listModels({ provider: "ollama", baseUrl: "http://localhost:11434" }, fetch)).toEqual([
       { id: "qwen3.5:9b", tools: true, local: true },
       { id: "tiny:1b", tools: false, local: true },
     ]);
@@ -49,7 +49,7 @@ describe("listModels", () => {
 
   test("a failed request becomes a readable error", async () => {
     const fetch = fakeFetch({});
-    await expect(listModels({ provider: "ollama", baseUrl: "http://localhost:11434/v1" }, fetch)).rejects.toThrow(
+    await expect(listModels({ provider: "ollama", baseUrl: "http://localhost:11434" }, fetch)).rejects.toThrow(
       "http://localhost:11434/api/tags returned 404",
     );
   });

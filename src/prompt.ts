@@ -1,15 +1,49 @@
 // The system prompt: the instructions the model gets before the conversation.
 // It's the only way to tell the model who it is and what situation it's in.
-// It grows as ekko does: tool instructions arrive in milestone 4, project
-// instructions (EKKO.md) in milestone 7.
+//
+// It's built once per session and must stay byte-identical across requests:
+// it's the start of every prompt, so any change would invalidate the
+// provider's prompt cache for everything after it.
+import { join } from "node:path";
 
-export function systemPrompt({ cwd, date = new Date() }: { cwd: string; date?: Date }): string {
-  return `You are ekko, a coding assistant running in the user's terminal.
+export const INSTRUCTIONS_FILE = "AGENTS.md";
+const MAX_INSTRUCTION_CHARS = 20_000;
+
+interface PromptInput {
+  /** Shown to the model, e.g. "~/Projects/ekko-agent". */
+  cwd: string;
+  /** Names of the tools on offer. */
+  tools: string[];
+  /** The project's AGENTS.md, if any. */
+  instructions?: string;
+  date?: Date;
+}
+
+export function systemPrompt({ cwd, tools, instructions, date = new Date() }: PromptInput): string {
+  const base = `You are ekko, a coding agent running in the user's terminal.
 
 Working directory: ${cwd}
 Today's date: ${date.toISOString().slice(0, 10)}
 
-You can't read files, run commands, or browse the web yet. If a request needs that, say so and ask the user to paste what you need.
+You can explore the project with these tools: ${tools.join(", ")}. Look at the actual code before answering questions about it, and don't guess what a file contains. Start narrow: grep for a name or glob for a file pattern, then read the relevant part of a file rather than whole large files. Paths are relative to the project root.
 
-Your replies are shown as plain text in a terminal, so keep them concise and avoid heavy Markdown (no tables or headings). Code blocks are fine.`;
+You can't edit files or run commands yet. If a task needs that, say exactly what to change and where.
+
+Your replies are shown as plain text in a terminal, so keep them concise and avoid heavy Markdown (no tables or headings). Code blocks are fine. Point to code as path:line.`;
+
+  return instructions ? `${base}\n\n# Project instructions (from ${INSTRUCTIONS_FILE})\n\n${instructions}` : base;
+}
+
+/**
+ * The project's AGENTS.md (the convention many coding agents share for
+ * project-specific instructions), read once at startup. Capped so a huge
+ * file can't eat the context window.
+ */
+export async function loadInstructions(root: string): Promise<string | undefined> {
+  const file = Bun.file(join(root, INSTRUCTIONS_FILE));
+  if (!(await file.exists())) return undefined;
+  const text = (await file.text()).trim();
+  if (!text) return undefined;
+  if (text.length <= MAX_INSTRUCTION_CHARS) return text;
+  return `${text.slice(0, MAX_INSTRUCTION_CHARS)}\n\n(${INSTRUCTIONS_FILE} was cut off here: it's longer than ${MAX_INSTRUCTION_CHARS} characters.)`;
 }

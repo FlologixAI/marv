@@ -98,7 +98,8 @@ function configText({ config, configPath }: CommandContext): string {
     `Provider:  ${preset.label}`,
     `Model:     ${config.model}`,
     `Thinking:  ${config.thinking ? "on" : "off"}`,
-    ...(config.baseUrl ? [`Endpoint:  ${config.baseUrl}`] : []),
+    `Endpoint:  ${config.baseUrl}`,
+    ...(config.provider === "ollama" ? [`Context:   ${config.contextLength.toLocaleString("en-US")} tokens (contextLength in the config file)`] : []),
     `API key:   ${key}`,
     `File:      ${configPath}`,
   ].join("\n");

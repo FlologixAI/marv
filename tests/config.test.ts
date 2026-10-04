@@ -44,7 +44,7 @@ describe("resolveConfig", () => {
   const file = { provider: "openrouter" as const, model: "z-ai/glm-5.3", apiKey: "sk-from-file" };
 
   test("uses the file and the preset endpoint when no env vars are set", () => {
-    expect(resolveConfig(file, {})).toEqual({ ...file, baseUrl: PRESETS.openrouter.baseUrl, apiKeySource: "file", thinking: false });
+    expect(resolveConfig(file, {})).toEqual({ ...file, baseUrl: PRESETS.openrouter.baseUrl, apiKeySource: "file", thinking: false, contextLength: 32768 });
   });
 
   test("env vars override the file", () => {
@@ -58,17 +58,17 @@ describe("resolveConfig", () => {
 
   test("Ollama needs no key, even if one is saved or set", () => {
     const config = resolveConfig({ provider: "ollama", model: "qwen3.5:9b", apiKey: "sk-or" }, { OPENROUTER_API_KEY: "k" });
-    expect(config).toMatchObject({ baseUrl: "http://localhost:11434/v1", apiKey: undefined, apiKeySource: undefined });
+    expect(config).toMatchObject({ baseUrl: "http://localhost:11434", apiKey: undefined, apiKeySource: undefined });
   });
 
   test("Ollama honors OLLAMA_HOST, with or without a scheme", () => {
     const ollama = { provider: "ollama" as const, model: "m" };
-    expect(resolveConfig(ollama, { OLLAMA_HOST: "10.0.0.5:11434" }).baseUrl).toBe("http://10.0.0.5:11434/v1");
-    expect(resolveConfig(ollama, { OLLAMA_HOST: "https://box.lan/" }).baseUrl).toBe("https://box.lan/v1");
+    expect(resolveConfig(ollama, { OLLAMA_HOST: "10.0.0.5:11434" }).baseUrl).toBe("http://10.0.0.5:11434");
+    expect(resolveConfig(ollama, { OLLAMA_HOST: "https://box.lan/" }).baseUrl).toBe("https://box.lan");
   });
 
   test("a baseUrl in the file wins over the preset", () => {
-    expect(resolveConfig({ provider: "ollama", model: "m", baseUrl: "http://gpu:11434/v1" }, {}).baseUrl).toBe("http://gpu:11434/v1");
+    expect(resolveConfig({ provider: "ollama", model: "m", baseUrl: "http://gpu:11434" }, {}).baseUrl).toBe("http://gpu:11434");
   });
 });
 

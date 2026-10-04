@@ -1,9 +1,9 @@
 import { PRESETS, type Config } from "../config/config.ts";
+import { OllamaProvider } from "./ollama.ts";
 import { OpenAICompatProvider } from "./openai-compat.ts";
 import type { Provider } from "./types.ts";
 
 // The one place that maps a config to a concrete Provider.
-// OpenRouter and Ollama are the same adapter pointed at different URLs.
 export function createProvider(config: Config): Provider {
   switch (config.provider) {
     case "openrouter":
@@ -17,14 +17,12 @@ export function createProvider(config: Config): Provider {
         headers: { "X-Title": "ekko" },
       });
     case "ollama":
-      return new OpenAICompatProvider({
-        name: `ollama · ${config.model}`,
-        label: PRESETS.ollama.label,
+      // Ollama's native API, so we can set the context window (its default is 4096 tokens).
+      return new OllamaProvider({
         baseUrl: config.baseUrl,
         model: config.model,
-        offlineHint: "Is Ollama running? Start it with `ollama serve`.",
-        // Local thinking models can reason for minutes; "none" makes them answer directly.
-        body: config.thinking ? {} : { reasoning_effort: "none" },
+        contextLength: config.contextLength,
+        thinking: config.thinking,
       });
   }
 }

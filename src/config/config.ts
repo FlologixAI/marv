@@ -13,7 +13,7 @@ export type ProviderId = (typeof PROVIDERS)[number];
 
 interface Preset {
   label: string;
-  /** The OpenAI-compatible endpoint. */
+  /** Where the API lives. */
   baseUrl: string;
   /** Env var that overrides the saved key; absent when no key is needed. */
   keyEnv?: string;
@@ -22,7 +22,8 @@ interface Preset {
   defaultModel: string;
 }
 
-// Each provider is just a preset for the same OpenAI-compatible adapter.
+// OpenRouter is reached through the OpenAI-compatible adapter, Ollama through
+// its native API (see src/provider/index.ts).
 export const PRESETS: Record<ProviderId, Preset> = {
   openrouter: {
     label: "OpenRouter",
@@ -31,7 +32,7 @@ export const PRESETS: Record<ProviderId, Preset> = {
     keyUrl: "openrouter.ai/settings/keys",
     defaultModel: "anthropic/claude-sonnet-5.5",
   },
-  ollama: { label: "Ollama", baseUrl: "http://localhost:11434/v1", defaultModel: "" },
+  ollama: { label: "Ollama", baseUrl: "http://localhost:11434", defaultModel: "" },
 };
 
 const isProvider = (value: unknown): value is ProviderId => PROVIDERS.includes(value as ProviderId);
@@ -47,7 +48,12 @@ const FileConfigSchema = z.object({
   baseUrl: z.string().url().optional(),
   /** Let thinking models reason before answering (slower, often better). */
   thinking: z.boolean().optional(),
+  /** Ollama's context window in tokens (num_ctx). Bigger holds more code but needs more VRAM. */
+  contextLength: z.number().int().min(2048).optional(),
 });
+
+/** 32k fits fully on a 12 GB GPU for 9-12B models and holds a fair amount of code. */
+export const DEFAULT_CONTEXT_LENGTH = 32768;
 
 /** Exactly what is stored on disk. */
 export type FileConfig = z.infer<typeof FileConfigSchema>;
@@ -60,6 +66,7 @@ export interface Config {
   apiKey?: string;
   apiKeySource?: "env" | "file";
   thinking: boolean;
+  contextLength: number;
 }
 
 export type Env = Record<string, string | undefined>;
@@ -115,6 +122,7 @@ export function resolveConfig(file: FileConfig | null, env: Env): Config {
     apiKey,
     apiKeySource: envKey ? "env" : apiKey ? "file" : undefined,
     thinking: file?.thinking ?? false,
+    contextLength: file?.contextLength ?? DEFAULT_CONTEXT_LENGTH,
   };
 }
 
@@ -122,7 +130,7 @@ export function resolveConfig(file: FileConfig | null, env: Env): Config {
 function ollamaUrl(host: string | undefined): string {
   if (!host?.trim()) return PRESETS.ollama.baseUrl;
   const url = /^https?:\/\//.test(host) ? host : `http://${host}`;
-  return `${url.replace(/\/+$/, "")}/v1`;
+  return url.replace(/\/+$/, "");
 }
 
 /** First run, no provider chosen, a provider that needs a key we don't have, or no model picked yet. */

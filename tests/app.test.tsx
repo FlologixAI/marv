@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanup, render } from "ink-testing-library";
 import { App } from "../src/app.tsx";
 import { ConfigStore, type Config, type FileConfig } from "../src/config/config.ts";
 import { mouse } from "../src/mouse.ts";
-import type { ChatTurn, Provider, StreamOptions } from "../src/provider/types.ts";
+import type { AgentEvent, ChatTurn, Provider, StreamOptions } from "../src/provider/types.ts";
 import { selection } from "../src/selection.ts";
-import { FakeProvider } from "./fake-provider.ts";
+import { FakeProvider, ScriptedProvider } from "./fake-provider.ts";
 
 const ENTER = "\r";
 const DOWN = "\x1b[B";
@@ -26,15 +26,20 @@ async function type(stdin: { write: (data: string) => void }, text: string) {
 const LOCAL: FileConfig = { provider: "ollama", model: "qwen3.5:9b" };
 
 let dir: string;
+let project: string;
 let store: ConfigStore;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "ekko-app-"));
   store = new ConfigStore(dir);
+  // The project the agent works in: its tools can read files here.
+  project = await mkdtemp(join(tmpdir(), "ekko-project-"));
+  await writeFile(join(project, "notes.txt"), "remember the milk\n");
 });
 afterEach(async () => {
   cleanup();
   await rm(dir, { recursive: true, force: true });
+  await rm(project, { recursive: true, force: true });
 });
 
 function renderApp(
@@ -42,6 +47,7 @@ function renderApp(
   splashMs = 0,
   copy = async (_text: string) => "test",
   makeProvider: (config: Config) => Provider = () => new FakeProvider(),
+  instructions?: string,
 ) {
   return render(
     <App
@@ -50,6 +56,8 @@ function renderApp(
       env={{}}
       version="9.9.9"
       cwd="~/x"
+      root={project}
+      instructions={instructions}
       splashMs={splashMs}
       makeProvider={makeProvider}
       copy={copy}
@@ -216,5 +224,76 @@ describe("App", () => {
     await tick(100);
     expect(await store.load()).toEqual({ provider: "ollama", model: "qwen3.5:9b", thinking: true });
     expect(lastFrame()).toContain("Thinking on");
+  });
+
+  test("runs the tools the model asks for and shows them in the transcript", async () => {
+    const model = new ScriptedProvider([
+      [{ type: "tool_call", call: { id: "c1", name: "read_file", arguments: '{"path":"notes.txt"}' } }, { type: "done" }],
+      [{ type: "text_delta", text: "It says to remember the milk." }, { type: "done" }],
+    ]);
+    const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+    await type(stdin, "what's in my notes?");
+    await tick(200);
+
+    const frame = lastFrame()!;
+    expect(frame).toContain("● read_file notes.txt");
+    expect(frame).toContain("⎿ 1 line");
+    expect(frame).toContain("It says to remember the milk.");
+    // The real tool ran on the project and its output went back to the model.
+    expect(model.requests[1]!.history.at(-1)).toEqual({ role: "tool", callId: "c1", name: "read_file", text: "    1\tremember the milk" });
+    expect(model.requests[0]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "glob", "grep"]);
+  });
+
+  test("a failing tool shows its error, and the model gets it to recover from", async () => {
+    const model = new ScriptedProvider([
+      [{ type: "tool_call", call: { id: "c1", name: "read_file", arguments: '{"path":"/etc/passwd"}' } }, { type: "done" }],
+      [{ type: "text_delta", text: "I can't read that." }, { type: "done" }],
+    ]);
+    const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+    await type(stdin, "read /etc/passwd");
+    await tick(200);
+    expect(lastFrame()).toContain("is outside the project");
+    expect(model.requests[1]!.history.at(-1)).toMatchObject({ role: "tool", text: expect.stringContaining("outside the project") });
+  });
+
+  test("shows token usage and cache hits in the status bar", async () => {
+    const model = new ScriptedProvider([
+      [
+        { type: "text_delta", text: "ok" },
+        { type: "usage", usage: { promptTokens: 1200, completionTokens: 30, cachedTokens: 1000 } },
+        { type: "done" },
+      ],
+    ]);
+    const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+    await type(stdin, "hi");
+    await tick(150);
+    expect(lastFrame()).toContain("1.2k tokens · 83% cached");
+  });
+
+  test("warns once when the context window is nearly full", async () => {
+    const step = (): AgentEvent[] => [
+      { type: "text_delta", text: "ok" },
+      { type: "usage", usage: { promptTokens: 900, completionTokens: 10 } },
+      { type: "done" },
+    ];
+    const model = new ScriptedProvider([step(), step()], 1000);
+    const { frames, lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+    await type(stdin, "one");
+    await tick(150);
+    expect(lastFrame()).toContain("Context is 91% full");
+    expect(lastFrame()).toContain("910/1k ctx");
+    await type(stdin, "two");
+    await tick(150);
+    expect(lastFrame()!.match(/Context is \d+% full/g)).toHaveLength(1);
+    expect(frames.length).toBeGreaterThan(0);
+  });
+
+  test("puts AGENTS.md in the system prompt and says it's loaded", async () => {
+    const model = new ScriptedProvider([[{ type: "text_delta", text: "ok" }, { type: "done" }]]);
+    const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model, "Always answer in haiku.");
+    expect(lastFrame()).toContain("AGENTS.md loaded");
+    await type(stdin, "hi");
+    await tick(100);
+    expect(model.requests[0]!.options.system).toContain("Always answer in haiku.");
   });
 });

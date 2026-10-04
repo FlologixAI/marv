@@ -9,6 +9,7 @@ const ctx: CommandContext = {
     apiKey: "sk-or-v1-abcdefghijklmnop-wxyz",
     apiKeySource: "env",
     thinking: false,
+    contextLength: 32768,
   },
   configPath: "~/.ekko/config.json",
 };
@@ -44,7 +45,7 @@ describe("slash commands", () => {
   });
 
   test("/config says when no key is needed (Ollama)", () => {
-    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://localhost:11434/v1", thinking: false } });
+    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://localhost:11434", thinking: false, contextLength: 32768 } });
     expect(action).toMatchObject({ type: "print", text: expect.stringContaining("API key:   not needed") });
   });
 

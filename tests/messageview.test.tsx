@@ -29,7 +29,7 @@ class FakeKeyboard extends EventEmitter {
   unref() {}
 }
 
-async function renderAt(width: number, message: Pick<Message, "role" | "text">) {
+async function renderAt(width: number, message: Pick<Message, "role" | "text" | "tool">) {
   const stdout = new FakeTerminal(width);
   const { unmount } = render(
     <Box width={width} flexDirection="column">
@@ -63,4 +63,9 @@ describe("MessageView wrapping", () => {
       });
     }
   }
+
+  test("tool lines stay within the terminal too", async () => {
+    const lines = await renderAt(40, { role: "tool", text: "read_file", tool: { label: "src/a/very/long/path/to/some/file.ts", status: "done", summary: "1 line" } });
+    for (const line of lines) expect(stringWidth(line)).toBeLessThanOrEqual(40);
+  });
 });

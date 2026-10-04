@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Box, useApp, useInput, useWindowSize } from "ink";
+import { runAgent } from "./agent.ts";
 import { copyToClipboard } from "./clipboard.ts";
 import { commands, isCommand, runCommand } from "./commands/index.ts";
 import {
@@ -16,21 +17,24 @@ import { shortenHome } from "./paths.ts";
 import { mouse, type MouseEvent } from "./mouse.ts";
 import { createProvider } from "./provider/index.ts";
 import { listModels, type ModelInfo } from "./provider/models.ts";
-import type { ChatTurn, Provider } from "./provider/types.ts";
+import type { ChatTurn, Provider, Usage } from "./provider/types.ts";
 import { selection } from "./selection.ts";
 import { systemPrompt } from "./prompt.ts";
+import { runTool, toolSpecs } from "./tools/index.ts";
 import type { Message } from "./types.ts";
 import { MessageView } from "./ui/MessageView.tsx";
 import { PromptInput } from "./ui/PromptInput.tsx";
 import { ScrollView } from "./ui/ScrollView.tsx";
 import { Setup } from "./ui/Setup.tsx";
 import { Splash } from "./ui/Splash.tsx";
-import { StatusBar } from "./ui/StatusBar.tsx";
+import { formatUsage, StatusBar } from "./ui/StatusBar.tsx";
 import { ThinkingView } from "./ui/ThinkingView.tsx";
 import { Transcript, type TranscriptItem } from "./ui/Transcript.tsx";
 
 const EXIT_CONFIRM_MS = 1500;
 const NOTICE_MS = 2000;
+/** Warn once when the conversation fills this much of a known context window. */
+const CONTEXT_WARNING = 0.85;
 
 interface Props {
   store: ConfigStore;
@@ -38,7 +42,12 @@ interface Props {
   initialFile: FileConfig | null;
   env: Env;
   version: string;
+  /** For display, e.g. "~/Projects/ekko-agent". */
   cwd: string;
+  /** Absolute project root; the tools can't reach outside it. */
+  root: string;
+  /** The project's AGENTS.md, read at startup. */
+  instructions?: string;
   /** 0 skips the splash entirely (used by tests). */
   splashMs?: number;
   /** Swappable so tests can inject an instant provider. */
@@ -58,6 +67,8 @@ export function App({
   env,
   version,
   cwd,
+  root,
+  instructions,
   splashMs = 1200,
   makeProvider = createProvider,
   copy = copyToClipboard,
@@ -75,12 +86,20 @@ export function App({
 
   // What the user sees (includes help text, errors, the welcome banner)…
   const [items, setItems] = useState<TranscriptItem[]>([{ kind: "welcome", id: "welcome-0" }]);
-  // …versus what the model sees: only real user/assistant turns.
+  // …versus what the model sees: user and assistant turns, tool calls and results.
+  // Only ever appended to (until /clear): see the prompt cache note in agent.ts.
   const conversation = useRef<ChatTurn[]>([]);
+  // Built once per session, so it's byte-identical in every request.
+  const system = useMemo(() => systemPrompt({ cwd, tools: toolSpecs.map((t) => t.name), instructions }), [cwd, instructions]);
+  // Token counts from the latest request, for the status bar.
+  const [usage, setUsage] = useState<Usage | null>(null);
+  const warnedFull = useRef(false);
 
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [streaming, setStreaming] = useState<string | null>(null);
+  // Set while a tool runs (its transcript line shows the progress, so no "Thinking…").
+  const [toolRunning, setToolRunning] = useState(false);
   // The model's reasoning while it thinks. Shown live, never sent back to the model.
   const [thinking, setThinking] = useState("");
   const [confirmExit, setConfirmExit] = useState(false);
@@ -95,10 +114,19 @@ export function App({
   const addMessage = useCallback((message: Omit<Message, "id">) => {
     const id = nextId.current++;
     setItems((prev) => [...prev, { kind: "message", id: `msg-${id}`, message: { id, ...message } }]);
+    return id;
+  }, []);
+
+  const updateMessage = useCallback((id: number, patch: Partial<Message>) => {
+    setItems((prev) =>
+      prev.map((item) => (item.kind === "message" && item.message.id === id ? { ...item, message: { ...item.message, ...patch } } : item)),
+    );
   }, []);
 
   const clearTranscript = useCallback(() => {
     conversation.current = [];
+    warnedFull.current = false;
+    setUsage(null);
     setItems([{ kind: "welcome", id: "welcome-0" }]);
   }, []);
 
@@ -111,42 +139,102 @@ export function App({
       abortRef.current = controller;
       setStreaming("");
 
+      // Per step: the reply streaming in, and any reasoning before it.
       let reply = "";
       let thought = "";
-      const started = Date.now();
+      let stepStarted = Date.now();
       let thoughtMs = 0;
+      const noteThought = () => {
+        if (thought) {
+          const seconds = Math.max(1, Math.round((thoughtMs || Date.now() - stepStarted) / 1000));
+          addMessage({ role: "system", text: `✻ Thought for ${seconds}s` });
+        }
+        thought = "";
+        thoughtMs = 0;
+        setThinking("");
+      };
+      const toolLines = new Map<string, number>();
+      let lastUsage: Usage | null = null;
+
       try {
-        const system = systemPrompt({ cwd });
-        for await (const event of provider.stream(conversation.current, { system, signal: controller.signal })) {
-          if (event.type === "thinking_delta") {
-            thought += event.text;
-            setThinking(thought);
-          } else if (event.type === "text_delta") {
-            if (thought && !thoughtMs) thoughtMs = Date.now() - started;
-            reply += event.text;
-            setStreaming(reply);
-          } else if (event.type === "error") {
-            addMessage({ role: "system", text: event.message, isError: true });
+        for await (const event of runAgent({
+          provider,
+          history: conversation.current,
+          system,
+          tools: toolSpecs,
+          runTool: (call) => runTool(call, { root, signal: controller.signal }),
+          signal: controller.signal,
+        })) {
+          switch (event.type) {
+            case "thinking_delta":
+              thought += event.text;
+              setThinking(thought);
+              break;
+            case "text_delta":
+              if (thought && !thoughtMs) thoughtMs = Date.now() - stepStarted;
+              reply += event.text;
+              setStreaming(reply);
+              break;
+            case "assistant":
+              noteThought();
+              addMessage({ role: "assistant", text: event.text });
+              reply = "";
+              setStreaming("");
+              break;
+            case "tool_start":
+              noteThought();
+              setToolRunning(true);
+              toolLines.set(
+                event.call.id,
+                addMessage({ role: "tool", text: event.call.name, tool: { label: event.label, status: "running" } }),
+              );
+              break;
+            case "tool_end": {
+              const { result } = event;
+              const line = toolLines.get(event.call.id);
+              const summary = result.isError ? result.output.split("\n")[0] : result.summary;
+              if (line !== undefined) updateMessage(line, { tool: { label: result.label, status: result.isError ? "error" : "done", summary } });
+              setToolRunning(false);
+              stepStarted = Date.now();
+              break;
+            }
+            case "usage":
+              lastUsage = event.usage;
+              setUsage(event.usage);
+              break;
+            case "error":
+              addMessage({ role: "system", text: event.message, isError: true });
+              break;
+            case "done":
+              if (event.reason === "aborted") addMessage({ role: "system", text: "Interrupted." });
+              if (event.reason === "length") addMessage({ role: "system", text: "The reply was cut off: it hit the model's output limit." });
+              break;
           }
         }
       } catch (err) {
         addMessage({ role: "system", text: `Error: ${(err as Error).message}`, isError: true });
       } finally {
-        if (thought) {
-          const seconds = Math.max(1, Math.round((thoughtMs || Date.now() - started) / 1000));
-          addMessage({ role: "system", text: `✻ Thought for ${seconds}s` });
-        }
-        if (reply) {
-          addMessage({ role: "assistant", text: reply });
-          conversation.current.push({ role: "assistant", text: reply });
-        }
-        if (controller.signal.aborted) addMessage({ role: "system", text: "Interrupted." });
+        noteThought();
         abortRef.current = null;
         setStreaming(null);
-        setThinking("");
+        setToolRunning(false);
+      }
+
+      // Ollama silently drops the oldest messages once the window is full; say so before it happens.
+      const window = provider.contextLength;
+      if (window && lastUsage && !warnedFull.current) {
+        const used = lastUsage.promptTokens + lastUsage.completionTokens;
+        if (used >= window * CONTEXT_WARNING) {
+          warnedFull.current = true;
+          addMessage({
+            role: "system",
+            isError: true,
+            text: `Context is ${Math.round((100 * used) / window)}% full (${formatUsage(lastUsage, window)}). Soon the model will lose the start of the conversation; /clear starts fresh.`,
+          });
+        }
       }
     },
-    [provider, addMessage, cwd],
+    [provider, addMessage, updateMessage, system, root],
   );
 
   const handleSubmit = (raw: string) => {
@@ -299,11 +387,11 @@ export function App({
   return (
     <Box flexDirection="column" height={rows} width={columns}>
       <ScrollView followKey={followKey} isActive={setupMode === null}>
-        <Transcript items={items} version={version} cwd={cwd} />
+        <Transcript items={items} version={version} cwd={cwd} instructions={Boolean(instructions)} />
 
         {streaming !== null &&
           (streaming === "" ? (
-            <ThinkingView thought={thinking} />
+            !toolRunning && <ThinkingView thought={thinking} />
           ) : (
             <MessageView message={{ role: "assistant", text: streaming }} />
           ))}
@@ -329,7 +417,14 @@ export function App({
               busy={busy}
               commands={commands}
             />
-            <StatusBar model={provider.name} cwd={cwd} confirmExit={confirmExit} notice={notice} busy={busy} />
+            <StatusBar
+              model={provider.name}
+              cwd={cwd}
+              usage={usage ? formatUsage(usage, provider.contextLength) : undefined}
+              confirmExit={confirmExit}
+              notice={notice}
+              busy={busy}
+            />
           </>
         )}
       </Box>
