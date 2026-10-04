@@ -88,7 +88,7 @@ export interface Tool<S extends z.ZodType = z.ZodType> {
   input: S;
   /** Short label for the transcript, e.g. the file path. */
   label(input: z.infer<S>): string;
-  /** "read" (the default) runs freely; "write" and "execute" need the user's approval first. */
+  /** "read" (the default) runs freely; "write" and "execute" need the user's approval first (unless `needsApproval` is defined: then it alone decides). */
   kind?: "read" | "write" | "execute";
   /** Calls of this tool that come together in one reply run at the same time (subagents). */
   parallel?: boolean;

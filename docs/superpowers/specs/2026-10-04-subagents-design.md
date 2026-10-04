@@ -128,9 +128,11 @@ agent({
    had plus a note saying why, with `isError: true`. If it ended `declined`,
    set `declined: true` (section 4).
 
-New `ToolContext` fields: `onProgress?(update: AgentProgress)`,
-`onUsage?(usage: Usage)`, `config` (for model overrides), `agents` (the loaded
-types), `agentLabel?` (set inside subagents; prefixes their approval requests).
+New `ToolContext` fields: `callId` (set by `runTool`), `writable` (extra
+writable folders for bash), and `agentHost?: AgentHost` (agent types,
+`providerFor(model)`, cwd, AGENTS.md, worktrees dir, `onUsage`, `onProgress`).
+Only the main agent's context has an `agentHost`, so subagents can't start
+subagents. A subagent's approval requests carry `ApprovalRequest.agent` (who asks).
 
 ### Loop (`src/agent.ts`)
 
