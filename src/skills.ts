@@ -12,6 +12,7 @@
 // and the system prompt stays the same all session (good for the prompt cache).
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { parseFrontmatter } from "./frontmatter.ts";
 
 export interface Skill {
   name: string;
@@ -48,23 +49,15 @@ function listFiles(dir: string): string[] {
 
 /** Parses one SKILL.md; returns the skill, or a problem to report. */
 async function readSkill(dir: string, folder: string, source: Skill["source"], shown: string): Promise<Skill | string> {
-  const text = await Bun.file(join(dir, "SKILL.md")).text();
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
-  if (!match) return `${shown} starts without a --- frontmatter block (name and description).`;
-
-  let meta: unknown;
-  try {
-    meta = Bun.YAML.parse(match[1]!);
-  } catch (err) {
-    return `${shown}: the frontmatter isn't valid YAML (${(err as Error).message}).`;
-  }
-  const fields = (meta && typeof meta === "object" ? meta : {}) as Record<string, unknown>;
+  const parsed = parseFrontmatter(await Bun.file(join(dir, "SKILL.md")).text(), shown);
+  if ("error" in parsed) return parsed.error;
+  const { fields } = parsed;
   const name = typeof fields.name === "string" ? fields.name.trim() : folder;
   const description = typeof fields.description === "string" ? fields.description.trim() : "";
   if (!NAME.test(name)) return `${shown}: the name "${name}" should be lowercase letters, digits and dashes.`;
   if (!description) return `${shown} needs a description: it's how the model knows when to use the skill.`;
 
-  let body = text.slice(match[0].length).trim();
+  let body = parsed.body;
   if (body.length > MAX_BODY_CHARS) body = `${body.slice(0, MAX_BODY_CHARS)}\n\n(SKILL.md was cut off here: it's longer than ${MAX_BODY_CHARS} characters.)`;
   return { name, description, body, dir, files: listFiles(dir), source };
 }
