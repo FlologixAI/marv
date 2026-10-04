@@ -17,6 +17,8 @@ export type CommandAction =
   | { type: "thinking"; on: boolean }
   | { type: "sandbox"; on: boolean }
   | { type: "resume" }
+  /** Summarize the conversation so far and continue from the summary. */
+  | { type: "compact"; focus?: string }
   /** The user ran a skill: /<name> <args>. */
   | { type: "skill"; skill: Skill; args: string }
   | { type: "exit" };
@@ -67,6 +69,11 @@ export const commands: Command[] = [
       if (arg && arg !== "on" && arg !== "off") return { type: "print", text: "Usage: /think, /think on, or /think off", isError: true };
       return { type: "thinking", on: arg ? arg === "on" : !config.thinking };
     },
+  },
+  {
+    name: "compact",
+    description: "Summarize the conversation to free up context (/compact <what to keep>)",
+    run: (args) => ({ type: "compact", ...(args ? { focus: args } : {}) }),
   },
   {
     name: "resume",

@@ -7,7 +7,7 @@ const PREVIEW_LINES = 3;
 // Shown while waiting for the reply. For thinking models it previews the tail
 // of their reasoning, so a long think visibly makes progress instead of
 // looking like a hang.
-export function ThinkingView({ thought }: { thought: string }) {
+export function ThinkingView({ thought, label = "Thinking…" }: { thought: string; label?: string }) {
   const tail = thought
     .split("\n")
     .map((line) => line.trim())
@@ -21,7 +21,11 @@ export function ThinkingView({ thought }: { thought: string }) {
         <Text color={theme.accent}>
           <Spinner type="dots" />
         </Text>
-        <Text color={theme.dim}> Thinking…{words > 0 && ` (${words} words)`}</Text>
+        <Text color={theme.dim}>
+          {" "}
+          {label}
+          {words > 0 && ` (${words} words)`}
+        </Text>
       </Text>
       {tail.map((line, i) => (
         <Text key={i} color={theme.dim} italic wrap="truncate-end">

@@ -20,7 +20,8 @@ import { listModels, type ModelInfo } from "./provider/models.ts";
 import type { ChatTurn, Provider, Usage } from "./provider/types.ts";
 import { selection } from "./selection.ts";
 import { systemPrompt } from "./prompt.ts";
-import { addUsage, costText, emptyTotals, type Prices, type Totals } from "./usage.ts";
+import { addUsage, costText, emptyTotals, tokens, type Prices, type Totals } from "./usage.ts";
+import { COMPACT_AT, compactedHistory, summarize } from "./compact.ts";
 import { newSession, timeAgo, type Session, type SessionStore, type SessionSummary } from "./sessions.ts";
 import { skillMessage, type Skill } from "./skills.ts";
 import { runTool, toolSpecsFor } from "./tools/index.ts";
@@ -45,8 +46,6 @@ const NOTICE_MS = 2000;
  * for frames nobody would see.
  */
 const STREAM_FLUSH_MS = 33;
-/** Warn once when the conversation fills this much of a known context window. */
-const CONTEXT_WARNING = 0.85;
 
 interface Props {
   store: ConfigStore;
@@ -148,7 +147,9 @@ export function App({
   }, [config, loadModels]);
   const info = modelInfo?.id === config.model ? modelInfo : null;
   const contextLength = provider.contextLength ?? info?.context;
-  const warnedFull = useRef(false);
+  const usageRef = useRef(usage);
+  usageRef.current = usage;
+  const [compacting, setCompacting] = useState(false);
 
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<string[]>([]);
@@ -202,15 +203,79 @@ export function App({
     selection.reset();
     sessionRef.current = newSession(root, configRef.current);
     conversation.current = [];
-    warnedFull.current = false;
     setUsage(null);
     setItems([{ kind: "welcome", id: "welcome-0" }]);
   }, []);
+
+  // Adds a request's tokens and cost to the session's totals.
+  const countUsage = useCallback(
+    (used: Usage) => {
+      const local = configRef.current.provider === "ollama";
+      setTotals((t) => ({ ...addUsage(t, used, info?.prices), local: (t.requests === 0 || t.local) && local }));
+    },
+    [info],
+  );
+
+  /**
+   * Summarizes the conversation and continues from the summary (see
+   * src/compact.ts). The transcript is untouched; only what the model sees
+   * changes. Returns whether it compacted.
+   */
+  const compact = useCallback(
+    async (focus: string | undefined, automatic: boolean) => {
+      if (conversation.current.length === 0) {
+        addMessage({ role: "system", text: "Nothing to compact yet." });
+        return false;
+      }
+      const before = usageRef.current;
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setStreaming("");
+      setCompacting(true);
+      const result = await summarize({
+        provider,
+        history: conversation.current,
+        system,
+        tools: specs,
+        signal: controller.signal,
+        focus,
+        onUsage: countUsage,
+      });
+      abortRef.current = null;
+      setStreaming(null);
+      setCompacting(false);
+
+      if ("error" in result) {
+        addMessage(
+          controller.signal.aborted
+            ? { role: "system", text: "Compaction stopped; nothing changed." }
+            : { role: "system", isError: true, text: `Couldn't compact the conversation: ${result.error}` },
+        );
+        return false;
+      }
+      conversation.current = compactedHistory(result.summary);
+      setUsage(null);
+      const usedBefore = before ? before.promptTokens + before.completionTokens : undefined;
+      const why = automatic && usedBefore && contextLength ? ` (the context was ${Math.round((100 * usedBefore) / contextLength)}% full)` : "";
+      const size = usedBefore ? `: ${tokens(usedBefore)} → about ${tokens(Math.round(result.summary.length / 4))} tokens` : "";
+      addMessage({
+        role: "system",
+        text: `✻ Compacted the conversation${why}${size}. Marv continues from a summary; your transcript is unchanged.`,
+      });
+      return true;
+    },
+    [provider, system, specs, countUsage, contextLength, addMessage],
+  );
 
   const send = useCallback(
     // `forModel`: what the model gets, when it differs from what the user typed (a /skill).
     async (text: string, forModel = text) => {
       addMessage({ role: "user", text });
+      // Nearly out of context: summarize first, so this message (and what follows) fits.
+      const last = usageRef.current;
+      if (contextLength && last && last.promptTokens + last.completionTokens >= contextLength * COMPACT_AT) {
+        await compact(undefined, true);
+      }
       conversation.current.push({ role: "user", text: forModel });
 
       const controller = new AbortController();
@@ -232,7 +297,6 @@ export function App({
         setThinking("");
       };
       const toolLines = new Map<string, number>();
-      let lastUsage: Usage | null = null;
       // Tokens accumulate in `reply`/`thought` and reach React in batches.
       let flushTimer: ReturnType<typeof setTimeout> | null = null;
       const flush = () => {
@@ -290,13 +354,10 @@ export function App({
               stepStarted = Date.now();
               break;
             }
-            case "usage": {
-              lastUsage = event.usage;
+            case "usage":
               setUsage(event.usage);
-              const local = config.provider === "ollama";
-              setTotals((t) => ({ ...addUsage(t, event.usage, info?.prices), local: (t.requests === 0 || t.local) && local }));
+              countUsage(event.usage);
               break;
-            }
             case "error":
               addMessage({ role: "system", text: event.message, isError: true });
               break;
@@ -317,21 +378,8 @@ export function App({
         setToolRunning(false);
       }
 
-      // Ollama silently drops the oldest messages once the window is full; say so before it happens.
-      const window = contextLength;
-      if (window && lastUsage && !warnedFull.current) {
-        const used = lastUsage.promptTokens + lastUsage.completionTokens;
-        if (used >= window * CONTEXT_WARNING) {
-          warnedFull.current = true;
-          addMessage({
-            role: "system",
-            isError: true,
-            text: `Context is ${Math.round((100 * used) / window)}% full (${formatUsage(lastUsage, window)}). Soon the model will lose the start of the conversation; /clear starts fresh.`,
-          });
-        }
-      }
     },
-    [provider, addMessage, updateMessage, system, specs, skills, root, approve, config.sandbox, config.provider, info, contextLength],
+    [provider, addMessage, updateMessage, system, specs, skills, root, approve, config.sandbox, countUsage, compact, contextLength],
   );
 
   const handleSubmit = (raw: string) => {
@@ -369,6 +417,9 @@ export function App({
             ? "Thinking on: models may reason before answering (slower, often better)."
             : "Thinking off: models answer directly.",
         );
+        break;
+      case "compact":
+        void compact(action.focus, false);
         break;
       case "resume":
         void openPicker();
@@ -581,7 +632,7 @@ export function App({
 
         {streaming !== null &&
           (streaming === "" ? (
-            !toolRunning && <ThinkingView thought={thinking} />
+            !toolRunning && <ThinkingView thought={thinking} label={compacting ? "Compacting the conversation…" : undefined} />
           ) : (
             <MessageView message={{ role: "assistant", text: streaming }} streaming />
           ))}

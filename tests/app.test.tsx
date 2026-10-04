@@ -278,22 +278,78 @@ describe("App", () => {
     expect(lastFrame()).toContain("1.2k tokens · 83% cached");
   });
 
-  test("warns once when the context window is nearly full", async () => {
-    const step = (): AgentEvent[] => [
-      { type: "text_delta", text: "ok" },
-      { type: "usage", usage: { promptTokens: 900, completionTokens: 10 } },
+  describe("compaction", () => {
+    const step = (text: string, promptTokens: number): AgentEvent[] => [
+      { type: "text_delta", text },
+      { type: "usage", usage: { promptTokens, completionTokens: 10 } },
       { type: "done" },
     ];
-    const model = new ScriptedProvider([step(), step()], 1000);
-    const { frames, lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
-    await type(stdin, "one");
-    await tick(150);
-    expect(lastFrame()).toContain("Context is 91% full");
-    expect(lastFrame()).toContain("910/1k ctx");
-    await type(stdin, "two");
-    await tick(150);
-    expect(lastFrame()!.match(/Context is \d+% full/g)).toHaveLength(1);
-    expect(frames.length).toBeGreaterThan(0);
+
+    test("near a full context, the next message first compacts the conversation", async () => {
+      const model = new ScriptedProvider(
+        [step("first answer", 900), step("SUMMARY: user asked a question; answered.", 950), step("second answer", 120)],
+        1000,
+      );
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "one");
+      await tick(150);
+      expect(lastFrame()).toContain("910/1k ctx");
+
+      await type(stdin, "two");
+      await tick(300);
+      // Request 2 asked for a summary; request 3 carried on from it.
+      expect((model.requests[1]!.history.at(-1) as { text: string }).text).toContain("Summarize our conversation");
+      expect(model.requests[2]!.history).toEqual([
+        { role: "user", text: expect.stringContaining("SUMMARY: user asked a question; answered.") },
+        { role: "assistant", text: expect.any(String) },
+        { role: "user", text: "two" },
+      ]);
+      const frame = lastFrame()!;
+      expect(frame).toContain("Compacted the conversation (the context was 91% full)");
+      expect(frame).toContain("first answer"); // the transcript keeps everything
+      expect(frame).toContain("second answer");
+    });
+
+    test("/compact runs on demand, with what to focus on", async () => {
+      const model = new ScriptedProvider([step("answer", 100), step("SUMMARY", 120), step("next", 50)]);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "hello");
+      await tick(150);
+      await type(stdin, "/compact keep the file names");
+      await tick(200);
+      expect((model.requests[1]!.history.at(-1) as { text: string }).text).toContain("Focus especially on: keep the file names");
+      expect(lastFrame()).toContain("Compacted the conversation: 110 → about");
+    });
+
+    test("/compact with nothing to compact says so", async () => {
+      const { lastFrame, stdin } = renderApp(LOCAL);
+      await type(stdin, "/compact");
+      await tick();
+      expect(lastFrame()).toContain("Nothing to compact yet.");
+    });
+
+    test("Esc stops a compaction and changes nothing", async () => {
+      const slowSummary: Provider = {
+        name: "slow",
+        async *stream(history, options) {
+          if ((history.at(-1) as { text: string }).text.includes("Summarize")) {
+            while (!options?.signal?.aborted) await Bun.sleep(10);
+            return;
+          }
+          yield { type: "text_delta", text: "answer" };
+          yield { type: "done" };
+        },
+      };
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => slowSummary);
+      await type(stdin, "hello");
+      await tick(150);
+      await type(stdin, "/compact");
+      await tick(100);
+      expect(lastFrame()).toContain("Compacting the conversation…");
+      stdin.write("\x1b");
+      await tick(250);
+      expect(lastFrame()).toContain("Compaction stopped; nothing changed.");
+    });
   });
 
   test("puts AGENTS.md in the system prompt and says it's loaded", async () => {
