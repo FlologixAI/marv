@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "ink-testing-library";
 import stringWidth from "string-width";
-import { FRAMES, GREETING, IDLE_LOOP, Martian } from "../src/ui/Martian.tsx";
+import chalk from "chalk";
+import { FRAMES, GREETING, IDLE_LOOP, Martian, MartianFrame as Frame } from "../src/ui/Martian.tsx";
 import { Welcome } from "../src/ui/Welcome.tsx";
 
 afterEach(cleanup);
@@ -45,8 +46,24 @@ describe("Martian", () => {
 test("the welcome banner shows the martian beside the text", () => {
   const { lastFrame } = render(<Welcome version="9.9.9" cwd="~/x" animate={false} />);
   const frame = lastFrame()!;
-  expect(frame).toContain("│ ◉ ◉ │");
+  expect(frame).toContain("━┫ ◉   ◉ ┣━");
   const textRow = frame.split("\n").find((line) => line.includes("Welcome to Ekko"));
-  expect(textRow).toMatch(/[│╭╰].*[│╮╯].*Welcome to Ekko v9\.9\.9/);
+  expect(textRow).toMatch(/[┏┃┫].*Welcome to Ekko v9\.9\.9/); // the martian is beside the text
   expect(frame).toContain("cwd: ~/x");
+});
+
+test("the martian is drawn in a single color", () => {
+  // Tests don't run in a real terminal, so chalk (Ink's colorizer) emits no colors unless told to.
+  const level = chalk.level;
+  chalk.level = 3;
+  try {
+    for (const name of Object.keys(FRAMES) as (keyof typeof FRAMES)[]) {
+      const { lastFrame, unmount } = render(<Frame name={name} />);
+      const colors = new Set(lastFrame()!.match(/\x1b\[38;[0-9;]+m/g));
+      expect(colors.size).toBe(1);
+      unmount();
+    }
+  } finally {
+    chalk.level = level;
+  }
 });
