@@ -51,6 +51,8 @@ const FileConfigSchema = z.object({
   thinking: z.boolean().optional(),
   /** Ollama's context window in tokens (num_ctx). Bigger holds more code but needs more VRAM. */
   contextLength: z.number().int().min(2048).optional(),
+  /** Run bash commands in the bubblewrap sandbox (default on). */
+  sandbox: z.boolean().optional(),
 });
 
 /** 32k fits fully on a 12 GB GPU for 9-12B models and holds a fair amount of code. */
@@ -68,6 +70,7 @@ export interface Config {
   apiKeySource?: "env" | "file";
   thinking: boolean;
   contextLength: number;
+  sandbox: boolean;
 }
 
 export type Env = Record<string, string | undefined>;
@@ -139,6 +142,7 @@ export function resolveConfig(file: FileConfig | null, env: Env): Config {
     apiKeySource: envKey ? "env" : apiKey ? "file" : undefined,
     thinking: file?.thinking ?? false,
     contextLength: file?.contextLength ?? DEFAULT_CONTEXT_LENGTH,
+    sandbox: file?.sandbox ?? true,
   };
 }
 

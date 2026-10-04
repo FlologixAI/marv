@@ -1,9 +1,50 @@
 import type { z } from "zod";
 
+/** One line of a diff, for showing a change before it's approved. */
+export interface DiffLine {
+  kind: "add" | "del" | "ctx" | "gap";
+  text: string;
+}
+
+/** What the approval prompt shows before a tool changes something. */
+export interface Preview {
+  /** e.g. "Edit src/app.ts", "Run a command". */
+  title: string;
+  /** The change, as a diff. */
+  diff?: DiffLine[];
+  /** Plain text, e.g. the command. */
+  text?: string;
+  /** A small detail line, e.g. "sandboxed · no network". */
+  note?: string;
+  /** Shown in the warning color, e.g. "runs WITHOUT a sandbox". */
+  warning?: string;
+}
+
+/** "Don't ask again this session" applies to everything with the same key. */
+export interface Scope {
+  key: string;
+  /** For the prompt: "Yes, don't ask again for <description>". */
+  description: string;
+}
+
+export interface ApprovalRequest {
+  tool: string;
+  label: string;
+  preview: Preview;
+  scope: Scope;
+}
+
+/** yes: run it. always: run it, and everything in its scope this session. no: don't. */
+export type Decision = "yes" | "always" | "no";
+
 export interface ToolContext {
   /** Absolute path of the project root; tools may not reach outside it. */
   root: string;
   signal?: AbortSignal;
+  /** Asks the user before a tool that changes something runs. Without it, such tools are refused. */
+  approve?: (request: ApprovalRequest) => Promise<Decision>;
+  /** Run bash in the bubblewrap sandbox (default true). */
+  sandbox?: boolean;
 }
 
 export interface ToolResult {
@@ -12,6 +53,8 @@ export interface ToolResult {
   /** A few words for the transcript, e.g. "42 lines". */
   summary: string;
   isError?: boolean;
+  /** The user said no: the agent stops so they can say what to do instead. */
+  declined?: boolean;
 }
 
 /**
@@ -25,6 +68,12 @@ export interface Tool<S extends z.ZodType = z.ZodType> {
   input: S;
   /** Short label for the transcript, e.g. the file path. */
   label(input: z.infer<S>): string;
+  /** "read" (the default) runs freely; "write" and "execute" need the user's approval first. */
+  kind?: "read" | "write" | "execute";
+  /** What the approval prompt shows. Throw a ToolError here for a call that can't succeed, so the user isn't asked to approve it. */
+  preview?(input: z.infer<S>, ctx: ToolContext): Promise<Preview>;
+  /** What "don't ask again" covers. */
+  scope?(input: z.infer<S>): Scope;
   run(input: z.infer<S>, ctx: ToolContext): Promise<ToolResult>;
 }
 

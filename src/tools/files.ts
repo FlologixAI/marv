@@ -1,7 +1,7 @@
 // Shared file helpers for the tools: confining paths to the project, and
 // listing the project's files.
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ToolError } from "./types.ts";
 
 /** Skipped when the project isn't a git repo (inside one, .gitignore decides). */
@@ -22,8 +22,12 @@ export function resolveInProject(root: string, path: string): string {
     `"${path}" is outside the project (${root}). Use a path relative to the project root, like "src/app.ts".`,
   );
   if (!isInside(root, absolute)) throw outside;
-  // A symlink inside the project can still point outside it.
-  if (existsSync(absolute) && !isInside(realpathSync(root), realpathSync(absolute))) throw outside;
+  // A symlink inside the project can still point outside it. For a path that
+  // doesn't exist yet (a new file), check the nearest folder that does: a new
+  // file in a symlinked folder would land wherever that folder points.
+  let existing = absolute;
+  while (!existsSync(existing) && existing !== dirname(existing)) existing = dirname(existing);
+  if (!isInside(realpathSync(root), realpathSync(existing))) throw outside;
   return absolute;
 }
 

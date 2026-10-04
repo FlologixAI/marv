@@ -6,7 +6,7 @@ export type Role = "user" | "assistant" | "system" | "tool";
 export interface ToolStatus {
   /** What it was called on, e.g. the file path. */
   label: string;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "declined";
   /** e.g. "42 lines", or the error. */
   summary?: string;
 }

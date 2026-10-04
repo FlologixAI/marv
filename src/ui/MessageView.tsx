@@ -54,6 +54,7 @@ export const MessageView = memo(function MessageView({
       //   ⎿ 250 lines
       const tool = message.tool!;
       const failed = tool.status === "error";
+      const declined = tool.status === "declined";
       return (
         <Box flexDirection="column" marginBottom={1}>
           <Text wrap="truncate-end">
@@ -61,7 +62,7 @@ export const MessageView = memo(function MessageView({
             <Text bold>{message.text}</Text>
             <Text color={theme.dim}> {tool.label}</Text>
           </Text>
-          <Text color={failed ? theme.error : theme.dim} wrap="truncate-end">
+          <Text color={failed ? theme.error : declined ? theme.warning : theme.dim} wrap="truncate-end">
             {"  ⎿ "}
             {tool.status === "running" ? "running…" : tool.summary}
           </Text>

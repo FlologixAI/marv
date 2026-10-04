@@ -1,4 +1,5 @@
 import { maskKey, PRESETS, type Config } from "../config/config.ts";
+import { sandboxAvailable } from "../sandbox.ts";
 
 // Slash commands are handled locally and never reach the LLM.
 // Each command returns an action; the App decides how to apply it,
@@ -11,6 +12,7 @@ export type CommandAction =
   /** With an id: switch straight to it. Without: open the model picker. */
   | { type: "model"; id?: string }
   | { type: "thinking"; on: boolean }
+  | { type: "sandbox"; on: boolean }
   | { type: "exit" };
 
 /** Read-only facts a command may need. */
@@ -56,6 +58,16 @@ export const commands: Command[] = [
     },
   },
   {
+    name: "sandbox",
+    description: "Show or set the bash sandbox (/sandbox on, /sandbox off)",
+    run: (args, { config }) => {
+      const arg = args.toLowerCase();
+      if (arg === "on" || arg === "off") return { type: "sandbox", on: arg === "on" };
+      if (arg) return { type: "print", text: "Usage: /sandbox, /sandbox on, or /sandbox off", isError: true };
+      return { type: "print", text: `Sandbox: ${sandboxStatus(config)}` };
+    },
+  },
+  {
     name: "clear",
     description: "Clear the conversation",
     run: () => ({ type: "clear" }),
@@ -98,9 +110,17 @@ function configText({ config, configPath }: CommandContext): string {
     `Provider:  ${preset.label}`,
     `Model:     ${config.model}`,
     `Thinking:  ${config.thinking ? "on" : "off"}`,
+    `Sandbox:   ${sandboxStatus(config)}`,
     `Endpoint:  ${config.baseUrl}`,
     ...(config.provider === "ollama" ? [`Context:   ${config.contextLength.toLocaleString("en-US")} tokens (contextLength in the config file)`] : []),
     `API key:   ${key}`,
     `File:      ${configPath}`,
   ].join("\n");
+}
+
+function sandboxStatus(config: Config): string {
+  if (!config.sandbox) return "off: bash commands run directly on your system (after approval)";
+  return sandboxAvailable()
+    ? "on: bash runs in bubblewrap (project writable, home hidden, no network unless asked)"
+    : "on, but bubblewrap isn't available here, so bash runs WITHOUT a sandbox";
 }

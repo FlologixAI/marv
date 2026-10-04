@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -241,7 +242,7 @@ describe("App", () => {
     expect(frame).toContain("It says to remember the milk.");
     // The real tool ran on the project and its output went back to the model.
     expect(model.requests[1]!.history.at(-1)).toEqual({ role: "tool", callId: "c1", name: "read_file", text: "    1\tremember the milk" });
-    expect(model.requests[0]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "glob", "grep"]);
+    expect(model.requests[0]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "edit_file", "write_file", "bash"]);
   });
 
   test("a failing tool shows its error, and the model gets it to recover from", async () => {
@@ -295,5 +296,71 @@ describe("App", () => {
     await type(stdin, "hi");
     await tick(100);
     expect(model.requests[0]!.options.system).toContain("Always answer in haiku.");
+  });
+
+  describe("approvals", () => {
+    const writeCall = (id: string, path: string) =>
+      [{ type: "tool_call", call: { id, name: "write_file", arguments: JSON.stringify({ path, content: "hello\n" }) } }, { type: "done" }] as AgentEvent[];
+    const reply = (text: string) => [{ type: "text_delta", text }, { type: "done" }] as AgentEvent[];
+
+    test("a change waits for approval, then runs and the model carries on", async () => {
+      const model = new ScriptedProvider([writeCall("c1", "made.txt"), reply("Created it.")]);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "make a file");
+      await tick(150);
+      expect(lastFrame()).toContain("Create made.txt");
+      expect(lastFrame()).toContain("Do you want to proceed?");
+      expect(existsSync(join(project, "made.txt"))).toBe(false); // nothing happens before the answer
+
+      stdin.write(ENTER); // Yes
+      await tick(200);
+      expect(await Bun.file(join(project, "made.txt")).text()).toBe("hello\n");
+      expect(lastFrame()).toContain("⎿ created · 1 line");
+      expect(lastFrame()).toContain("Created it.");
+      expect(lastFrame()).not.toContain("Do you want to proceed?");
+    });
+
+    test("no stops the agent and leaves the file alone", async () => {
+      const model = new ScriptedProvider([writeCall("c1", "made.txt"), reply("should not get here")]);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "make a file");
+      await tick(150);
+      stdin.write(DOWN);
+      await tick();
+      stdin.write(DOWN);
+      await tick();
+      stdin.write(ENTER); // No
+      await tick(200);
+      expect(existsSync(join(project, "made.txt"))).toBe(false);
+      expect(lastFrame()).toContain("⎿ declined");
+      expect(lastFrame()).toContain("Stopped. Tell Marv what to do instead.");
+      expect(model.requests).toHaveLength(1);
+    });
+
+    test("'don't ask again' covers later changes this session", async () => {
+      const model = new ScriptedProvider([writeCall("c1", "one.txt"), writeCall("c2", "two.txt"), reply("Both done.")]);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "make two files");
+      await tick(150);
+      stdin.write(DOWN);
+      await tick();
+      stdin.write(ENTER); // Yes, and don't ask again
+      await tick(300);
+      expect(existsSync(join(project, "one.txt"))).toBe(true);
+      expect(existsSync(join(project, "two.txt"))).toBe(true); // no second prompt
+      expect(lastFrame()).toContain("Both done.");
+    });
+
+    test("ctrl+c at the prompt declines and stops", async () => {
+      const model = new ScriptedProvider([writeCall("c1", "made.txt")]);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "make a file");
+      await tick(150);
+      stdin.write("\x03");
+      await tick(200);
+      expect(existsSync(join(project, "made.txt"))).toBe(false);
+      expect(lastFrame()).toContain("Interrupted.");
+      expect(lastFrame()).toContain("Type a message");
+    });
   });
 });

@@ -21,7 +21,9 @@ import type { ChatTurn, Provider, Usage } from "./provider/types.ts";
 import { selection } from "./selection.ts";
 import { systemPrompt } from "./prompt.ts";
 import { runTool, toolSpecs } from "./tools/index.ts";
+import type { ApprovalRequest, Decision } from "./tools/types.ts";
 import type { Message } from "./types.ts";
+import { Approval } from "./ui/Approval.tsx";
 import { MessageView } from "./ui/MessageView.tsx";
 import { PromptInput } from "./ui/PromptInput.tsx";
 import { ScrollView } from "./ui/ScrollView.tsx";
@@ -106,6 +108,26 @@ export function App({
   const [streaming, setStreaming] = useState<string | null>(null);
   // Set while a tool runs (its transcript line shows the progress, so no "Thinking…").
   const [toolRunning, setToolRunning] = useState(false);
+  // A tool waiting for the user's yes/no (shown in place of the prompt).
+  const [approval, setApproval] = useState<{ request: ApprovalRequest; resolve: (d: Decision) => void } | null>(null);
+  const approvalRef = useRef(approval);
+  approvalRef.current = approval;
+  // "Yes, don't ask again": scopes approved for the rest of this session.
+  const alwaysAllowed = useRef(new Set<string>());
+
+  const approve = useCallback(
+    (request: ApprovalRequest): Promise<Decision> =>
+      alwaysAllowed.current.has(request.scope.key) ? Promise.resolve("yes") : new Promise((resolve) => setApproval({ request, resolve })),
+    [],
+  );
+  const decide = useCallback((decision: Decision) => {
+    const pending = approvalRef.current;
+    if (!pending) return;
+    if (decision === "always") alwaysAllowed.current.add(pending.request.scope.key);
+    approvalRef.current = null;
+    setApproval(null);
+    pending.resolve(decision);
+  }, []);
   // The model's reasoning while it thinks. Shown live, never sent back to the model.
   const [thinking, setThinking] = useState("");
   const [confirmExit, setConfirmExit] = useState(false);
@@ -180,7 +202,7 @@ export function App({
           history: conversation.current,
           system,
           tools: toolSpecs,
-          runTool: (call) => runTool(call, { root, signal: controller.signal }),
+          runTool: (call) => runTool(call, { root, signal: controller.signal, approve, sandbox: config.sandbox }),
           signal: controller.signal,
         })) {
           switch (event.type) {
@@ -213,7 +235,8 @@ export function App({
               const { result } = event;
               const line = toolLines.get(event.call.id);
               const summary = result.isError ? result.output.split("\n")[0] : result.summary;
-              if (line !== undefined) updateMessage(line, { tool: { label: result.label, status: result.isError ? "error" : "done", summary } });
+              const status = result.declined ? "declined" : result.isError ? "error" : "done";
+              if (line !== undefined) updateMessage(line, { tool: { label: result.label, status, summary } });
               setToolRunning(false);
               stepStarted = Date.now();
               break;
@@ -227,6 +250,7 @@ export function App({
               break;
             case "done":
               if (event.reason === "aborted") addMessage({ role: "system", text: "Interrupted." });
+              if (event.reason === "declined") addMessage({ role: "system", text: "Stopped. Tell Marv what to do instead." });
               if (event.reason === "length") addMessage({ role: "system", text: "The reply was cut off: it hit the model's output limit." });
               break;
           }
@@ -255,7 +279,7 @@ export function App({
         }
       }
     },
-    [provider, addMessage, updateMessage, system, root],
+    [provider, addMessage, updateMessage, system, root, approve, config.sandbox],
   );
 
   const handleSubmit = (raw: string) => {
@@ -286,6 +310,14 @@ export function App({
           action.on
             ? "Thinking on: models may reason before answering (slower, often better)."
             : "Thinking off: models answer directly.",
+        );
+        break;
+      case "sandbox":
+        void saveConfig(
+          { ...(file ?? { provider: config.provider }), sandbox: action.on },
+          action.on
+            ? "Sandbox on: bash commands run in bubblewrap."
+            : "Sandbox off: bash commands run directly on your system (each still needs your approval).",
         );
         break;
       case "model":
@@ -330,6 +362,7 @@ export function App({
     (char, key) => {
       if (!(key.ctrl && char === "c")) return;
       if (abortRef.current) {
+        decide("no"); // a pending approval counts as declined
         abortRef.current.abort();
       } else if (input) {
         setInput("");
@@ -414,7 +447,12 @@ export function App({
       </ScrollView>
 
       <Box flexDirection="column" flexShrink={0}>
-        {setupMode ? (
+        {approval && !setupMode ? (
+          <>
+            <Approval request={approval.request} onDecide={decide} />
+            <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy />
+          </>
+        ) : setupMode ? (
           <Setup
             initial={file}
             env={env}

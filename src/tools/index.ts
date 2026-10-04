@@ -1,12 +1,17 @@
 // The tool registry: what the model is offered, and how its calls are run.
+import { isAbsolute, sep } from "node:path";
 import { z } from "zod";
 import type { ToolCall, ToolSpec } from "../provider/types.ts";
+import { bash } from "./bash.ts";
+import { editFile } from "./edit-file.ts";
+import { projectPath } from "./files.ts";
 import { glob } from "./glob.ts";
 import { grep } from "./grep.ts";
 import { readFile } from "./read-file.ts";
+import { writeFile } from "./write-file.ts";
 import { ToolError, type Tool, type ToolContext, type ToolResult } from "./types.ts";
 
-export const tools: Tool[] = [readFile, glob, grep] as Tool[];
+export const tools: Tool[] = [readFile, glob, grep, editFile, writeFile, bash] as Tool[];
 
 /**
  * What the model is told about each tool. Built once, so every request sends
@@ -32,11 +37,32 @@ export async function runTool(call: ToolCall, ctx: ToolContext): Promise<ToolRes
   const parsed = tool.input.safeParse(raw);
   if (!parsed.success) return fail(`Invalid input for ${call.name}:\n${z.prettifyError(parsed.error)}`);
 
-  const label = tool.label(parsed.data);
+  const label = shortLabel(tool.label(parsed.data), ctx.root);
   try {
+    // Tools that change something need the user's go-ahead. The preview runs
+    // first, so a call that can't succeed fails here instead of being approved.
+    if (tool.kind && tool.kind !== "read") {
+      if (!ctx.approve) return fail(`${call.name} needs the user's approval, and there's no one to ask.`, label);
+      const preview = await tool.preview!(parsed.data, ctx);
+      const scope = tool.scope?.(parsed.data) ?? { key: call.name, description: call.name };
+      const decision = await ctx.approve({ tool: call.name, label, preview, scope });
+      if (decision === "no") {
+        return {
+          output: "The user declined this. Don't retry it: stop and wait for them to say how to proceed.",
+          summary: "declined",
+          declined: true,
+          label,
+        };
+      }
+    }
     return { ...(await tool.run(parsed.data, ctx)), label };
   } catch (err) {
     if (err instanceof ToolError) return fail(err.message, label);
     return fail(`${call.name} failed: ${(err as Error).message}`, label);
   }
+}
+
+/** Models sometimes pass absolute paths; the transcript shows them relative to the project. */
+function shortLabel(label: string, root: string): string {
+  return isAbsolute(label) && label.startsWith(root + sep) ? projectPath(root, label) : label;
 }

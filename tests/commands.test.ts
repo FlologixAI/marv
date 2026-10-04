@@ -10,6 +10,7 @@ const ctx: CommandContext = {
     apiKeySource: "env",
     thinking: false,
     contextLength: 32768,
+    sandbox: true,
   },
   configPath: "~/.marv/config.json",
 };
@@ -45,13 +46,20 @@ describe("slash commands", () => {
   });
 
   test("/config says when no key is needed (Ollama)", () => {
-    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://localhost:11434", thinking: false, contextLength: 32768 } });
+    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://localhost:11434", thinking: false, contextLength: 32768, sandbox: true } });
     expect(action).toMatchObject({ type: "print", text: expect.stringContaining("API key:   not needed") });
   });
 
   test("/model opens the picker, or switches straight to a given id", () => {
     expect(runCommand("/model")).toEqual({ type: "model" });
     expect(runCommand("/model openai/gpt-5.6-sol")).toEqual({ type: "model", id: "openai/gpt-5.6-sol" });
+  });
+
+  test("/sandbox shows the sandbox, or turns it on and off", () => {
+    expect(runCommand("/sandbox off")).toEqual({ type: "sandbox", on: false });
+    expect(runCommand("/sandbox on")).toEqual({ type: "sandbox", on: true });
+    expect(runCommand("/sandbox")).toMatchObject({ type: "print", text: expect.stringMatching(/^Sandbox: on/) });
+    expect(runCommand("/sandbox maybe")).toMatchObject({ type: "print", isError: true });
   });
 
   test("/think toggles, or takes on/off", () => {

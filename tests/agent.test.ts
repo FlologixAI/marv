@@ -112,6 +112,21 @@ describe("runAgent", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
   });
 
+  test("a declined action stops the run, and later calls in the same step are answered too", async () => {
+    const provider = new ScriptedProvider([useTools(call("c1", "a.ts"), call("c2", "b.ts")), say("never asked")]);
+    const history: ChatTurn[] = [{ role: "user", text: "change things" }];
+    const events = await run(provider, history, {
+      runTool: async (c) => ({ output: "The user declined this.", summary: "declined", declined: true, label: JSON.parse(c.arguments).path }),
+    });
+
+    expect(provider.requests).toHaveLength(1); // no further request: the user decides what's next
+    expect(history.filter((t) => t.role === "tool")).toEqual([
+      { role: "tool", callId: "c1", name: "read_file", text: "The user declined this." },
+      { role: "tool", callId: "c2", name: "read_file", text: "Not run: the user declined an earlier action." },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "done", reason: "declined" });
+  });
+
   test("a provider error ends the run and is reported", async () => {
     const provider = new ScriptedProvider([[{ type: "error", message: "Rate limited" }]]);
     const events = await run(provider, [{ role: "user", text: "go" }]);

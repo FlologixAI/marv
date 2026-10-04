@@ -23,7 +23,7 @@ export type LoopEvent =
   | { type: "tool_start"; call: ToolCall; label: string }
   | { type: "tool_end"; call: ToolCall; result: ToolResult & { label: string } }
   | { type: "error"; message: string }
-  | { type: "done"; reason: "end" | "length" | "aborted" | "max_steps" | "error" };
+  | { type: "done"; reason: "end" | "length" | "aborted" | "declined" | "max_steps" | "error" };
 
 interface Options {
   provider: Provider;
@@ -40,7 +40,7 @@ interface Options {
 function labelOf(call: ToolCall): string {
   try {
     const args = JSON.parse(call.arguments) as Record<string, unknown>;
-    return String(args.path ?? args.pattern ?? call.arguments);
+    return String(args.path ?? args.pattern ?? args.command ?? call.arguments);
   } catch {
     return call.arguments;
   }
@@ -98,20 +98,28 @@ export async function* runAgent({
       return;
     }
 
-    // Every call must get a result, even after an interrupt: a request with an
-    // unanswered tool call is rejected by the API.
+    // Every call must get a result, even after an interrupt or a "no": a
+    // request with an unanswered tool call is rejected by the API.
+    let declined = false;
     for (const call of calls) {
-      if (signal.aborted) {
-        history.push({ role: "tool", callId: call.id, name: call.name, text: "Interrupted by the user before this tool ran." });
+      if (signal.aborted || declined) {
+        const text = declined ? "Not run: the user declined an earlier action." : "Interrupted by the user before this tool ran.";
+        history.push({ role: "tool", callId: call.id, name: call.name, text });
         continue;
       }
       yield { type: "tool_start", call, label: labelOf(call) };
       const result = await runTool(call);
       history.push({ role: "tool", callId: call.id, name: call.name, text: result.output });
       yield { type: "tool_end", call, result };
+      declined = Boolean(result.declined);
     }
     if (signal.aborted) {
       yield { type: "done", reason: "aborted" };
+      return;
+    }
+    // The user said no: stop here and let them say what to do instead.
+    if (declined) {
+      yield { type: "done", reason: "declined" };
       return;
     }
   }
