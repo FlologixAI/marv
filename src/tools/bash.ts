@@ -28,6 +28,7 @@ interface RunOptions {
   timeoutMs: number;
   signal?: AbortSignal;
   writable?: string[];
+  readOnly?: string[];
 }
 
 const hasSetsid = Bun.which("setsid") !== null;
@@ -37,12 +38,12 @@ const hasSetsid = Bun.which("setsid") !== null;
  * Sandboxed: inside bwrap (see src/sandbox.ts). Not sandboxed: still with a
  * minimal environment, so API keys don't leak into commands.
  */
-export async function runCommand({ command, root, sandbox, network, timeoutMs, signal, writable }: RunOptions): Promise<CommandResult> {
+export async function runCommand({ command, root, sandbox, network, timeoutMs, signal, writable, readOnly }: RunOptions): Promise<CommandResult> {
   const path = process.env.PATH ?? "/usr/bin:/bin";
   const home = homedir();
   const script = `exec 2>&1\n${command}`; // stderr into stdout, so the output stays in order
   const argv = sandbox
-    ? ["bwrap", ...sandboxArgs({ root, home, network, path, writable }), "--", "bash", "-c", script]
+    ? ["bwrap", ...sandboxArgs({ root, home, network, path, writable, readOnly }), "--", "bash", "-c", script]
     : // setsid: its own process group, so killing it also kills everything it started.
       [...(hasSetsid ? ["setsid"] : []), "bash", "-c", script];
 
@@ -136,8 +137,8 @@ export const bash: Tool<typeof input> = {
     };
   },
 
-  async run({ command, network = false, timeout = DEFAULT_TIMEOUT_S }, { root, signal, sandbox = true, writable }) {
-    const result = await runCommand({ command, root, sandbox: sandbox && sandboxAvailable(), network, timeoutMs: timeout * 1000, signal, writable });
+  async run({ command, network = false, timeout = DEFAULT_TIMEOUT_S }, { root, signal, sandbox = true, writable, readOnly }) {
+    const result = await runCommand({ command, root, sandbox: sandbox && sandboxAvailable(), network, timeoutMs: timeout * 1000, signal, writable, readOnly });
     const lines = result.output.trimEnd() === "" ? 0 : result.output.trimEnd().split("\n").length;
     const summary = result.timedOut
       ? `timed out after ${timeout}s`

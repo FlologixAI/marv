@@ -63,6 +63,8 @@ export interface ToolContext {
   callId?: string;
   /** More folders bash may write to besides root: a worktree's shared .git, so commits work. */
   writable?: string[];
+  /** Paths inside `writable` that stay read-only (a shared .git's hooks and config). */
+  readOnly?: string[];
   /** Lets the agent tool start subagents. Only the main agent has one, so subagents can't start subagents. */
   agentHost?: AgentHost;
 }
