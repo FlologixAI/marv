@@ -107,3 +107,38 @@ test("${MARV_PROJECT_DIR} in a server given in code expands to the project", asy
   expect(session.problems).toEqual([]);
   await session.close();
 });
+
+const FIXTURE = join(import.meta.dir, "fixtures", "mcp-server.ts");
+/** Lines of `pgrep -f` for processes whose command line has this marker. */
+function running(marker: string): string[] {
+  return Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().split("\n").filter(Boolean);
+}
+async function gone(marker: string): Promise<boolean> {
+  for (let i = 0; i < 50; i++) {
+    if (running(marker).length === 0) return true;
+    await Bun.sleep(100);
+  }
+  return false;
+}
+
+test("a session that fails to be created leaves no MCP server running (bad provider)", async () => {
+  const marker = `leak-kind-${crypto.randomUUID()}`;
+  const mcpServers = { fx: { command: process.execPath, args: [FIXTURE, marker] } };
+  await expect(createSession({ cwd: root, provider: { kind: "nope" } as unknown as sdk.ProviderOption, configDir, mcpServers })).rejects.toThrow();
+  await Bun.sleep(1500);
+  expect(running(marker)).toEqual([]);
+});
+
+test("an unknown resume id closes the MCP servers it started", async () => {
+  const marker = `leak-resume-${crypto.randomUUID()}`;
+  const mcpServers = { fx: { command: process.execPath, args: [FIXTURE, marker] } };
+  await expect(createSession({ cwd: root, provider: new ScriptedProvider([]), configDir, persist: true, resume: "nope", mcpServers })).rejects.toThrow(/no saved session "nope"/);
+  expect(await gone(marker)).toBe(true);
+});
+
+test("resume without persist, and a cwd that isn't a folder, fail before anything starts", async () => {
+  await expect(createSession({ cwd: root, provider: new ScriptedProvider([]), configDir, resume: "latest" })).rejects.toThrow(/resume needs persist/);
+  const file = join(root, "AGENTS.md");
+  await expect(createSession({ cwd: file, provider: new ScriptedProvider([]), configDir })).rejects.toThrow(`cwd ${file} isn't a folder`);
+  await expect(createSession({ cwd: join(root, "missing"), provider: new ScriptedProvider([]), configDir })).rejects.toThrow(/isn't a folder/);
+});

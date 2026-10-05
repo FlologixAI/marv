@@ -80,6 +80,7 @@ export class McpManager {
   settled = true;
   /** Told when a server's state changes (for the UI). */
   onChange: () => void = () => {};
+  private closed = false;
   private connections: Connection[];
 
   constructor(
@@ -152,6 +153,11 @@ export class McpManager {
   }
 
   private async connect(c: Connection): Promise<void> {
+    if (this.closed) {
+      c.state = "failed";
+      c.error = "closed";
+      return;
+    }
     c.state = "connecting";
     c.error = undefined;
     this.onChange();
@@ -173,6 +179,8 @@ export class McpManager {
       const client = new Client({ name: "marv", version: this.opts.version });
       c.client = client;
       await withTimeout(client.connect(transport), this.opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS, "connecting");
+      // close() may have been called while this was connecting: don't leave the server running.
+      if (this.closed) throw new Error("closed");
       const infos: McpToolInfo[] = [];
       // A server can keep saying there's another page (the same cursor, or an endless list): stop at a cursor
       // seen before or after MAX_PAGES, or startup would never settle.
@@ -241,6 +249,7 @@ export class McpManager {
 
   /** Stops every server (on exit). */
   async close(): Promise<void> {
+    this.closed = true;
     await Promise.all(this.connections.map((c) => c.client?.close().catch(() => {})));
   }
 

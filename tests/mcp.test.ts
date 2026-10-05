@@ -256,3 +256,14 @@ describe("naming and output", () => {
     expect(huge).toContain("characters omitted");
   });
 });
+
+test("close() right after start() leaves no server connected or running", async () => {
+  const marker = `close-race-${crypto.randomUUID()}`;
+  const m = manager([stdio("racy", { transport: { type: "stdio", command: process.execPath, args: [FIXTURE, marker] } })]);
+  const ready = m.start();
+  await m.close();
+  await ready;
+  expect(m.status()[0]).toMatchObject({ state: "failed", error: "closed" });
+  for (let i = 0; i < 50 && Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim(); i++) await Bun.sleep(100);
+  expect(Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim()).toBe("");
+});

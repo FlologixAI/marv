@@ -134,7 +134,47 @@ const stepLimitRequest = (steps: number): ApprovalRequest => ({
   scope: { key: "continue", description: "the step limit" },
 });
 
-export class MarvSession {
+/** What `createSession()` returns: a conversation you drive with send(). (The class below has more; this is the public surface.) */
+export interface Session {
+  /** The session's id: its file name under sessions/, and what `marv -r` and `resume` take. */
+  readonly id: string;
+  /** A turn (or a compaction) is running. */
+  readonly busy: boolean;
+  /** "openrouter · x/y", for a status bar. */
+  readonly providerName: string;
+  /** The model's context window in tokens, when known. */
+  readonly contextLength: number | undefined;
+  /** What the provider's model list says about the model, when it has been looked up. */
+  readonly modelInfo: ModelInfo | undefined;
+  /** Memory as of the start of this conversation. */
+  readonly memory: Memories | undefined;
+  /** Files and servers that couldn't be read, and why. */
+  readonly problems: string[];
+  /** The last request's tokens (how full the context is), and the whole session's (survives clear()). */
+  usage(): { last?: Usage; totals: Totals; contextLength?: number };
+  /** Runs one turn and yields what happens; leaving the loop early interrupts it. Throws if a turn is running. */
+  send(text: string, options?: { forModel?: string; signal?: AbortSignal }): AsyncIterable<SessionEvent>;
+  /** Stops the running turn or compaction. Approvals still waiting are answered "no". */
+  interrupt(): void;
+  /** Summarizes the conversation now and continues from the summary. Rejects during a turn. */
+  compact(focus?: string): Promise<CompactResult>;
+  /** A new conversation (and session file); totals stay. */
+  clear(): Promise<void>;
+  /** Brings back a saved session (its id, or "latest"); null if there is none. Rejects during a turn. */
+  resume(id: string | "latest"): Promise<Resumed | null>;
+  /** New settings; each turn reads them when it starts. */
+  configure(changes: { provider?: ProviderOption; thinking?: boolean; sandbox?: boolean; yolo?: boolean; trajectories?: boolean }): void;
+  /** Feedback on the last turn, in its trajectory. */
+  rate(feedback: { score: 1 | -1 | 0; note?: string; labels?: string[] }): "rated" | "off" | "nothing";
+  /** Saves the conversation now (it's also saved shortly after every turn). */
+  save(): Promise<void>;
+  /** The pending save, and the trajectory's queued records, on disk. */
+  flush(): Promise<void>;
+  /** Stops what's running, waits for it to wind down, flushes, and closes the MCP servers the session started. */
+  close(): Promise<void>;
+}
+
+export class MarvSession implements Session {
   readonly problems: string[];
   private option: ProviderFactory | ProviderOption;
   private thinking: boolean;
