@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatOutput, runCommand } from "../src/tools/bash.ts";
-import { sandboxArgs, sandboxAvailable } from "../src/sandbox.ts";
+import { sandboxArgs, sandboxAvailable, sandboxBunCache } from "../src/sandbox.ts";
 
 describe("sandboxArgs", () => {
   const base = { root: "/home/me/proj", home: "/home/me", path: "/usr/bin", exists: (p: string) => p.endsWith(".bun") };
@@ -30,11 +30,14 @@ describe("sandboxArgs", () => {
       expect(a.join(" ")).toContain(`--ro-bind ${git} ${git}`);
       const at = a.lastIndexOf(git);
       expect(at).toBeGreaterThan(a.indexOf(home)); // after the home tmpfs
-      expect(at).toBeGreaterThan(a.indexOf(root, a.indexOf("--bind"))); // after the root bind
+      expect(at).toBeGreaterThan(a.indexOf(root)); // after the root bind
     });
 
     test("never add a read-write bind", () => {
-      expect(args([git]).filter((x) => x === "--bind")).toHaveLength(1);
+      const a = args([git]);
+      // Only the project and the sandbox's own bun cache are writable.
+      const writable = a.flatMap((x, i) => (x === "--bind" ? [a[i + 1]] : []));
+      expect(writable).toEqual([sandboxBunCache(home), root]);
     });
 
     test("that would expose the home folder or the whole system are refused", () => {
@@ -87,17 +90,23 @@ describe("sandboxArgs", () => {
     expect(sandboxArgs({ ...base, network: true })).not.toContain("--unshare-net");
   });
 
-  test("with the network on, bun's download cache is writable (on top of the read-only ~/.bun)", () => {
+  test("bun gets a cache of the sandbox's own, never the user's (network or not)", () => {
     const exists = (p: string) => p.endsWith(".bun") || p.endsWith(".bun/install/cache");
-    const online = sandboxArgs({ ...base, exists, network: true }).join(" ");
-    expect(online).toContain("--bind /home/me/.bun/install/cache /home/me/.bun/install/cache");
-    expect(online.indexOf("--bind /home/me/.bun/install/cache")).toBeGreaterThan(online.indexOf("--ro-bind /home/me/.bun /home/me/.bun"));
-    expect(sandboxArgs({ ...base, exists, network: false }).join(" ")).not.toContain("--bind /home/me/.bun/install/cache");
+    const cache = "/home/me/.marv/sandbox-cache/bun";
+    for (const network of [false, true]) {
+      const args = sandboxArgs({ ...base, exists, network }).join(" ");
+      expect(args).toContain(`--bind ${cache} ${cache}`);
+      expect(args).toContain(`--setenv BUN_INSTALL_CACHE_DIR ${cache}`);
+      // After the hidden home and the toolchains, so it sits on top of them.
+      expect(args.indexOf(`--bind ${cache}`)).toBeGreaterThan(args.indexOf("--ro-bind /home/me/.bun /home/me/.bun"));
+      // The user's own cache is never writable: an install's scripts could plant packages their real projects use.
+      expect(args).not.toContain("--bind /home/me/.bun/install/cache");
+    }
   });
 
   test("the project is mounted after the home folder is hidden (so it stays visible)", () => {
     const args = sandboxArgs({ ...base, network: false });
-    expect(args.indexOf("--bind")).toBeGreaterThan(args.indexOf("--tmpfs", args.indexOf("/tmp") + 1));
+    expect(args.indexOf("/home/me/proj")).toBeGreaterThan(args.indexOf("--tmpfs", args.indexOf("/tmp") + 1));
   });
 });
 

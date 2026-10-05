@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { sandboxAvailable } from "../src/sandbox.ts";
 import { runCommand } from "../src/tools/bash.ts";
@@ -63,6 +63,8 @@ sandboxed("inside the sandbox, the repository can't be changed", async () => {
     `echo /elsewhere > ${join(wt.adminDir, "commondir")}`, // repointing the worktree's record
     "git branch other", // a new ref
     "git update-ref refs/heads/main HEAD", // moving a branch (bypasses the checked-out-branch check)
+    // The user's own bun cache (only where it exists: elsewhere the sandbox's home is an empty, throwaway tmpfs).
+    ...(existsSync(join(homedir(), ".bun", "install", "cache")) ? ["touch ~/.bun/install/cache/planted"] : []),
   ]) {
     const result = await inWorktree(wt, command);
     // Each must fail because the repository is read-only, not for some other reason.
@@ -86,8 +88,14 @@ sandboxed("inside the sandbox, the repository can't be changed", async () => {
 online("installs a real dependency inside the sandbox", async () => {
   const wt = createWorktree({ root: repo, baseDir: trees, description: "deps check" });
   await writeFile(join(wt.dir, "package.json"), JSON.stringify({ name: "demo", private: true, dependencies: { "is-number": "7.0.0" } }));
-  const result = await inWorktree(wt, "bun install && bun -e 'console.log(require(\"is-number\")(5))'", true);
+  const run = "bun install && bun -e 'console.log(require(\"is-number\")(5))'";
+  const result = await inWorktree(wt, run, true);
   expect(result.output).toContain("true");
   expect(result.exitCode).toBe(0);
+  // Downloaded into the sandbox's own cache, so it installs again without the network.
+  await rm(join(wt.dir, "node_modules"), { recursive: true, force: true });
+  const offline = await inWorktree(wt, run);
+  expect(offline.output).toContain("true");
+  expect(offline.exitCode).toBe(0);
   finishWorktree(wt, { description: "deps check", interrupted: false });
 }, 130_000);
