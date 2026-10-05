@@ -28,9 +28,10 @@ export type McpServerEntry =
 
 export interface SessionOptions {
   /**
-   * The project folder: the tools can't reach outside it. Without `approve`, it can't be your home folder, a folder
-   * above it, or `/` (createSession throws): edits would then run without asking on your dotfiles (~/.bashrc,
-   * ~/.ssh/config). With an approver, every change there is asked about, so it's allowed.
+   * The project folder: the tools can't reach outside it. Your home folder, a folder above it, or `/` is refused
+   * unless you pass `yolo: false`: yolo's edits run before any approver is asked, so they'd change your dotfiles
+   * (~/.bashrc, ~/.ssh/config) unasked. With `yolo: false` every change goes to `approve` (or is refused without
+   * it), and configure() can't turn yolo back on there.
    */
   cwd: string;
   /** { kind: "openrouter", apiKey, model? }, { kind: "ollama", model, host?, contextLength? }, or a Provider of your own. */
@@ -67,7 +68,7 @@ export interface SessionOptions {
   approve?: (request: ApprovalRequest) => Promise<Decision>;
   /** Run bash in the bubblewrap sandbox (default true). */
   sandbox?: boolean;
-  /** Run what the sandbox confines without asking (default true). */
+  /** Run what the sandbox confines without asking (default true). Must be false when `cwd` is your home folder or above it. */
   yolo?: boolean;
   /** Let thinking models reason before they answer (default false). */
   thinking?: boolean;
@@ -106,13 +107,13 @@ export async function createSession(options: SessionOptions): Promise<Session> {
     isFolder = statSync(root).isDirectory();
   } catch {}
   if (!isFolder) throw new Error(`cwd ${root} isn't a folder`);
-  // With no one to ask, yolo-safe edits run on their own: in the home folder (or above it) that's every dotfile.
-  if (!options.approve && homeOrAbove(root)) {
-    const where = root === "/" ? "the root of the file system" : "your home folder (or above it)";
-    throw new Error(
-      `cwd ${root} is ${where}: with no approver, Marv would change files there without asking, dotfiles included. Use a project folder, or pass an approve callback.`,
-    );
-  }
+  // Yolo-safe edits run before any approver is asked (that's what yolo means), so in the home folder (or above it)
+  // yolo would change every dotfile unasked, approver or not. There, yolo must be off, and stay off (noYolo).
+  const where = root === "/" ? "the root of the file system" : "your home folder (or above it)";
+  const noYolo = homeOrAbove(root)
+    ? `cwd ${root} is ${where}: with yolo on, Marv would change files there without asking, dotfiles included. Use a project folder, or pass yolo: false (then every change goes to your approver, or is refused without one).`
+    : undefined;
+  if (noYolo && (options.yolo ?? true)) throw new Error(noYolo);
   if (options.resume && !options.persist) throw new Error("resume needs persist (there's nowhere to resume from)");
   const configDir = options.configDir ?? defaultConfigDir(process.env);
   const loaded = await loadSources({ root, sources: options.sources ?? [], configDir });
@@ -145,6 +146,7 @@ export async function createSession(options: SessionOptions): Promise<Session> {
     approve: options.approve,
     sandbox: options.sandbox,
     yolo: options.yolo,
+    noYolo,
     sessions: storeFor(options.persist, () => new SessionStore(join(configDir, "sessions"))),
     trajectories: storeFor(options.trajectories, () => new TrajectoryStore(join(configDir, "trajectories"))),
     worktreesDir: join(configDir, "worktrees", projectKey(root)),

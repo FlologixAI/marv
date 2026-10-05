@@ -92,6 +92,11 @@ export interface SessionInit {
   approve?: (request: ApprovalRequest) => Promise<Decision>;
   sandbox?: boolean;
   yolo?: boolean;
+  /**
+   * Yolo isn't allowed here, and why (the SDK sets it when the project is the home folder or above it, where yolo's
+   * unasked edits would reach every dotfile). Constructing with yolo on, or configure({ yolo: true }), throws this.
+   */
+  noYolo?: string;
   sessions?: SessionStore;
   trajectories?: TrajectoryStore;
   /** Whether to log to `trajectories` (default true); configure({ trajectories }) changes it. */
@@ -179,7 +184,8 @@ export interface Session {
   resume(id: string | "latest"): Promise<Resumed | null>;
   /**
    * New settings; each turn reads them when it starts, so a change during a turn applies from the next one. Throws
-   * only for an invalid provider (an unknown kind), and then nothing changed.
+   * only for an invalid provider (an unknown kind) or for turning yolo on where it isn't allowed (cwd your home
+   * folder or above it), and then nothing changed.
    */
   configure(changes: { provider?: ProviderOption; thinking?: boolean; sandbox?: boolean; yolo?: boolean; trajectories?: boolean }): void;
   /** Feedback on the last turn, in its trajectory. */
@@ -237,6 +243,7 @@ export class MarvSession implements Session {
 
   constructor(private readonly init: SessionInit) {
     checkToolNames(init.tools ?? []);
+    if (init.noYolo && (init.yolo ?? true)) throw new Error(init.noYolo);
     this.problems = init.problems ?? [];
     this.option = init.provider;
     this.thinking = init.thinking ?? false;
@@ -361,7 +368,7 @@ export class MarvSession implements Session {
    * New settings. Each turn reads them when it starts, so a change during a turn applies from the next one.
    * All or nothing: the new provider is made first, and only once that worked does anything change. An invalid
    * provider (an unknown kind) throws and leaves the session exactly as it was; had it been kept, every later
-   * configure() would rebuild from it and throw too.
+   * configure() would rebuild from it and throw too. So does turning yolo on where it isn't allowed (`noYolo`).
    */
   configure(changes: {
     provider?: ProviderFactory | ProviderOption;
@@ -370,6 +377,7 @@ export class MarvSession implements Session {
     yolo?: boolean;
     trajectories?: boolean;
   }): void {
+    if (changes.yolo && this.init.noYolo) throw new Error(this.init.noYolo);
     let remade: { option: ProviderFactory | ProviderOption; thinking: boolean; factory: ProviderFactory; provider: Provider; info: ModelInfo | undefined } | undefined;
     if (changes.provider !== undefined || changes.thinking !== undefined) {
       const option = changes.provider ?? this.option;

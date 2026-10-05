@@ -211,9 +211,11 @@ await session.close();
   sandboxed commands without network), subagents (shared-folder ones under these same rules; worktree ones
   when sandboxed), and MCP tools whose server says they're read-only. Anything else goes back to the model as
   refused, and it carries on. The sandbox is bubblewrap, on Linux: without it (macOS, say) every `bash`
-  command needs an approver. With no one to ask, the 25-step limit is a hard stop too, and `cwd` can't be
-  your home folder, a folder above it, or `/` (`createSession` throws): edits would run there unasked,
-  dotfiles included.
+  command needs an approver. With no one to ask, the 25-step limit is a hard stop too.
+- **Not in your home folder with yolo.** Yolo's safe edits run before any approver is asked, so with `cwd`
+  your home folder, a folder above it, or `/`, they'd change your dotfiles unasked. `createSession` refuses
+  that unless you pass `yolo: false` (then every change goes to your approver, or is refused without one),
+  and `configure({ yolo: true })` can't turn it back on there.
 - **Review before you run.** What the agent writes can plant something you'll later run outside the
   sandbox. Edits that run unasked are kept out of `.git` (hooks, config), but a `package.json` script, a
   `Makefile` or an `.envrc` is an ordinary file. In a repository you don't trust, read the changes
@@ -233,7 +235,7 @@ await session.close();
   tools) makes `createSession` throw. A Provider of your own is used for everything, subagents included.
 - **Settings between turns.** `configure({ provider, thinking, sandbox, yolo })`: a turn reads its settings
   when it starts, so a change during one applies from the next. It throws only for an invalid provider (an
-  unknown `kind`), and then nothing changed. `close()` stops what's running, waits for it, saves, and stops
+  unknown `kind`) or for turning yolo on in the home folder, and then nothing changed. `close()` stops what's running, waits for it, saves, and stops
   the MCP servers the session started; `send()` throws after it.
 - **Files.** `configDir` (default `~/.marv`) moves config, memory, `mcp.json`, sessions, trajectories,
   worktrees and MCP trust; personal skills and agents are still read from `~/.marv` in your home folder, as

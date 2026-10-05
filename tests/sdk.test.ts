@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -170,15 +171,55 @@ test("a tool named like a built-in, another of yours, or an MCP tool is refused,
   expect(running(marker)).toEqual([]);
 });
 
-test("with no approver, the home folder (or anything above it) isn't a project", async () => {
+// Yolo runs its safe edits before any approver is asked, so in the home folder (or above it) yolo is what's refused.
+test("with yolo on, the home folder (or anything above it) isn't a project, approver or not", async () => {
   const provider = new ScriptedProvider([]);
-  await expect(createSession({ cwd: homedir(), provider, configDir })).rejects.toThrow(`cwd ${homedir()} is your home folder (or above it)`);
-  await expect(createSession({ cwd: dirname(homedir()), provider, configDir })).rejects.toThrow(/is your home folder \(or above it\)/);
-  await expect(createSession({ cwd: "/", provider, configDir })).rejects.toThrow(/cwd \/ is the root of the file system/);
+  const asked: string[] = [];
+  const approve = async (request: sdk.ApprovalRequest) => (asked.push(request.tool), "no" as const);
+  await expect(createSession({ cwd: homedir(), provider, configDir })).rejects.toThrow(
+    `cwd ${homedir()} is your home folder (or above it): with yolo on, Marv would change files there without asking, dotfiles included. Use a project folder, or pass yolo: false (then every change goes to your approver, or is refused without one).`,
+  );
+  await expect(createSession({ cwd: homedir(), provider, configDir, approve })).rejects.toThrow(/with yolo on/);
+  await expect(createSession({ cwd: dirname(homedir()), provider, configDir, approve })).rejects.toThrow(/is your home folder \(or above it\): with yolo on/);
+  await expect(createSession({ cwd: "/", provider, configDir, approve })).rejects.toThrow(/cwd \/ is the root of the file system: with yolo on/);
+  expect(asked).toEqual([]);
 });
 
-test("with an approver, the home folder is allowed (every change is asked)", async () => {
-  const session = await createSession({ cwd: homedir(), provider: new ScriptedProvider([]), configDir, approve: async () => "no" });
+/** A turn in the home folder that writes a file of its own; the file is removed whatever happens. */
+async function writeInHome(options: Partial<sdk.SessionOptions>): Promise<{ events: SessionEvent[]; written: boolean }> {
+  const name = `.marv-sdk-test-${crypto.randomUUID()}`;
+  const target = join(homedir(), name);
+  const provider = new ScriptedProvider([
+    [{ type: "tool_call", call: { id: "w1", name: "write_file", arguments: JSON.stringify({ path: name, content: "x\n" }) } }, { type: "done", reason: "tool_calls" }],
+    say("Done."),
+  ]);
+  try {
+    const session = await createSession({ cwd: homedir(), provider, configDir, yolo: false, ...options });
+    const events = await collect(session.send("write it"));
+    await session.close();
+    return { events, written: existsSync(target) };
+  } finally {
+    await rm(target, { force: true });
+  }
+}
+
+test("with yolo: false the home folder is allowed: with no approver a change is refused", async () => {
+  const { events, written } = await writeInHome({});
+  expect(written).toBe(false);
+  expect(events).toContainEqual(expect.objectContaining({ type: "tool_end", result: expect.objectContaining({ isError: true, output: expect.stringContaining("there's no one to ask") }) }));
+});
+
+test("with yolo: false and an approver, a change in the home folder is asked about", async () => {
+  const asked: string[] = [];
+  const { written } = await writeInHome({ approve: async (request) => (asked.push(request.tool), "no") });
+  expect(asked).toEqual(["write_file"]);
+  expect(written).toBe(false);
+});
+
+// That the refused configure() changes nothing is checked in tests/session.test.ts, away from the real home folder.
+test("yolo can't be turned back on in the home folder", async () => {
+  const session = await createSession({ cwd: homedir(), provider: new ScriptedProvider([]), configDir, yolo: false });
+  expect(() => session.configure({ yolo: true })).toThrow(/with yolo on, Marv would change files there without asking/);
   await session.close();
 });
 

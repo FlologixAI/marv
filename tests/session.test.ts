@@ -806,6 +806,22 @@ describe("final review fixes", () => {
     expect(existsSync(join(project, "out.txt"))).toBe(true);
   });
 
+  test("where yolo isn't allowed (noYolo), a session with yolo on can't be made", () => {
+    expect(() => makeSession(new ScriptedProvider([]), { noYolo: "Not here." })).toThrow("Not here.");
+    expect(() => makeSession(new ScriptedProvider([]), { noYolo: "Not here.", yolo: true })).toThrow("Not here.");
+  });
+
+  test("nor can configure() turn it on: it throws and changes nothing", async () => {
+    const provider = new ScriptedProvider([useTools(call("w1", "write_file", { path: "out.txt", content: "hi\n" })), say("Refused.")]);
+    const session = makeSession(provider, { noYolo: "Not here.", yolo: false });
+    expect(() => session.configure({ yolo: true, provider: fixed(new ScriptedProvider([say("Other.")])) })).toThrow("Not here.");
+    session.configure({ yolo: false }); // allowed
+    const events = await collect(session.send("write it"));
+    // Still yolo off, and still the first provider: with no approver the edit is refused.
+    expect(events).toContainEqual({ type: "assistant", text: "Refused." });
+    expect(existsSync(join(project, "out.txt"))).toBe(false);
+  });
+
   test("after close(), nothing starts work or swaps the conversation; close() twice is fine", async () => {
     const session = makeSession(new ScriptedProvider([say("Hi.")]), { sessions: new SessionStore(dir) });
     await session.close();
