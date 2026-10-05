@@ -3,6 +3,18 @@
   "version": "0.1.0",
   "description": "A terminal coding agent",
   "type": "module",
+  "exports": {
+    "./sdk": "./src/sdk.ts",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "bun": ">=1.3"
+  },
+  "files": [
+    "src",
+    "patches",
+    "README.md"
+  ],
   "bin": {
     "marv": "./src/cli.tsx"
   },
