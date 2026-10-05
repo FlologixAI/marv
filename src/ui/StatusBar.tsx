@@ -25,15 +25,17 @@ interface Props {
   /** From formatUsage(), once a request has been made. */
   usage?: string;
   busy: boolean;
+  /** Subagents running right now. */
+  agents?: number;
 }
 
-export function StatusBar({ model, cwd, usage, confirmExit, notice, busy }: Props) {
+export function StatusBar({ model, cwd, usage, confirmExit, notice, busy, agents = 0 }: Props) {
   const hint = confirmExit
     ? "Press ctrl+c again to exit"
     : notice
       ? notice
       : busy
-      ? "esc to interrupt"
+      ? `esc to interrupt${agents ? ` · ${agents} agent${agents === 1 ? "" : "s"} running` : ""}`
       : "/help · PgUp/PgDn to scroll · ctrl+c to exit";
 
   return (

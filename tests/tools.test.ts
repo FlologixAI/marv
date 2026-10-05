@@ -187,6 +187,26 @@ describe("runTool: subagent support", () => {
     await runTool(call("bash", { command: "ls" }), { root, approve });
     expect(asked.map((r) => r.network)).toEqual([true, undefined]);
   });
+
+  test("a run stopped while the preview was being made doesn't raise an approval prompt", async () => {
+    // A parallel subagent can be mid-preview when the user presses Esc.
+    const controller = new AbortController();
+    const asked: ApprovalRequest[] = [];
+    let ran = false;
+    const slow: Tool = {
+      ...sometimes,
+      preview: async () => {
+        controller.abort();
+        return { title: "Sometimes" };
+      },
+      run: async () => ((ran = true), { output: "ran", summary: "ok" }),
+    };
+    const approve = async (r: ApprovalRequest) => (asked.push(r), "yes" as const);
+    const result = await runTool(call("sometimes", { ask: true }), { root, approve, signal: controller.signal }, [slow]);
+    expect(asked).toHaveLength(0);
+    expect(ran).toBe(false);
+    expect(result).toMatchObject({ declined: true, summary: "declined", output: expect.stringContaining("stopped the run") });
+  });
 });
 
 describe("the file listing never runs a repository's programs", () => {

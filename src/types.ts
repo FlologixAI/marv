@@ -9,6 +9,8 @@ export interface ToolStatus {
   status: "running" | "done" | "error" | "declined";
   /** e.g. "42 lines", or the error. */
   summary?: string;
+  /** A subagent's finished tool calls, shown with ctrl+o. */
+  steps?: string[];
 }
 
 export interface Message {

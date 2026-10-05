@@ -15,17 +15,19 @@ interface Props {
   skills?: number;
   /** How many memories were loaded. */
   memories?: number;
+  /** ctrl+o: show subagents' steps under their entries. */
+  showSteps?: boolean;
 }
 
 // In the alternate screen every frame is redrawn from the React tree, so the
 // whole transcript stays mounted (inside a ScrollView) instead of being printed
 // once with <Static>. memo() skips re-rendering it on every keystroke.
-export const Transcript = memo(function Transcript({ items, version, cwd, instructions, skills, memories }: Props) {
+export const Transcript = memo(function Transcript({ items, version, cwd, instructions, skills, memories, showSteps }: Props) {
   return items.map((item) =>
     item.kind === "welcome" ? (
       <Welcome key={item.id} version={version} cwd={cwd} instructions={instructions} skills={skills} memories={memories} />
     ) : (
-      <MessageView key={item.id} message={item.message} />
+      <MessageView key={item.id} message={item.message} showSteps={showSteps} />
     ),
   );
 });

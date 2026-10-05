@@ -62,6 +62,11 @@ export async function runTool(call: ToolCall, ctx: ToolContext, available: Tool[
       const preview = await tool.preview!(parsed.data, ctx);
       const scope = tool.scope?.(parsed.data) ?? { key: call.name, description: call.name };
       const network = tool.usesNetwork?.(parsed.data) ? { network: true } : {};
+      // Stopped while the preview was being made (a parallel subagent when the
+      // user pressed Esc): don't raise a prompt for a run that's over.
+      if (ctx.signal?.aborted) {
+        return { output: "Not run: the user stopped the run.", summary: "declined", declined: true, label };
+      }
       const decision = await ctx.approve({ tool: call.name, label, preview, scope, ...network });
       if (decision === "no") {
         return {

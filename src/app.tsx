@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, useApp, useInput, useWindowSize } from "ink";
 import { runAgent } from "./agent.ts";
+import { GENERAL_PURPOSE, type AgentType } from "./agents.ts";
 import { copyToClipboard } from "./clipboard.ts";
 import { commands, isCommand, runCommand } from "./commands/index.ts";
 import {
@@ -25,8 +26,8 @@ import { COMPACT_AT, compactedHistory, summarize } from "./compact.ts";
 import { addMemory, findMemory, loadMemory, removeMemory, type Memories, type MemoryPaths } from "./memory.ts";
 import { newSession, timeAgo, type Session, type SessionStore, type SessionSummary } from "./sessions.ts";
 import { skillMessage, type Skill } from "./skills.ts";
-import { runTool, toolSpecsFor } from "./tools/index.ts";
-import type { ApprovalRequest, Decision } from "./tools/types.ts";
+import { isParallelCall, runTool, toolSpecsFor } from "./tools/index.ts";
+import type { AgentHost, AgentProgress, ApprovalRequest, Decision } from "./tools/types.ts";
 import type { Message } from "./types.ts";
 import { Approval } from "./ui/Approval.tsx";
 import { SessionPicker } from "./ui/SessionPicker.tsx";
@@ -47,6 +48,10 @@ const NOTICE_MS = 2000;
  * for frames nobody would see.
  */
 const STREAM_FLUSH_MS = 33;
+// Defaults defined once, so they're the same objects on every render (the
+// system prompt and send() depend on them).
+const DEFAULT_AGENTS: AgentType[] = [GENERAL_PURPOSE];
+const NO_PROBLEMS: string[] = [];
 
 interface Props {
   store: ConfigStore;
@@ -77,6 +82,11 @@ interface Props {
   resume?: "latest" | "pick";
   /** Where memory lives, and what it held at startup. */
   memory?: { paths: MemoryPaths; initial: Memories };
+  /** Agent types the agent tool can start, and files that couldn't be loaded. */
+  agents?: AgentType[];
+  agentProblems?: string[];
+  /** Where subagents' worktrees go (~/.marv/worktrees/<project>); without it, no worktrees. */
+  worktreesDir?: string;
 }
 
 // "model" is the /model picker: the setup screen, starting at the model step.
@@ -99,6 +109,9 @@ export function App({
   sessions,
   resume,
   memory,
+  agents = DEFAULT_AGENTS,
+  agentProblems = NO_PROBLEMS,
+  worktreesDir,
 }: Props) {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
@@ -126,8 +139,8 @@ export function App({
   // Memory as of the start of this conversation (reloaded by /clear), so the system prompt stays fixed within it.
   const [memories, setMemories] = useState<Memories | undefined>(memory?.initial);
   const system = useMemo(
-    () => systemPrompt({ cwd, tools: specs.map((t) => t.name), instructions, skills, memory: memories }),
-    [cwd, specs, instructions, skills, memories],
+    () => systemPrompt({ cwd, tools: specs.map((t) => t.name), instructions, skills, memory: memories, agents }),
+    [cwd, specs, instructions, skills, memories, agents],
   );
   // Skills show up in the / menu next to the built-in commands.
   const menu = useMemo(() => [...commands, ...skills.map(({ name, description }) => ({ name, description }))], [skills]);
@@ -160,8 +173,13 @@ export function App({
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [streaming, setStreaming] = useState<string | null>(null);
-  // Set while a tool runs (its transcript line shows the progress, so no "Thinking…").
-  const [toolRunning, setToolRunning] = useState(false);
+  // Tools running right now (subagents run several at once), and how many of
+  // them are subagents. While any run, their transcript lines show the
+  // progress, so no "Thinking…".
+  const [toolsRunning, setToolsRunning] = useState(0);
+  const [agentsRunning, setAgentsRunning] = useState(0);
+  // ctrl+o: show subagents' steps under their entries.
+  const [showSteps, setShowSteps] = useState(false);
   // Tools waiting for the user's yes/no, oldest first (parallel subagents can
   // ask at the same time). The first one is shown in place of the prompt.
   type Pending = { id: number; request: ApprovalRequest; resolve: (d: Decision) => void };
@@ -338,7 +356,12 @@ export function App({
         thoughtMs = 0;
         setThinking("");
       };
-      const toolLines = new Map<string, number>();
+      const toolLines = new Map<string, { line: number; label: string }>();
+      // Subagents' progress, batched into the same flush as streamed text: with
+      // several running, updating the transcript on every step would re-render
+      // it far more often than Ink can draw.
+      const progress = new Map<string, AgentProgress>();
+      const steps = new Map<string, string[]>();
       // Tokens accumulate in `reply`/`thought` and reach React in batches.
       let flushTimer: ReturnType<typeof setTimeout> | null = null;
       const flush = () => {
@@ -346,9 +369,29 @@ export function App({
         flushTimer = null;
         setStreaming(reply);
         setThinking(thought);
+        for (const [callId, p] of progress) {
+          const entry = toolLines.get(callId);
+          if (entry) updateMessage(entry.line, { tool: { label: entry.label, status: "running", summary: p.line, steps: p.steps } });
+        }
+        progress.clear();
       };
       const scheduleFlush = () => {
         flushTimer ??= setTimeout(flush, STREAM_FLUSH_MS);
+      };
+      // What the agent tool needs to start subagents. Only the main agent gets
+      // one; what a subagent does reaches this conversation only as its tool result.
+      const agentHost: AgentHost = {
+        agents,
+        cwd,
+        instructions,
+        worktreesDir,
+        providerFor: (model) => (model ? makeProvider({ ...configRef.current, model }) : provider),
+        onUsage: countUsage,
+        onProgress: (callId, p) => {
+          progress.set(callId, p);
+          steps.set(callId, p.steps);
+          scheduleFlush();
+        },
       };
 
       try {
@@ -357,8 +400,10 @@ export function App({
           history: conversation.current,
           system,
           tools: specs,
-          runTool: (call) => runTool(call, { root, signal: controller.signal, approve, sandbox: config.sandbox, skills, memory: memory?.paths }),
+          runTool: (call) =>
+            runTool(call, { root, signal: controller.signal, approve, sandbox: config.sandbox, skills, memory: memory?.paths, agentHost }),
           signal: controller.signal,
+          isParallel: isParallelCall,
         })) {
           switch (event.type) {
             case "thinking_delta":
@@ -380,19 +425,23 @@ export function App({
             case "tool_start":
               flush();
               noteThought();
-              setToolRunning(true);
-              toolLines.set(
-                event.call.id,
-                addMessage({ role: "tool", text: event.call.name, tool: { label: event.label, status: "running" } }),
-              );
+              setToolsRunning((n) => n + 1);
+              if (event.call.name === "agent") setAgentsRunning((n) => n + 1);
+              toolLines.set(event.call.id, {
+                label: event.label,
+                line: addMessage({ role: "tool", text: event.call.name, tool: { label: event.label, status: "running" } }),
+              });
               break;
             case "tool_end": {
               const { result } = event;
-              const line = toolLines.get(event.call.id);
-              const summary = result.isError ? result.output.split("\n")[0] : result.summary;
+              const entry = toolLines.get(event.call.id);
+              progress.delete(event.call.id); // a late progress flush mustn't turn it back to "running"
+              // A plain failure shows its message; a subagent that stopped shows its own summary.
+              const summary = result.isError && result.summary === "error" ? result.output.split("\n")[0] : result.summary;
               const status = result.declined ? "declined" : result.isError ? "error" : "done";
-              if (line !== undefined) updateMessage(line, { tool: { label: result.label, status, summary } });
-              setToolRunning(false);
+              if (entry) updateMessage(entry.line, { tool: { label: result.label, status, summary, steps: steps.get(event.call.id) } });
+              setToolsRunning((n) => Math.max(0, n - 1));
+              if (event.call.name === "agent") setAgentsRunning((n) => Math.max(0, n - 1));
               stepStarted = Date.now();
               break;
             }
@@ -415,13 +464,39 @@ export function App({
       } finally {
         if (flushTimer) clearTimeout(flushTimer);
         noteThought();
+        // Stop anything still running (a no-op after a normal end): if the loop
+        // ended early (an exception), subagents still running in a parallel
+        // group would otherwise carry on unseen, and could still ask for
+        // approvals. Anything already queued belongs to this run, so it's declined.
+        controller.abort();
+        declineAll();
         abortRef.current = null;
         setStreaming(null);
-        setToolRunning(false);
+        setToolsRunning(0);
+        setAgentsRunning(0);
       }
-
     },
-    [provider, addMessage, updateMessage, system, specs, skills, root, approve, config.sandbox, countUsage, compact, contextLength],
+    [
+      provider,
+      addMessage,
+      updateMessage,
+      system,
+      specs,
+      skills,
+      root,
+      approve,
+      declineAll,
+      config.sandbox,
+      countUsage,
+      compact,
+      contextLength,
+      agents,
+      cwd,
+      instructions,
+      worktreesDir,
+      makeProvider,
+      memory,
+    ],
   );
 
   // /memory, /remember, /forget: you editing Marv's memory directly (no approval needed).
@@ -567,11 +642,21 @@ export function App({
   // On first run there is nothing to go back to, so cancelling setup quits.
   const cancelSetup = () => (setupMode === "first-run" ? exit() : setSetupMode(null));
 
-  // Esc stops a running reply or tool. (At an approval prompt the Approval's own
-  // Esc handler also runs, declining what's queued; both end in an abort.)
+  // Esc stops a running reply or tool, and declines any approval already
+  // queued: one can join the queue just before its prompt is drawn, and must
+  // not be left waiting on a stopped run. (At an approval prompt the Approval's
+  // own Esc handler runs cancelAll too; doing it twice is harmless.)
   useInput(
     (_char, key) => {
-      if (key.escape && abortRef.current) abortRef.current.abort();
+      if (key.escape && abortRef.current) cancelAll();
+    },
+    { isActive: phase === "main" && setupMode === null },
+  );
+
+  // ctrl+o: show or hide what subagents did, under their entries.
+  useInput(
+    (char, key) => {
+      if (key.ctrl && char === "o") setShowSteps((s) => !s);
     },
     { isActive: phase === "main" && setupMode === null },
   );
@@ -708,6 +793,13 @@ export function App({
     addMessage({ role: "system", isError: true, text: `${count} skill${count === 1 ? "" : "s"} couldn't be loaded (see /skills):\n${skillProblems.join("\n")}` });
   }, [skillProblems, addMessage]);
 
+  // Agent files that couldn't be loaded, likewise.
+  useEffect(() => {
+    if (agentProblems.length === 0) return;
+    const count = agentProblems.length;
+    addMessage({ role: "system", isError: true, text: `${count} agent file${count === 1 ? "" : "s"} couldn't be loaded (see /agents):\n${agentProblems.join("\n")}` });
+  }, [agentProblems, addMessage]);
+
   const finishSplash = useCallback(() => setPhase("main"), []);
 
   // Marv runs in the alternate screen (see cli.tsx), so the root fills the
@@ -731,11 +823,12 @@ export function App({
           instructions={Boolean(instructions)}
           skills={skills.length}
           memories={memories ? memories.personal.length + memories.project.length : 0}
+          showSteps={showSteps}
         />
 
         {streaming !== null &&
           (streaming === "" ? (
-            !toolRunning && <ThinkingView thought={thinking} label={compacting ? "Compacting the conversation…" : undefined} />
+            toolsRunning === 0 && <ThinkingView thought={thinking} label={compacting ? "Compacting the conversation…" : undefined} />
           ) : (
             <MessageView message={{ role: "assistant", text: streaming }} streaming />
           ))}
@@ -747,7 +840,7 @@ export function App({
         ) : approval && !setupMode ? (
           <>
             <Approval key={approval.head.id} request={approval.head.request} waiting={approval.waiting} onDecide={decide} onCancel={cancelAll} />
-            <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy />
+            <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy agents={agentsRunning} />
           </>
         ) : setupMode ? (
           <Setup
@@ -775,6 +868,7 @@ export function App({
               confirmExit={confirmExit}
               notice={notice}
               busy={busy}
+              agents={agentsRunning}
             />
           </>
         )}

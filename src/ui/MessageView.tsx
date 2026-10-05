@@ -25,10 +25,13 @@ function Gutter({ mark, color }: { mark: string; color: string }) {
 export const MessageView = memo(function MessageView({
   message,
   streaming = false,
+  showSteps = false,
 }: {
   message: Pick<Message, "role" | "text" | "isError" | "tool" | "markdown">;
   /** The assistant reply still coming in (parsed incrementally). */
   streaming?: boolean;
+  /** ctrl+o: show subagents' steps under their entry. */
+  showSteps?: boolean;
 }) {
   switch (message.role) {
     case "user":
@@ -64,8 +67,15 @@ export const MessageView = memo(function MessageView({
           </Text>
           <Text color={failed ? theme.error : declined ? theme.warning : theme.dim} wrap="truncate-end">
             {"  ⎿ "}
-            {tool.status === "running" ? "running…" : tool.summary}
+            {tool.status === "running" ? (tool.summary ?? "running…") : tool.summary}
           </Text>
+          {showSteps &&
+            tool.steps?.map((step, i) => (
+              <Text key={i} color={theme.dim} wrap="truncate-end">
+                {"    · "}
+                {step}
+              </Text>
+            ))}
         </Box>
       );
     }

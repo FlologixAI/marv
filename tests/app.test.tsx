@@ -13,7 +13,8 @@ import type { Skill } from "../src/skills.ts";
 import type { ModelInfo } from "../src/provider/models.ts";
 import { SessionStore } from "../src/sessions.ts";
 import { loadMemory, memoryPaths, type MemoryPaths } from "../src/memory.ts";
-import { FakeProvider, ScriptedProvider } from "./fake-provider.ts";
+import { GENERAL_PURPOSE } from "../src/agents.ts";
+import { FakeProvider, RoutedProvider, ScriptedProvider } from "./fake-provider.ts";
 
 const ENTER = "\r";
 const DOWN = "\x1b[B";
@@ -751,5 +752,126 @@ describe("App", () => {
       await tick(100);
       expect(model.requests[1]!.options.system).toContain("- likes tabs");
     });
+  });
+});
+
+describe("subagents", () => {
+  const ESC = "\x1b";
+  const CTRL_O = "\x0f";
+  const reply = (text: string) => [{ type: "text_delta", text }, { type: "done" }] as AgentEvent[];
+  const calls = (...list: { id: string; name: string; args: unknown }[]) =>
+    [...list.map(({ id, name, args }) => ({ type: "tool_call", call: { id, name, arguments: JSON.stringify(args) } })), { type: "done" }] as AgentEvent[];
+
+  function renderAgents(model: Provider) {
+    return render(
+      <App store={store} initialFile={LOCAL} env={{}} version="9.9.9" cwd="~/x" root={project} splashMs={0} makeProvider={() => model} loadModels={async () => []} agents={[GENERAL_PURPOSE]} />,
+    );
+  }
+
+  test("a subagent is one entry that ends with its summary; ctrl+o shows its steps", async () => {
+    const model = new ScriptedProvider([
+      calls({ id: "a1", name: "agent", args: { description: "Read notes", prompt: "What's in notes.txt?" } }),
+      calls({ id: "r1", name: "read_file", args: { path: "notes.txt" } }),
+      reply("It says remember the milk."),
+      reply("The subagent says: milk."),
+    ]);
+    const { lastFrame, stdin } = renderAgents(model);
+    await type(stdin, "check the notes");
+    await tick(300);
+    expect(lastFrame()).toContain("agent general-purpose · Read notes");
+    expect(lastFrame()).toContain("done · 1 tool");
+    expect(lastFrame()).toContain("The subagent says: milk.");
+    expect(model.requests[3]!.history.at(-1)).toMatchObject({ role: "tool", text: "It says remember the milk." });
+    expect(lastFrame()).not.toContain("read_file notes.txt · 1 line");
+
+    stdin.write(CTRL_O);
+    await tick();
+    expect(lastFrame()).toContain("read_file notes.txt · 1 line");
+  });
+
+  function twoWriters() {
+    const parent = new ScriptedProvider([
+      calls(
+        { id: "a1", name: "agent", args: { description: "one", prompt: "write one.txt" } },
+        { id: "a2", name: "agent", args: { description: "two", prompt: "write two.txt" } },
+      ),
+      reply("Both done."),
+    ]);
+    const writer = (path: string) => new ScriptedProvider([calls({ id: `w-${path}`, name: "write_file", args: { path, content: "x\n" } }), reply(`wrote ${path}`)]);
+    return new RoutedProvider({ "make two": parent, "write one.txt": writer("one.txt"), "write two.txt": writer("two.txt") });
+  }
+
+  test("parallel subagents' approvals queue up, one at a time", async () => {
+    const { lastFrame, stdin } = renderAgents(twoWriters());
+    await type(stdin, "make two files");
+    await tick(200);
+    expect(lastFrame()).toContain("Do you want to proceed?");
+    expect(lastFrame()).toContain("1 more waiting");
+    expect(lastFrame()).toContain("2 agents running");
+
+    stdin.write(ENTER);
+    await tick(100);
+    expect(lastFrame()).toContain("Do you want to proceed?"); // the second one
+    expect(lastFrame()).not.toContain("more waiting");
+    stdin.write(ENTER);
+    await tick(300);
+    expect(existsSync(join(project, "one.txt"))).toBe(true);
+    expect(existsSync(join(project, "two.txt"))).toBe(true);
+    expect(lastFrame()).toContain("Both done.");
+    expect(lastFrame()).not.toContain("agents running");
+  });
+
+  test("each queued approval starts with its cursor on Yes", async () => {
+    const { lastFrame, stdin } = renderAgents(twoWriters());
+    await type(stdin, "make two files");
+    await tick(200);
+    expect(lastFrame()).toContain("1 more waiting");
+    stdin.write(DOWN);
+    await tick();
+    stdin.write(DOWN);
+    await tick();
+    expect(lastFrame()).toContain("❯ No, and tell Marv");
+    stdin.write(ENTER); // No, for the first subagent
+    await tick(100);
+    expect(lastFrame()).toContain("Do you want to proceed?"); // the second one, a fresh prompt
+    expect(lastFrame()).toContain("❯ Yes");
+    expect(lastFrame()).not.toContain("❯ Yes, and");
+    expect(lastFrame()).not.toContain("❯ No");
+  });
+
+  test("Esc at a queued approval declines them all and stops the run", async () => {
+    const { lastFrame, stdin } = renderAgents(twoWriters());
+    await type(stdin, "make two files");
+    await tick(200);
+    stdin.write(ESC);
+    await tick(300);
+    expect(existsSync(join(project, "one.txt"))).toBe(false);
+    expect(existsSync(join(project, "two.txt"))).toBe(false);
+    expect(lastFrame()).toContain("Interrupted.");
+    expect(lastFrame()).not.toContain("Do you want to proceed?");
+    expect(lastFrame()).not.toContain("agents running");
+  });
+
+  test("'always' answers the other queued requests in the same scope", async () => {
+    const { lastFrame, stdin } = renderAgents(twoWriters());
+    await type(stdin, "make two files");
+    await tick(200);
+    expect(lastFrame()).toContain("1 more waiting");
+    stdin.write(DOWN);
+    await tick();
+    stdin.write(ENTER); // Yes, and don't ask again for file changes
+    await tick(300);
+    expect(existsSync(join(project, "one.txt"))).toBe(true);
+    expect(existsSync(join(project, "two.txt"))).toBe(true); // no second prompt
+    expect(lastFrame()).toContain("Both done.");
+  });
+
+  test("agent files that couldn't be loaded are reported", async () => {
+    const { lastFrame } = render(
+      <App store={store} initialFile={LOCAL} env={{}} version="9.9.9" cwd="~/x" root={project} splashMs={0} makeProvider={() => new FakeProvider()} loadModels={async () => []} agentProblems={[".marv/agents/x.md needs a description"]} />,
+    );
+    await tick();
+    expect(lastFrame()).toContain("1 agent file couldn't be loaded");
+    expect(lastFrame()).toContain(".marv/agents/x.md needs a description");
   });
 });
