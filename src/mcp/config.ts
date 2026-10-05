@@ -187,20 +187,47 @@ async function readFile(path: string, source: McpServerConfig["source"], env: En
   return servers;
 }
 
-/** The servers to connect to (yours first, then the project's), and what couldn't be read, and why. */
-export async function loadMcpConfig({ root, configDir, env: outer }: { root: string; configDir: string; env: Env }) {
+/** The servers to connect to (yours first, then the project's), and what couldn't be read, and why. `include` leaves either file out. */
+export async function loadMcpConfig({
+  root,
+  configDir,
+  env: outer,
+  include = { personal: true, project: true },
+}: {
+  root: string;
+  configDir: string;
+  env: Env;
+  include?: { personal: boolean; project: boolean };
+}) {
   const problems: string[] = [];
   // Servers of yours start in your home folder (see McpManager.cwdFor); one that works on the project gets it this way.
   const env = { ...outer, MARV_PROJECT_DIR: root };
   const projectPath = join(root, PROJECT_FILE);
-  const project = await readFile(projectPath, "project", env, problems);
-  const personal = await readFile(join(configDir, PERSONAL_FILE), "personal", env, problems);
+  const project = include.project ? await readFile(projectPath, "project", env, problems) : [];
+  const personal = include.personal ? await readFile(join(configDir, PERSONAL_FILE), "personal", env, problems) : [];
   const servers = [...personal];
   for (const server of project) {
     if (personal.some((p) => p.name === server.name)) {
       problems.push(`"${server.name}" in ${projectPath} was ignored: you have a server of your own with that name.`);
     } else {
       servers.push(server);
+    }
+  }
+  return { servers, problems };
+}
+
+/**
+ * Servers given in code (the SDK's `mcpServers`), in .mcp.json's format. Trusted like your own: whoever wrote the
+ * program chose them, so they never wait for /mcp trust.
+ */
+export function parseMcpServers(entries: Record<string, unknown>, env: Env): { servers: McpServerConfig[]; problems: string[] } {
+  const servers: McpServerConfig[] = [];
+  const problems: string[] = [];
+  for (const [name, raw] of Object.entries(entries)) {
+    try {
+      servers.push(parseServer(name, raw, "personal", env, "mcpServers"));
+    } catch (err) {
+      problems.push((err as Error).message);
     }
   }
   return { servers, problems };

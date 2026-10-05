@@ -88,8 +88,8 @@ async function readAgent(path: string, file: string, source: AgentType["source"]
   return { name, description, body, tools, model: rawModel && !CLAUDE_CODE_MODELS.includes(rawModel) ? rawModel : undefined, source };
 }
 
-/** Built-in, then personal, then project agents (later wins a name clash). Skips broken ones, saying why. */
-export async function loadAgents({ root, home }: { root: string; home: string }): Promise<{ agents: AgentType[]; problems: string[] }> {
+/** Built-in, then personal (under `home`), then project agents (under `root`; later wins a name clash). Either can be left out. Skips broken ones, saying why. */
+export async function loadAgents({ root, home }: { root?: string; home?: string }): Promise<{ agents: AgentType[]; problems: string[] }> {
   const byName = new Map<string, AgentType>([[GENERAL_PURPOSE.name, GENERAL_PURPOSE]]);
   const problems: string[] = [];
   const sources = [
@@ -97,6 +97,7 @@ export async function loadAgents({ root, home }: { root: string; home: string })
     { base: root, source: "project" as const, prefix: "" },
   ];
   for (const { base, source, prefix } of sources) {
+    if (base === undefined) continue;
     const dir = agentsDir(base);
     if (!existsSync(dir)) continue;
     for (const file of readdirSync(dir).sort()) {

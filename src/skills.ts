@@ -62,8 +62,8 @@ async function readSkill(dir: string, folder: string, source: Skill["source"], s
   return { name, description, body, dir, files: listFiles(dir), source };
 }
 
-/** Loads personal skills, then project skills (which win on a name clash). Skips broken ones, saying why. */
-export async function loadSkills({ root, home }: { root: string; home: string }): Promise<{ skills: Skill[]; problems: string[] }> {
+/** Loads personal skills (under `home`), then project skills (under `root`; they win a name clash). Either can be left out. Skips broken ones, saying why. */
+export async function loadSkills({ root, home }: { root?: string; home?: string }): Promise<{ skills: Skill[]; problems: string[] }> {
   const byName = new Map<string, Skill>();
   const problems: string[] = [];
   const sources = [
@@ -71,6 +71,7 @@ export async function loadSkills({ root, home }: { root: string; home: string })
     { base: root, source: "project" as const, prefix: "" },
   ];
   for (const { base, source, prefix } of sources) {
+    if (base === undefined) continue;
     const dir = skillsDir(base);
     if (!existsSync(dir)) continue;
     for (const folder of readdirSync(dir).sort()) {
