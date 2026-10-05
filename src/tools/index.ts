@@ -24,10 +24,13 @@ export const isParallelCall = (call: ToolCall) => tools.some((t) => t.name === c
  * What the model is told about each tool. Built once, so every request sends
  * byte-identical tool definitions (anything else would break the prompt cache).
  */
-export const toolSpecs: ToolSpec[] = tools.map((tool) => {
+export const toolSpecs: ToolSpec[] = tools.map(specOf);
+
+/** A tool as the model is told about it: name, description, and its input as JSON schema. */
+export function specOf(tool: Tool): ToolSpec {
   const { $schema: _, ...parameters } = z.toJSONSchema(tool.input) as Record<string, unknown>;
   return { name: tool.name, description: tool.description, parameters };
-});
+}
 
 /** The specs for a session: the skill tool only when there are skills to load. Same objects every time (cache). */
 export function toolSpecsFor({ hasSkills }: { hasSkills: boolean }): ToolSpec[] {
@@ -59,7 +62,6 @@ export async function runTool(call: ToolCall, ctx: ToolContext, available: Tool[
     // first, so a call that can't succeed fails here instead of being approved.
     const gated = tool.needsApproval ? tool.needsApproval(parsed.data) : Boolean(tool.kind && tool.kind !== "read");
     if (gated) {
-      if (!ctx.approve) return fail(`${call.name} needs the user's approval, and there's no one to ask.`, label);
       const preview = await tool.preview!(parsed.data, ctx);
       const scope = tool.scope?.(parsed.data) ?? { key: call.name, description: call.name };
       const network = tool.usesNetwork?.(parsed.data) ? { network: true } : {};
@@ -76,6 +78,9 @@ export async function runTool(call: ToolCall, ctx: ToolContext, available: Tool[
       if (ctx.yolo && tool.autoSafe?.(parsed.data, ctx)) {
         return { ...(await tool.run(parsed.data, { ...ctx, callId: call.id, confined: true })), label, approval: "auto" };
       }
+      // No one to ask (a program using the SDK without an approver): refused, as an error the model can read and
+      // work around, rather than a "no" that would stop the run.
+      if (!ctx.approve) return fail(`${call.name} needs the user's approval, and there's no one to ask.`, label);
       const decision = await ctx.approve({ tool: call.name, label, preview, scope, ...network });
       // Esc at the prompt answers "no" and then aborts the run: that's an interrupt, and the model should read it
       // as one (like the calls queued behind it), not as "the user declined this, don't retry".
