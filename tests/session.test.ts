@@ -806,10 +806,16 @@ describe("final review fixes", () => {
     expect(existsSync(join(project, "out.txt"))).toBe(true);
   });
 
-  test("after close(), send() throws; close() twice is fine", async () => {
-    const session = makeSession(new ScriptedProvider([say("Hi.")]));
+  test("after close(), nothing starts work or swaps the conversation; close() twice is fine", async () => {
+    const session = makeSession(new ScriptedProvider([say("Hi.")]), { sessions: new SessionStore(dir) });
     await session.close();
     await session.close();
     expect(() => session.send("hi")).toThrow("This session is closed.");
+    await expect(session.compact()).rejects.toThrow("This session is closed.");
+    expect(() => session.clear()).toThrow("This session is closed.");
+    await expect(session.resume("latest")).rejects.toThrow("This session is closed.");
+    // Settings and saving still work.
+    session.configure({ yolo: false });
+    await session.flush();
   });
 });

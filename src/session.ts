@@ -188,7 +188,7 @@ export interface Session {
   save(): Promise<void>;
   /** The pending save, and the trajectory's queued records, on disk. */
   flush(): Promise<void>;
-  /** Stops what's running, waits for it to wind down, flushes, and closes the MCP servers the session started. No turns after it; calling it again is fine. */
+  /** Stops what's running, waits for it to wind down, flushes, and closes the MCP servers the session started. After it, send(), compact(), clear() and resume() refuse; calling it again is fine. */
   close(): Promise<void>;
 }
 
@@ -232,7 +232,7 @@ export class MarvSession implements Session {
   private flushing: Promise<void> = Promise.resolve();
   /** The running turn's or compaction's work, until it has fully ended: close() waits for it. */
   private working: Promise<unknown> | null = null;
-  /** close() was called: no new turns. */
+  /** close() was called: no new turns, compactions, clear() or resume() (idle() refuses them). */
   private closed = false;
 
   constructor(private readonly init: SessionInit) {
@@ -288,8 +288,6 @@ export class MarvSession implements Session {
    * from what the user typed (a /skill's instructions). Throws if a turn is running.
    */
   send(text: string, options: { forModel?: string; signal?: AbortSignal } = {}): AsyncIterable<SessionEvent> {
-    // A turn after close() would run with its MCP servers closed, and save after the final flush.
-    if (this.closed) throw new Error("This session is closed.");
     this.idle();
     this.running = true;
     const stop = new AbortController();
@@ -448,7 +446,12 @@ export class MarvSession implements Session {
     return work;
   }
 
+  /**
+   * Refuses new work: after close() (a turn or compaction would run with its MCP servers closed, and save after the
+   * final flush; clear() and resume() would swap the conversation that was just saved), and during a turn.
+   */
   private idle(): void {
+    if (this.closed) throw new Error("This session is closed.");
     if (this.running) throw new Error(BUSY);
   }
 
