@@ -184,6 +184,8 @@ export async function* runAgent({
   isParallel = () => false,
   maxParallel = MAX_PARALLEL,
 }: Options): AsyncGenerator<LoopEvent> {
+  // Ids already in the conversation (a resumed session's too): a new call may not reuse one.
+  const usedIds = new Set(history.flatMap((turn) => (turn.role === "assistant" ? (turn.toolCalls ?? []).map((c) => c.id) : [])));
   for (let step = 0; ; step++) {
     // The step limit guards against a model that never finishes. With
     // onLimit, the user decides at each multiple whether it goes on.
@@ -232,6 +234,20 @@ export async function* runAgent({
       }
     }
 
+    // Every call needs an id of its own: results are matched to calls by id, by the API and by the UI. Providers
+    // can repeat them (Ollama numbers each step's calls from call_0) or leave them out, so fix them here, before
+    // the history (and anyone else) sees them.
+    for (const call of calls) {
+      if (call.id && !usedIds.has(call.id)) {
+        usedIds.add(call.id);
+        continue;
+      }
+      const base = call.id || "call";
+      let n = 1;
+      while (usedIds.has(`${base}_${n}`)) n++;
+      call.id = `${base}_${n}`;
+      usedIds.add(call.id);
+    }
     if (text || calls.length > 0) {
       history.push(calls.length > 0 ? { role: "assistant", text, toolCalls: calls } : { role: "assistant", text });
     }

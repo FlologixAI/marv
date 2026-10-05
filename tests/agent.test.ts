@@ -137,6 +137,28 @@ describe("runAgent", () => {
     expect(events.some((e) => e.type === "error")).toBe(false);
   });
 
+  test("tool-call ids are unique in the history: duplicates in a reply, ids reused across steps, and empty ids are renamed", async () => {
+    const provider = new ScriptedProvider([
+      useTools(call("call_0", "a.ts"), call("call_0", "b.ts"), call("", "c.ts")),
+      useTools(call("call_0", "d.ts")), // Ollama numbers each step's calls from call_0
+      say("done"),
+    ]);
+    const history: ChatTurn[] = [
+      { role: "user", text: "earlier" },
+      { role: "assistant", text: "", toolCalls: [{ id: "call_0_1", name: "read_file", arguments: "{}" }] }, // a resumed session
+      { role: "tool", callId: "call_0_1", name: "read_file", text: "x" },
+      { role: "user", text: "go" },
+    ];
+    const events = await run(provider, history);
+    const ids = history.flatMap((t) => (t.role === "assistant" ? (t.toolCalls ?? []).map((c) => c.id) : []));
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.every(Boolean)).toBe(true);
+    // Each result answers its own call, and the events carry the same ids.
+    const results = history.flatMap((t) => (t.role === "tool" ? [t.callId] : []));
+    expect(results).toEqual(ids);
+    expect(events.flatMap((e) => (e.type === "tool_start" ? [e.call.id] : []))).toEqual(ids.slice(1));
+  });
+
   test("if its consumer stops mid-tools (it threw), every call still gets a result, so the next request is valid", async () => {
     const provider = new ScriptedProvider([useTools(call("c1", "a.ts"), call("c2", "b.ts"))]);
     const history: ChatTurn[] = [{ role: "user", text: "go" }];
