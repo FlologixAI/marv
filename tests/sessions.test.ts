@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { legacyProjectKey, projectKey } from "../src/paths.ts";
-import { newSession, SessionStore, timeAgo, type Session } from "../src/sessions.ts";
+import { newSession, SessionStore, timeAgo, type SavedSession } from "../src/sessions.ts";
 
 let dir: string;
 let store: SessionStore;
@@ -13,7 +13,7 @@ beforeEach(async () => {
 });
 afterEach(() => rm(dir, { recursive: true, force: true }));
 
-function session(root: string, firstMessage: string, at: number): Session {
+function session(root: string, firstMessage: string, at: number): SavedSession {
   return {
     ...newSession(root, { provider: "ollama", model: "qwen3.5:9b" }, at),
     conversation: [

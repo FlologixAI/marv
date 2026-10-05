@@ -31,7 +31,7 @@ const SessionShape = z.looseObject({
 });
 const TITLE_CHARS = 56;
 
-export interface Session {
+export interface SavedSession {
   version: number;
   id: string;
   root: string;
@@ -54,13 +54,13 @@ export interface SessionSummary {
   model: string;
 }
 
-export function newSession(root: string, { provider, model }: { provider: string; model: string }, now = Date.now()): Session {
+export function newSession(root: string, { provider, model }: { provider: string; model: string }, now = Date.now()): SavedSession {
   const id = `${new Date(now).toISOString().replace(/[:.]/g, "-")}-${Math.random().toString(36).slice(2, 8)}`;
   return { version: VERSION, id, root, createdAt: now, updatedAt: now, provider, model, conversation: [], transcript: [], totals: emptyTotals() };
 }
 
 
-function titleOf(session: Session): string {
+function titleOf(session: SavedSession): string {
   const first = session.transcript.find((m) => m.role === "user")?.text ?? "(empty)";
   const line = first.replace(/\s+/g, " ").trim();
   return line.length > TITLE_CHARS ? `${line.slice(0, TITLE_CHARS - 1).trimEnd()}…` : line;
@@ -79,25 +79,25 @@ export class SessionStore {
   }
 
   /** Saves (or overwrites) a session. Sessions without a user message aren't saved. */
-  async save(session: Session): Promise<void> {
+  async save(session: SavedSession): Promise<void> {
     if (!session.transcript.some((m) => m.role === "user")) return;
     await writePrivate(join(this.folder(session.root), `${session.id}.json`), JSON.stringify({ ...session, updatedAt: Date.now() }));
     // Saved under the old key before: it lives in the new folder from now on.
     await rm(join(this.legacyFolder(session.root), `${session.id}.json`), { force: true });
   }
 
-  async load(root: string, id: string): Promise<Session | null> {
+  async load(root: string, id: string): Promise<SavedSession | null> {
     return (await this.read(join(this.folder(root), `${id}.json`), root)) ?? (await this.read(join(this.legacyFolder(root), `${id}.json`), root));
   }
 
   /** A session file of this project, or null: missing, damaged, an old format, or (in a legacy folder) another project's. */
-  private async read(file: string, root: string): Promise<Session | null> {
+  private async read(file: string, root: string): Promise<SavedSession | null> {
     if (!existsSync(file)) return null;
     try {
       // The fields the app relies on; a file without them (an old format, a hand edit) is skipped, not a crash.
       const parsed = SessionShape.safeParse(await Bun.file(file).json());
       if (!parsed.success) return null;
-      const session = parsed.data as unknown as Session;
+      const session = parsed.data as unknown as SavedSession;
       return session.version === VERSION && session.root === root ? session : null;
     } catch {
       return null;
@@ -125,7 +125,7 @@ export class SessionStore {
     return summaries.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async latest(root: string): Promise<Session | null> {
+  async latest(root: string): Promise<SavedSession | null> {
     const [newest] = await this.list(root);
     return newest ? this.load(root, newest.id) : null;
   }

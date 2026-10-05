@@ -28,7 +28,7 @@ import { systemPrompt } from "./prompt.ts";
 import { addUsage, costText, emptyTotals, tokens, type Prices, type Totals } from "./usage.ts";
 import { COMPACT_AT, compactedHistory, summarize } from "./compact.ts";
 import { addMemory, findMemory, loadMemory, removeMemory, type Memories, type MemoryPaths } from "./memory.ts";
-import { newSession, timeAgo, type Session, type SessionStore, type SessionSummary } from "./sessions.ts";
+import { newSession, timeAgo, type SavedSession, type SessionStore, type SessionSummary } from "./sessions.ts";
 import { skillMessage, type Skill } from "./skills.ts";
 import { AgentRecorder, type Trajectory, type TrajectoryRecord, type TrajectoryStore } from "./trajectory.ts";
 import { isParallelCall, runTool, tools as builtinTools, toolSpecsFor } from "./tools/index.ts";
@@ -177,7 +177,7 @@ export function App({
   // The saved session this conversation is written to (a new one after /clear).
   const configRef = useRef(config);
   configRef.current = config;
-  const sessionRef = useRef<Session>(newSession(root, config));
+  const sessionRef = useRef<SavedSession>(newSession(root, config));
   // The trajectory log for the current session (one file per session), the
   // session whose "session" record this process wrote, and the latest turn
   // (what /good, /bad, /label and the next message's implicit feedback rate).
@@ -1059,7 +1059,7 @@ export function App({
 
   /** Brings back a saved session: both histories, its cost, and it keeps saving to the same file. */
   const restore = useCallback(
-    (session: Session) => {
+    (session: SavedSession) => {
       // Swapping the conversation under a running turn would mix the two (its reply landing in the restored
       // transcript, not its conversation), and that mix would be saved.
       if (abortRef.current) {
