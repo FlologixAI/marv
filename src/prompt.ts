@@ -73,7 +73,7 @@ export function subagentPrompt({ cwd, tools, body, instructions, skills = [], wo
   const role = body || "You are a general-purpose coding agent.";
   const hasBash = tools.includes("bash");
   const where = worktree
-    ? `\n\nYou are working in your own git worktree, on branch ${worktree.branch} (started from ${worktree.base}). Other agents can't see your changes until your branch is merged. Files ignored by git, such as node_modules and build output, aren't here${hasBash ? ": install dependencies first if you need them (bash with network: true)" : ""}. Don't commit yourself (in the sandbox the repository is read-only; git status, diff and log work): when you finish, Marv commits everything you changed to your branch.`
+    ? `\n\nYou are working in your own git worktree, on branch ${worktree.branch} (started from ${worktree.base}). Other agents can't see your changes until your branch is merged. Files ignored by git, such as node_modules and build output, aren't here${hasBash ? ": install dependencies first if you need them (bash with network: true)" : ""}. Don't commit yourself (in the sandbox the repository is read-only; git status, diff and log work, but git commands that write the repository fail there: to undo a change, edit the file back; git checkout, restore, stash and add won't work here): when you finish, Marv commits everything you changed to your branch.`
     : "";
   const sandbox = hasBash ? " Commands run in a sandbox: only the working directory is writable, and there's no network unless you set network: true." : "";
   const editing = tools.includes("edit_file") ? " edit_file replaces exact text: copy it from read_file, whitespace included." : "";

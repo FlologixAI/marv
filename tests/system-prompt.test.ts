@@ -145,7 +145,9 @@ describe("prompt wording for subagents", () => {
     const without = subagentPrompt({ ...base, worktree: wt });
     expect(without).toContain("node_modules");
     expect(without).not.toContain("network");
-    expect(without).toContain("Don't commit yourself (in the sandbox the repository is read-only; git status, diff and log work): when you finish, Marv commits everything you changed to your branch.");
+    expect(without).toContain(
+      "Don't commit yourself (in the sandbox the repository is read-only; git status, diff and log work, but git commands that write the repository fail there: to undo a change, edit the file back; git checkout, restore, stash and add won't work here): when you finish, Marv commits everything you changed to your branch.",
+    );
     expect(subagentPrompt({ ...base, tools: ["bash"], worktree: wt })).toContain("install dependencies first if you need them (bash with network: true)");
   });
 });
