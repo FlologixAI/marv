@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { resolveConfig } from "../src/config/config.ts";
-import { configFactory, isFactory, providerFactory } from "../src/provider/factory.ts";
+import { configFactory, isFactory, providerFactory, type ProviderOption } from "../src/provider/factory.ts";
 import { OllamaProvider } from "../src/provider/ollama.ts";
 import { OpenAICompatProvider } from "../src/provider/openai-compat.ts";
 import { ScriptedProvider } from "./fake-provider.ts";
@@ -50,4 +50,9 @@ test("configFactory: the TUI's config, with the maker and model list it was give
   expect(await factory.lookup!()).toEqual({ id: "a/b", context: 1000 });
   expect(isFactory(factory)).toBe(true);
   expect(isFactory(new ScriptedProvider([]))).toBe(false);
+});
+
+test("an unknown kind is an error, not a silent Ollama on localhost", () => {
+  const bad = { kind: "OpenRouter", apiKey: "k" } as unknown as ProviderOption;
+  expect(() => providerFactory(bad)).toThrow('Unknown provider kind "OpenRouter": use "openrouter" or "ollama", or pass a Provider.');
 });

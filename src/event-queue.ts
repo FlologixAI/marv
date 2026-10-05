@@ -4,9 +4,12 @@
 // are small.
 
 export class EventQueue<T> implements AsyncIterable<T> {
+  // The backlog is expected to stay small (the reader consumes as fast as events come), so shift() is fine here;
+  // it would only be slow for a huge backlog.
   private items: T[] = [];
   private waiting: ((result: IteratorResult<T, undefined>) => void) | null = null;
   private closed = false;
+  private reading = false;
 
   /** Adds an item; dropped once the queue is closed (the stream it belonged to is over). */
   push(item: T): void {
@@ -29,7 +32,14 @@ export class EventQueue<T> implements AsyncIterable<T> {
     reader?.({ value: undefined, done: true });
   }
 
-  async *[Symbol.asyncIterator](): AsyncGenerator<T, void, undefined> {
+  [Symbol.asyncIterator](): AsyncGenerator<T, void, undefined> {
+    // A second reader would overwrite `waiting` and leave the first one hanging forever, so refuse it up front.
+    if (this.reading) throw new Error("EventQueue has one reader: it's already being read.");
+    this.reading = true;
+    return this.read();
+  }
+
+  private async *read(): AsyncGenerator<T, void, undefined> {
     while (true) {
       if (this.items.length > 0) {
         yield this.items.shift()!;

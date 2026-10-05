@@ -72,6 +72,8 @@ test("both: what the CLI loads", async () => {
   expect(names(loaded.skills)).toEqual(["mine", "theirs"]);
   expect(names(loaded.mcpServers)).toEqual(["mine", "theirs"]);
   expect(loaded.instructions).toBe("Project rules.");
+  expect(names(loaded.agents)).toEqual(["general-purpose", "my-agent", "their-agent"]);
+  expect(loaded.memory?.initial.personal).toEqual(["The user likes tabs"]);
 });
 
 test("servers given in code are parsed like .mcp.json entries, and trusted like yours", () => {
