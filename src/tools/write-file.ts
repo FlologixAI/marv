@@ -1,8 +1,9 @@
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { changeSummary, diffText } from "./diff.ts";
-import { isDirectory, projectPath, resolveInProject } from "./files.ts";
+import { isDirectory, projectPath, requireRegularFile, resolveInProject } from "./files.ts";
 import { ToolError, type Tool, type ToolContext } from "./types.ts";
 
 const PREVIEW_LINES = 40;
@@ -16,8 +17,9 @@ async function plan({ path, content }: z.infer<typeof input>, { root }: ToolCont
   const absolute = resolveInProject(root, path);
   const shown = projectPath(root, absolute);
   if (isDirectory(absolute)) throw new ToolError(`"${shown}" is a directory.`);
-  const file = Bun.file(absolute);
-  const before = (await file.exists()) ? await file.text() : null;
+  const exists = existsSync(absolute);
+  if (exists) requireRegularFile(absolute, shown);
+  const before = exists ? await Bun.file(absolute).text() : null;
   return { absolute, shown, before, content };
 }
 

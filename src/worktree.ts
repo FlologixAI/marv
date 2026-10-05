@@ -18,6 +18,7 @@
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { GIT_TIMEOUT_MS, runGit } from "./git.ts";
 import { ToolError } from "./tools/types.ts";
 
 export interface Worktree {
@@ -36,31 +37,11 @@ export interface Worktree {
 export const NOT_A_REPO =
   'isolation: "worktree" needs a git repository with at least one commit. Start the agent without isolation instead.';
 
-/** Hooks and fsmonitor are how a repository makes git run a program; Marv's own git calls turn both off. */
-export const NO_PROGRAMS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
-
-/** The environment without inherited GIT_* variables (a parent git or hook could have set GIT_DIR, GIT_INDEX_FILE…), plus `pinned`. */
-export function gitEnvironment(pinned: Record<string, string> = {}): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !key.startsWith("GIT_")) env[key] = value;
-  return { ...env, ...pinned };
-}
-
-/** No git call of Marv's should take this long; `spawnSync` blocks everything (the UI, every other subagent) while it runs. */
-const GIT_TIMEOUT_MS = 60_000;
-
+/** Runs git for the worktree code (60 s timeout); `out` is trimmed. */
 function git(cwd: string, args: string[], pinned?: Record<string, string>): { ok: boolean; out: string } {
-  const result = Bun.spawnSync(["git", ...NO_PROGRAMS, ...args], {
-    cwd,
-    env: gitEnvironment(pinned),
-    stdin: "ignore", // nothing may wait for input: there's no one to type it
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: GIT_TIMEOUT_MS,
-  });
-  if (result.exitedDueToTimeout) return { ok: false, out: `git timed out after ${GIT_TIMEOUT_MS / 1000} s` };
-  const ok = result.exitCode === 0;
-  return { ok, out: (ok ? result.stdout : result.stderr).toString().trim() };
+  const result = runGit(cwd, args, { env: pinned, timeoutMs: GIT_TIMEOUT_MS });
+  if (result.timedOut) return { ok: false, out: `git timed out after ${GIT_TIMEOUT_MS / 1000} s` };
+  return { ok: result.ok, out: result.out.trim() };
 }
 
 /**
@@ -69,8 +50,8 @@ function git(cwd: string, args: string[], pinned?: Record<string, string>): { ok
  * repository with its own config, so Marv's git outside the sandbox (e.g. the
  * file listing behind glob and grep) never reads it. It still trusts the
  * worktree's record (.git/worktrees/<id>: its `config.worktree`, HEAD and
- * `commondir`), which the sandbox shows read-only, so callers must also pass
- * `NO_PROGRAMS` and run git with `gitEnvironment()`. The finishing commit goes
+ * `commondir`), which the sandbox shows read-only, so callers must run git through
+ * `runGit` (src/git.ts). The finishing commit goes
  * further and doesn't use the worktree's record at all (`commitGitDir`).
  */
 export const worktreeEnv = (wt: Worktree) => ({ GIT_DIR: wt.adminDir, GIT_COMMON_DIR: wt.gitDir, GIT_WORK_TREE: wt.dir });

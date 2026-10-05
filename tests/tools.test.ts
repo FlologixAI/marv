@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTool, toolSpecs } from "../src/tools/index.ts";
+import { listProjectFiles } from "../src/tools/files.ts";
+import { ToolError } from "../src/tools/types.ts";
 import { z } from "zod";
 import type { ToolCall } from "../src/provider/types.ts";
 import { readFile } from "../src/tools/read-file.ts";
@@ -196,6 +198,10 @@ describe("the file listing never runs a repository's programs", () => {
     gitIn(root, "init", "-q");
     gitIn(root, "config", "core.fsmonitor", `touch ${pwned}`);
     await writeFile(join(root, "a.txt"), "a\n");
+    // Negative control: plain git, without Marv's protections, does run the program.
+    gitIn(root, "ls-files", "--others");
+    expect(existsSync(pwned)).toBe(true);
+    await rm(pwned);
     const result = await runTool(globCall, { root });
     expect(result.output).toContain("a.txt");
     expect(existsSync(pwned)).toBe(false);
@@ -238,5 +244,42 @@ describe("the file listing never runs a repository's programs", () => {
     expect(pinned.output).toContain("shown.txt");
     expect(pinned.output).toContain("hidden.txt");
     expect(existsSync(pwned)).toBe(false);
+  });
+});
+
+describe("special files can't hang Marv", () => {
+  const mkfifo = (path: string) => expect(Bun.spawnSync(["mkfifo", path]).exitCode).toBe(0);
+
+  test("a FIFO named .gitignore makes the listing time out with a ToolError, quickly", async () => {
+    Bun.spawnSync(["git", "init", "-q"], { cwd: root });
+    mkfifo(join(root, ".gitignore"));
+    const started = Date.now();
+    await expect(listProjectFiles(root, undefined, 300)).rejects.toBeInstanceOf(ToolError);
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  test("read_file refuses a FIFO", async () => {
+    mkfifo(join(root, "pipe"));
+    const result = await runTool({ id: "r", name: "read_file", arguments: JSON.stringify({ path: "pipe" }) }, { root });
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("not a regular file");
+  });
+
+  test("edit_file refuses a FIFO", async () => {
+    mkfifo(join(root, "pipe"));
+    const call = { id: "e", name: "edit_file", arguments: JSON.stringify({ path: "pipe", old_string: "a", new_string: "b" }) };
+    const result = await runTool(call, { root, approve: async () => "yes" });
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("not a regular file");
+  });
+
+  test("grep skips a FIFO in a directory, and refuses one named explicitly", async () => {
+    mkfifo(join(root, "src", "pipe"));
+    const dir = await runTool({ id: "g", name: "grep", arguments: JSON.stringify({ pattern: "greet", path: "src" }) }, { root });
+    expect(dir.isError).toBeFalsy();
+    expect(dir.output).toContain("src/greet.ts");
+    const named = await runTool({ id: "g2", name: "grep", arguments: JSON.stringify({ pattern: "x", path: "src/pipe" }) }, { root });
+    expect(named.isError).toBe(true);
+    expect(named.output).toContain("not a regular file");
   });
 });

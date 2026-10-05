@@ -1,8 +1,8 @@
 // Shared file helpers for the tools: confining paths to the project, and
 // listing the project's files.
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { gitEnvironment, NO_PROGRAMS } from "../worktree.ts";
+import { runGit } from "../git.ts";
 import { ToolError } from "./types.ts";
 
 /** Skipped when the project isn't a git repo (inside one, .gitignore decides). */
@@ -35,6 +35,9 @@ export function resolveInProject(root: string, path: string): string {
 /** "src/app.ts" for display and for the model; "." for the root itself. */
 export const projectPath = (root: string, absolute: string) => relative(root, absolute).split(sep).join("/") || ".";
 
+/** Long enough for a big repository, short enough that a blocked git (e.g. a FIFO named .gitignore) gives up. */
+export const LIST_TIMEOUT_MS = 20_000;
+
 /**
  * Every file in the project, as project-relative paths, sorted. Inside a git
  * repo this is `git ls-files` (tracked + untracked, minus .gitignore'd), so
@@ -42,18 +45,19 @@ export const projectPath = (root: string, absolute: string) => relative(root, ab
  * the sandbox without approval, so it never runs the repository's programs
  * (hooks, fsmonitor), and `gitEnv` pins where git looks.
  */
-export async function listProjectFiles(root: string, gitEnv?: Record<string, string>): Promise<string[]> {
-  const git = Bun.spawnSync(["git", ...NO_PROGRAMS, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
-    cwd: root,
-    env: gitEnvironment(gitEnv),
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-  });
+export async function listProjectFiles(
+  root: string,
+  gitEnv?: Record<string, string>,
+  timeoutMs = LIST_TIMEOUT_MS,
+): Promise<string[]> {
+  const git = runGit(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { env: gitEnv, timeoutMs });
+  // No fallback to the walk: it would return node_modules and other ignored folders unfiltered.
+  if (git.timedOut) {
+    throw new ToolError("Listing the project's files timed out (a special file such as a FIFO may be blocking git).");
+  }
   let paths: string[];
-  if (git.exitCode === 0) {
-    paths = git.stdout
-      .toString()
+  if (git.ok) {
+    paths = git.out
       .split("\0")
       .filter((p) => p && existsSync(join(root, p))); // --cached includes deleted-but-staged files
   } else {
@@ -70,6 +74,19 @@ export async function filesUnder(root: string, dir: string, gitEnv?: Record<stri
   const all = await listProjectFiles(root, gitEnv);
   if (dir === ".") return all;
   return all.filter((p) => p.startsWith(`${dir}/`) || p === dir);
+}
+
+/** Reading a FIFO or a device would block forever (and Esc can't cancel it), so tools read regular files only. */
+export function isRegularFile(path: string): boolean {
+  try {
+    return lstatSync(path).isFile() || statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+export function requireRegularFile(path: string, shown: string): void {
+  if (!isRegularFile(path)) throw new ToolError(`"${shown}" is not a regular file (a pipe, socket or device), so it can't be read.`);
 }
 
 export function isDirectory(path: string): boolean {

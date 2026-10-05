@@ -1,6 +1,7 @@
+import { existsSync } from "node:fs";
 import { z } from "zod";
 import { changeSummary, diffText } from "./diff.ts";
-import { isDirectory, projectPath, resolveInProject } from "./files.ts";
+import { isDirectory, projectPath, requireRegularFile, resolveInProject } from "./files.ts";
 import { ToolError, type Tool, type ToolContext } from "./types.ts";
 
 const input = z.object({
@@ -16,8 +17,9 @@ async function plan({ path, old_string, new_string, replace_all }: Input, { root
   const absolute = resolveInProject(root, path);
   const shown = projectPath(root, absolute);
   if (isDirectory(absolute)) throw new ToolError(`"${shown}" is a directory.`);
+  if (!existsSync(absolute)) throw new ToolError(`File not found: ${shown}. Use write_file to create a new file.`);
+  requireRegularFile(absolute, shown);
   const file = Bun.file(absolute);
-  if (!(await file.exists())) throw new ToolError(`File not found: ${shown}. Use write_file to create a new file.`);
   const before = await file.text();
 
   const count = before.split(old_string).length - 1;

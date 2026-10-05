@@ -1,5 +1,6 @@
+import { existsSync } from "node:fs";
 import { z } from "zod";
-import { looksBinary, isDirectory, projectPath, resolveInProject } from "./files.ts";
+import { looksBinary, isDirectory, projectPath, requireRegularFile, resolveInProject } from "./files.ts";
 import { ToolError, type Tool } from "./types.ts";
 
 const DEFAULT_LIMIT = 400;
@@ -23,8 +24,9 @@ export const readFile: Tool<typeof input> = {
     const absolute = resolveInProject(root, path);
     const shown = projectPath(root, absolute);
     if (isDirectory(absolute)) throw new ToolError(`"${shown}" is a directory. Use glob to list its files.`);
+    if (!existsSync(absolute)) throw new ToolError(`File not found: ${path}`);
+    requireRegularFile(absolute, shown);
     const file = Bun.file(absolute);
-    if (!(await file.exists())) throw new ToolError(`File not found: ${path}`);
 
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (looksBinary(bytes)) return { output: `Binary file (${bytes.length} bytes), not shown.`, summary: "binary file" };

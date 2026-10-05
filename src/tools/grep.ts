@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { z } from "zod";
-import { filesUnder, isDirectory, looksBinary, projectPath, resolveInProject } from "./files.ts";
+import { filesUnder, isDirectory, isRegularFile, requireRegularFile, looksBinary, projectPath, resolveInProject } from "./files.ts";
 import { ToolError, type Tool } from "./types.ts";
 
 const MAX_MATCHES = 100;
@@ -36,7 +36,13 @@ export const grep: Tool<typeof input> = {
     const wanted = (file: string) =>
       !fileFilter || fileFilter.match(glob!.includes("/") ? file : file.slice(file.lastIndexOf("/") + 1));
 
-    const files = isDirectory(target) ? await filesUnder(root, base, gitEnv) : [base];
+    let files: string[];
+    if (isDirectory(target)) {
+      files = (await filesUnder(root, base, gitEnv)).filter((file) => isRegularFile(join(root, file)));
+    } else {
+      requireRegularFile(target, base);
+      files = [base];
+    }
     const lines: string[] = [];
     let matchCount = 0;
     const matchedFiles = new Set<string>();
