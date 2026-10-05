@@ -960,7 +960,7 @@ export function App({
               onCancel={cancelAll}
               escapeCancels={!view}
             />
-            <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy agents={agentsRunning} yolo={config.yolo} />
+            <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy agents={agentsRunning} yolo={config.yolo} viewing={Boolean(view)} />
           </>
         ) : setupMode ? (
           <Setup
@@ -990,6 +990,7 @@ export function App({
               busy={busy}
               agents={agentsRunning}
               yolo={config.yolo}
+              viewing={Boolean(view)}
             />
           </>
         )}

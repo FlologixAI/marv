@@ -30,15 +30,17 @@ interface Props {
   agents?: number;
   /** Yolo mode is on: always shown, so the user knows what runs without asking. */
   yolo?: boolean;
+  /** A subagent's view is open: Esc closes it instead of interrupting. */
+  viewing?: boolean;
 }
 
-export function StatusBar({ model, cwd, usage, confirmExit, notice, busy, agents = 0, yolo = false }: Props) {
+export function StatusBar({ model, cwd, usage, confirmExit, notice, busy, agents = 0, yolo = false, viewing = false }: Props) {
   const hint = confirmExit
     ? "Press ctrl+c again to exit"
     : notice
       ? notice
       : busy
-      ? `esc to interrupt${agents ? ` · ${agents} agent${agents === 1 ? "" : "s"} running` : ""}`
+      ? `${viewing ? "esc to go back" : "esc to interrupt"}${agents ? ` · ${agents} agent${agents === 1 ? "" : "s"} running` : ""}`
       : "/help · PgUp/PgDn · ctrl+c exit";
   // On the left, which is never cut off, and whenever the hint is (busy is when it matters most).
   const showYolo = yolo && !confirmExit && !notice;

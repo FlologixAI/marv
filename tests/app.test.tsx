@@ -880,6 +880,7 @@ describe("subagents", () => {
       expect(frame).toContain("read_file notes.txt");
       expect(frame).toContain("⎿ 1 line");
       expect(frame).not.toContain("check the notes"); // the main transcript is hidden
+      expect(frame).toContain(" esc to go back · 1 agent running"); // Esc doesn't interrupt here
 
       await tick(400);
       frame = lastFrame()!;
