@@ -27,8 +27,12 @@ export type McpState = "untrusted" | "connecting" | "connected" | "failed";
 export interface McpServerStatus {
   name: string;
   source: McpServerConfig["source"];
-  /** "npx -y server" or the URL. */
+  /** "npx -y server" or the URL, as written in the config (${VAR}s unexpanded, so no secrets). */
   target: string;
+  /** Environment variables it reads. */
+  reads: string[];
+  /** Project files its command line runs (a project server's). */
+  runsProjectFiles: string[];
   state: McpState;
   /** Model-facing tool names, once connected. */
   tools: string[];
@@ -117,7 +121,9 @@ export class McpManager {
     return this.connections.map((c) => ({
       name: c.config.name,
       source: c.config.source,
-      target: describe(c.config),
+      target: c.config.display ?? describe(c.config),
+      reads: c.config.reads ?? [],
+      runsProjectFiles: c.config.runsProjectFiles ?? [],
       state: c.state,
       tools: c.tools.map((t) => t.tool.name),
       ...(c.error ? { error: c.error } : {}),

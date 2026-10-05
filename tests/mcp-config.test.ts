@@ -76,6 +76,34 @@ describe("loadMcpConfig", () => {
     expect(after).not.toBe(before);
   });
 
+  test("what you're shown is the raw config, never your secrets, and says which variables it reads", async () => {
+    await project({
+      s: { command: "node", args: ["mcp/server.js", "--key=${OPENROUTER_API_KEY}"], env: { NODE_OPTIONS: "--require=./x.js" } },
+      h: { type: "http", url: "https://example.invalid/?k=${OPENROUTER_API_KEY}", headers: { Authorization: "Bearer ${GH_TOKEN:-none}" } },
+    });
+    const { servers } = await loadMcpConfig({ root, configDir, env: { OPENROUTER_API_KEY: "sk-or-SECRET" } });
+    const [s, h] = servers;
+    expect(s!.display).toBe("node mcp/server.js --key=${OPENROUTER_API_KEY} · env NODE_OPTIONS=--require=./x.js");
+    expect(h!.display).toBe("https://example.invalid/?k=${OPENROUTER_API_KEY} · headers Authorization: Bearer ${GH_TOKEN:-none}");
+    expect(s!.reads).toEqual(["OPENROUTER_API_KEY"]);
+    expect(h!.reads).toEqual(["OPENROUTER_API_KEY", "GH_TOKEN"]);
+    expect(JSON.stringify(servers.map((x) => x.display))).not.toContain("SECRET");
+  });
+
+  test("trusting a project server covers the project files its command line names", async () => {
+    await mkdir(join(root, "mcp"));
+    await writeFile(join(root, "mcp", "server.js"), "console.log('v1')");
+    await writeFile(join(root, "unrelated.js"), "x");
+    await project({ files: { command: "node", args: ["mcp/server.js"] } });
+    const key = async () => (await loadMcpConfig({ root, configDir, env: {} })).servers[0]!;
+    const before = await key();
+    await writeFile(join(root, "unrelated.js"), "y");
+    expect((await key()).key).toBe(before.key);
+    await writeFile(join(root, "mcp", "server.js"), "console.log('changed by an agent')");
+    expect((await key()).key).not.toBe(before.key);
+    expect(before.runsProjectFiles).toEqual(["mcp/server.js"]);
+  });
+
   test("names must be usable in tool names", async () => {
     await mkdir(join(root, "x"));
     await project({ "my server!": { command: "x" } });

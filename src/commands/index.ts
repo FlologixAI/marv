@@ -288,8 +288,11 @@ function mcpText(mcp: CommandContext["mcp"]): string {
         const tools = s.tools.map((t) => `\`${t.replace(`mcp__${s.name}__`, "")}\``).join(", ");
         return `${who}connected · ${s.tools.length} tool${s.tools.length === 1 ? "" : "s"}${tools ? `: ${tools}` : ""}`;
       }
-      case "untrusted":
-        return `${who}not trusted yet: \`${s.target}\` (\`/mcp trust\` to start it)`;
+      case "untrusted": {
+        const reads = s.reads.length ? `; reads ${s.reads.map((v) => `\`$${v}\``).join(", ")} from your environment` : "";
+        const files = s.runsProjectFiles.length ? `; runs this project's ${s.runsProjectFiles.map((f) => `\`${f}\``).join(", ")}` : "";
+        return `${who}not trusted yet: \`${s.target}\`${reads}${files} (\`/mcp trust\` to start it)`;
+      }
       case "connecting":
         return `${who}starting…`;
       case "failed":

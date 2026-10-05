@@ -11,8 +11,8 @@
 // trusts them (src/mcp/trust.ts): a cloned repository could otherwise run any
 // program the moment Marv starts.
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import type { Env } from "../config/config.ts";
 
@@ -29,8 +29,17 @@ export interface McpServerConfig {
   transport: McpTransport;
   /** Seconds a tool call may take (default 120). */
   timeout?: number;
-  /** Identifies this exact config (before ${VAR}s are filled in): trust is given to it, and lost when it changes. */
+  /**
+   * Identifies this exact config (before ${VAR}s are filled in), plus the content of the project files its
+   * command line names: trust is given to it, and lost when either changes.
+   */
   key: string;
+  /** What the user is shown: the raw config, ${VAR}s unexpanded, so secrets never appear on screen. */
+  display?: string;
+  /** Environment variables it reads through ${VAR} (a project server reading $OPENROUTER_API_KEY should stand out). */
+  reads?: string[];
+  /** Project files its command line names (a project server's): covered by `key`, but not the files they load. */
+  runsProjectFiles?: string[];
 }
 
 const strings = z.record(z.string(), z.string());
@@ -63,6 +72,49 @@ function expand(text: string, env: Env): string {
 const expandAll = (values: Record<string, string> | undefined, env: Env) =>
   values && Object.fromEntries(Object.entries(values).map(([k, v]) => [k, expand(v, env)]));
 
+const VARIABLE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}/g;
+const listed = (values: Record<string, string> | undefined, sep: string) =>
+  Object.entries(values ?? {})
+    .map(([k, v]) => `${k}${sep}${v}`)
+    .join(", ");
+
+/** The raw config, as the user wrote it, on one line. */
+function displayOf(raw: z.infer<typeof Stdio> | z.infer<typeof Http>): string {
+  if ("url" in raw) return [raw.url, raw.headers && `headers ${listed(raw.headers, ": ")}`].filter(Boolean).join(" · ");
+  const env = raw.env && Object.keys(raw.env).length ? `env ${listed(raw.env, "=")}` : "";
+  return [[raw.command, ...(raw.args ?? [])].join(" "), env].filter(Boolean).join(" · ");
+}
+
+/** The variables a config reads from the environment, in order (not MARV_PROJECT_DIR: that's Marv's own). */
+function readsOf(raw: unknown): string[] {
+  const names = [...JSON.stringify(raw).matchAll(VARIABLE)].map((m) => m[1]!).filter((n) => n !== "MARV_PROJECT_DIR");
+  return [...new Set(names)];
+}
+
+/**
+ * A project server's command line names project files ("node mcp/server.js"): an agent could change them without
+ * asking (they're ordinary project files), and Marv would run the new code on the next start. So their content
+ * is part of the trust key. Files those files load aren't covered (the notice says it runs project files).
+ */
+function projectFiles(root: string, transport: McpTransport): { files: string[]; digest: string } {
+  if (transport.type !== "stdio") return { files: [], digest: "" };
+  const files: string[] = [];
+  const digest = createHash("sha256");
+  for (const word of [transport.command, ...(transport.args ?? [])]) {
+    const path = resolve(root, word);
+    const rel = relative(root, path);
+    if (!rel || rel.startsWith("..") || isAbsolute(rel)) continue;
+    try {
+      if (!statSync(path).isFile()) continue;
+      digest.update(`${rel}\0`).update(readFileSync(path)).update("\0");
+      files.push(rel.split(sep).join("/"));
+    } catch {
+      // not a file: an ordinary argument
+    }
+  }
+  return { files, digest: files.length ? digest.digest("hex") : "" };
+}
+
 function parseServer(name: string, raw: unknown, source: McpServerConfig["source"], env: Env, where: string): McpServerConfig {
   if (!NAME.test(name)) throw new Error(`"${name}" in ${where}: use letters, digits, - and _ (at most 32)`);
   const type = (raw as { type?: unknown } | null)?.type;
@@ -74,7 +126,7 @@ function parseServer(name: string, raw: unknown, source: McpServerConfig["source
     if (!parsed.success) throw fail(z.prettifyError(parsed.error));
     try {
       const { url, headers, timeout } = parsed.data;
-      return { name, source, key, timeout, transport: { type: "http", url: expand(url, env), ...(headers ? { headers: expandAll(headers, env) } : {}) } };
+      return { name, source, key, timeout, display: displayOf(parsed.data), reads: readsOf(raw), transport: { type: "http", url: expand(url, env), ...(headers ? { headers: expandAll(headers, env) } : {}) } };
     } catch (err) {
       throw fail(err);
     }
@@ -88,6 +140,8 @@ function parseServer(name: string, raw: unknown, source: McpServerConfig["source
       source,
       key,
       timeout,
+      display: displayOf(parsed.data),
+      reads: readsOf(raw),
       transport: {
         type: "stdio",
         command: expand(command, env),
@@ -114,7 +168,15 @@ async function readFile(path: string, source: McpServerConfig["source"], env: En
   const servers: McpServerConfig[] = [];
   for (const [name, raw] of entries) {
     try {
-      servers.push(parseServer(name, raw, source, env, path));
+      const server = parseServer(name, raw, source, env, path);
+      if (source === "project") {
+        const { files, digest } = projectFiles(dirname(path), server.transport);
+        if (files.length) {
+          server.key = createHash("sha256").update(`${server.key}\0${digest}`).digest("hex");
+          server.runsProjectFiles = files;
+        }
+      }
+      servers.push(server);
     } catch (err) {
       problems.push((err as Error).message);
     }

@@ -32,7 +32,7 @@ import { newSession, timeAgo, type Session, type SessionStore, type SessionSumma
 import { skillMessage, type Skill } from "./skills.ts";
 import { AgentRecorder, type Trajectory, type TrajectoryRecord, type TrajectoryStore } from "./trajectory.ts";
 import { isParallelCall, runTool, tools as builtinTools, toolSpecsFor } from "./tools/index.ts";
-import type { McpManager } from "./mcp/manager.ts";
+import type { McpManager, McpServerStatus } from "./mcp/manager.ts";
 import type { AgentHost, AgentProgress, ApprovalRequest, Decision } from "./tools/types.ts";
 import type { CommandAction } from "./commands/index.ts";
 import type { Message } from "./types.ts";
@@ -65,6 +65,15 @@ function agentArgs(args: string): { prompt: string; type: string; description: s
   } catch {}
   const text = (key: string) => (typeof parsed[key] === "string" ? (parsed[key] as string) : undefined);
   return { prompt: text("prompt") ?? "", type: text("type") ?? "general-purpose", description: text("description") ?? "", isolation: text("isolation") };
+}
+
+/** An untrusted project server, for the trust notice: what it runs, what it reads from your environment, and which project files. */
+function describeUntrusted(s: McpServerStatus): string {
+  const extras = [
+    s.reads.length > 0 && `reads ${s.reads.map((v) => `$${v}`).join(", ")} from your environment`,
+    s.runsProjectFiles.length > 0 && `runs this project's ${s.runsProjectFiles.join(", ")} (and whatever those load)`,
+  ].filter(Boolean);
+  return `${s.name} (${s.target})${extras.length ? `, which ${extras.join(" and ")}` : ""}`;
 }
 
 /** The project's commit, so a trajectory says what code a run started from. */
@@ -1072,7 +1081,7 @@ export function App({
       if (waiting.length) {
         addMessage({
           role: "system",
-          text: `This project's .mcp.json lists MCP servers you haven't trusted yet: ${waiting.map((s) => `${s.name} (${s.target})`).join(", ")}. They'd run with your permissions, outside the sandbox. /mcp trust starts them.`,
+          text: `This project's .mcp.json lists MCP servers you haven't trusted yet: ${waiting.map(describeUntrusted).join("; ")}. They'd run with your permissions, outside the sandbox. /mcp trust starts them.`,
         });
       }
     });

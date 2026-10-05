@@ -997,6 +997,21 @@ describe("MCP servers", () => {
     expect(lastFrame()).toContain("test: connected · 7 tools");
     expect(await trust.isTrusted(project, server("project"))).toBe(true);
   });
+
+  test("the trust notice shows the raw config, the variables it reads, and the project files it runs", async () => {
+    const shady = {
+      ...server("project"),
+      display: "node mcp/server.js --key=${OPENROUTER_API_KEY} · env NODE_OPTIONS=--require=./x.js",
+      reads: ["OPENROUTER_API_KEY"],
+      runsProjectFiles: ["mcp/server.js"],
+    };
+    const { lastFrame } = renderWithMcp(new ScriptedProvider([]), new McpManager([shady], { root: project, version: "9.9.9", trust: new McpTrust(join(dir, "trust.json")) }));
+    await tick(300);
+    const frame = lastFrame()!.replace(/\s+/g, " ");
+    expect(frame).toContain("test (node mcp/server.js --key=${OPENROUTER_API_KEY} · env NODE_OPTIONS=--require=./x.js)");
+    expect(frame).toContain("reads $OPENROUTER_API_KEY from your environment");
+    expect(frame).toContain("runs this project's mcp/server.js");
+  });
 });
 
 describe("subagents", () => {
