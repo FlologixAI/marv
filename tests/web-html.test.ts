@@ -1,5 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { htmlToMarkdown, MAX_CHARS } from "../src/tools/web/html.ts";
+
+// Several tests convert pages of tens of thousands of elements: about a second each, but ten times that on a busy
+// machine, past bun's 5 s default. Time limits inside the tests are ~10x what was measured, for the same reason.
+setDefaultTimeout(30_000);
 
 const ARTICLE = `<!doctype html><html><head><title>Release notes</title></head><body>
 <nav><a href="/">Home</a> <a href="/docs">Docs</a></nav>
@@ -120,4 +124,69 @@ test("a deeply nested page skips Readability and keeps its text, fast", () => {
   expect(performance.now() - start).toBeLessThan(2000); // unbounded, Readability alone took 23 s
   expect(fallback).toBe(true);
   expect(markdown).toBe(LOREM.trim());
+  expect(htmlToMarkdown(html, "https://e.com/").reason).toBe("too-deep");
+});
+
+const MB = 1024 * 1024;
+const fill = (unit: string, bytes: number) => unit.repeat(Math.ceil(bytes / unit.length));
+
+test("why it fell back: no article, too deep, or too much nesting for Readability", () => {
+  expect(htmlToMarkdown(ARTICLE, "https://e.com/").reason).toBeUndefined();
+  expect(htmlToMarkdown("<html><body><p>Loading</p></body></html>", "https://e.com/").reason).toBe("no-article");
+  // 250 chains 199 deep: under the depth limit, but Readability took 22 s on them
+  const chains = `<html><body>${`${"<div>".repeat(199)}x${"</div>".repeat(199)}`.repeat(250)}</body></html>`;
+  const start = performance.now();
+  const { reason, markdown } = htmlToMarkdown(chains, "https://e.com/");
+  expect(reason).toBe("too-large");
+  expect(markdown).toStartWith("x");
+  expect(performance.now() - start).toBeLessThan(5000); // measured ~0.4 s
+  // 10k list items without text: Readability took 6 s on them, against 0.1 s with text
+  expect(htmlToMarkdown(`<html><body><ul>${"<li><img src='/i.png'></li>".repeat(10_000)}</ul></body></html>`, "https://e.com/").reason).toBe("too-large");
+});
+
+test("many elements count even without text: the page is cut at an element cap", () => {
+  // turndown's cost grows with siblings times output: 5 MB of <br> took 126 s, of <p>x</p> 22 s
+  for (const unit of ["<br>", "<hr>", "<p>x</p>", "<li></li>"]) {
+    const { truncated } = htmlToMarkdown(`<html><body><div>${unit.repeat(40_000)}</div></body></html>`, "https://e.com/");
+    expect(truncated).toBe(true);
+  }
+});
+
+test("non-breaking spaces count toward the budget, and a long run of them is shortened", () => {
+  // turndown keeps no-break spaces, so they cost output; and it trims the end with a regex that rescans a whitespace
+  // run from each position in it: 400k of them before a word took 138 s
+  const many = htmlToMarkdown(`<html><body><p>${`${"\u00a0".repeat(150)}x`.repeat(3000)}</p></body></html>`, "https://e.com/");
+  expect(many.truncated).toBe(true);
+  expect(many.markdown.length).toBeLessThanOrEqual(MAX_CHARS);
+  const start = performance.now();
+  const run = htmlToMarkdown(`<html><body><p>a${"\u00a0".repeat(400_000)}x</p></body></html>`, "https://e.com/");
+  expect(performance.now() - start).toBeLessThan(2000); // measured ~20 ms
+  expect(run.markdown).toBe(`a${"\u00a0".repeat(200)}x`);
+});
+
+test("link and image titles are dropped and long alt text is cut, so they can't bypass the budget", () => {
+  const html = `<html><body><article><p>${LOREM.repeat(4)}</p>${`<p><a href="/x" title="${"T".repeat(10_000)}">x</a><img src="/i.png" alt="${"A".repeat(10_000)}"></p>`.repeat(100)}</article></body></html>`;
+  const { markdown } = htmlToMarkdown(html, "https://e.com/");
+  expect(markdown).not.toContain("TTT");
+  expect(markdown).toContain(`![${"A".repeat(200)}](https://e.com/i.png)`);
+});
+
+test("the Markdown is never longer than the budget", () => {
+  for (const html of [
+    `<html><body><article><p>${LOREM.repeat(4)}</p>${fill(`<pre><code class="language-${"L".repeat(150)}">x</code></pre>`, MB)}</article></body></html>`,
+    `<html><body><article>${fill(`<p>${"*_[]".repeat(50)}</p>`, MB)}</article></body></html>`, // every one escaped: twice as long
+  ]) {
+    const { markdown, truncated } = htmlToMarkdown(html, "https://e.com/");
+    expect(markdown.length).toBeLessThanOrEqual(MAX_CHARS);
+    expect(truncated).toBe(true);
+  }
+});
+
+test("a hidden element is dropped whatever else it has; CSS comments and .0 don't hide a hidden style", () => {
+  const inner = `<p hidden style="color:red">H1</p><p style="display:/**/none">H2</p><p style="opacity: .0">H3</p><p style="opacity:0.01">shown</p>`;
+  for (const { html } of onBothPaths(inner)) {
+    const { markdown } = htmlToMarkdown(html, "https://e.com/");
+    expect(markdown).not.toMatch(/H1|H2|H3/);
+    expect(markdown).toContain("shown");
+  }
 });
