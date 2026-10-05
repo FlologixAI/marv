@@ -66,7 +66,7 @@ describe("createWorktree / finishWorktree", () => {
     expect(wt.workDir).toBe(join(wt.dir, "pkg"));
     expect(existsSync(join(wt.workDir, "p.txt"))).toBe(true);
     await writeFile(join(wt.workDir, "new.txt"), "n\n");
-    expect(finishWorktree(wt, { description: "Sub", interrupted: false })).toContain("1 commit");
+    expect(await finishWorktree(wt, { description: "Sub", interrupted: false })).toContain("1 commit");
     expect(git(repo, "show", `${wt.branch}:pkg/new.txt`)).toBe("n");
     expect(existsSync(wt.dir)).toBe(false);
   });
@@ -98,7 +98,7 @@ describe("createWorktree / finishWorktree", () => {
     await writeFile(join(wt.adminDir, "commondir"), `${fake}\n`);
     await writeFile(join(wt.dir, "b.txt"), "bee\n");
 
-    finishWorktree(wt, { description: "Sneaky", interrupted: false });
+    await finishWorktree(wt, { description: "Sneaky", interrupted: false });
     expect(existsSync(pwned)).toBe(false);
     expect(git(repo, "show", `${wt.branch}:b.txt`)).toBe("bee"); // committed to the real branch, not the fake repo
   });
@@ -107,7 +107,7 @@ describe("createWorktree / finishWorktree", () => {
     const wt = createWorktree({ root: repo, baseDir: trees, description: "Head" });
     await writeFile(join(wt.adminDir, "HEAD"), "ref: refs/heads/main\n");
     await writeFile(join(wt.dir, "b.txt"), "bee\n");
-    expect(finishWorktree(wt, { description: "Head", interrupted: false })).toContain("1 commit");
+    expect(await finishWorktree(wt, { description: "Head", interrupted: false })).toContain("1 commit");
     expect(git(repo, "show", `${wt.branch}:b.txt`)).toBe("bee");
     expect(git(repo, "log", "--format=%s", "main")).toBe("first");
   });
@@ -121,7 +121,7 @@ describe("createWorktree / finishWorktree", () => {
     await writeFile(join(wt.adminDir, "config.worktree"), `[filter "x"]\n\tclean = touch ${pwned} && cat\n`);
     await writeFile(join(wt.dir, ".gitattributes"), "* filter=x\n");
     await writeFile(join(wt.dir, "b.txt"), "bee\n");
-    expect(finishWorktree(wt, { description: "Config", interrupted: false })).toContain("1 commit");
+    expect(await finishWorktree(wt, { description: "Config", interrupted: false })).toContain("1 commit");
     expect(existsSync(pwned)).toBe(false);
   });
 
@@ -129,11 +129,44 @@ describe("createWorktree / finishWorktree", () => {
     const wt = createWorktree({ root: repo, baseDir: trees, description: "Nested" });
     await mkdir(join(wt.dir, "sub", ".git"), { recursive: true });
     await writeFile(join(wt.dir, "c.txt"), "c\n");
-    const line = finishWorktree(wt, { description: "Nested", interrupted: false });
+    const line = await finishWorktree(wt, { description: "Nested", interrupted: false });
     expect(line).toContain("another git repository (sub/.git)");
     expect(line).toContain(`still in ${wt.dir}`);
     expect(existsSync(join(wt.dir, "c.txt"))).toBe(true);
     expect(git(repo, "rev-list", "--count", `main..${wt.branch}`)).toBe("0");
+  });
+
+  test("a repository inside an ignored folder (node_modules, .venv) doesn't block the commit", async () => {
+    await writeFile(join(repo, ".gitignore"), "node_modules/\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "ignore");
+    const wt = createWorktree({ root: repo, baseDir: trees, description: "Deps" });
+    await mkdir(join(wt.dir, "node_modules", "x", ".git"), { recursive: true });
+    await writeFile(join(wt.dir, "node_modules", "x", "index.js"), "x\n");
+    await writeFile(join(wt.dir, "c.txt"), "c\n");
+    expect(await finishWorktree(wt, { description: "Deps", interrupted: false })).toContain("1 commit");
+    expect(git(repo, "show", `${wt.branch}:c.txt`)).toBe("c");
+    expect(git(repo, "ls-tree", "-r", "--name-only", wt.branch)).not.toContain("node_modules");
+    expect(existsSync(wt.dir)).toBe(false);
+  });
+
+  test("finishing doesn't block the event loop while it deletes the folder", async () => {
+    const wt = createWorktree({ root: repo, baseDir: trees, description: "Big" });
+    // Many small files, like a node_modules after an install.
+    for (let d = 0; d < 40; d++) {
+      await mkdir(join(wt.dir, "node_modules", `p${d}`), { recursive: true });
+      await Promise.all(Array.from({ length: 50 }, (_, f) => writeFile(join(wt.dir, "node_modules", `p${d}`, `f${f}.js`), "x")));
+    }
+    await writeFile(join(wt.dir, ".gitignore"), "node_modules/\n");
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 0);
+    try {
+      expect(await finishWorktree(wt, { description: "Big", interrupted: false })).toContain("1 commit");
+    } finally {
+      clearInterval(timer);
+    }
+    expect(ticks).toBeGreaterThan(0); // the loop ran while it worked
+    expect(existsSync(wt.dir)).toBe(false);
   });
 
   test("the search for nested repositories doesn't follow symlinks out of the worktree", async () => {
@@ -141,7 +174,7 @@ describe("createWorktree / finishWorktree", () => {
     await mkdir(join(wt.dir, "d"));
     await symlink("..", join(wt.dir, "d", "loop"));
     await symlink(repo, join(wt.dir, "elsewhere")); // a folder with a .git inside, but not part of the worktree
-    expect(finishWorktree(wt, { description: "Links", interrupted: false })).toContain("1 commit");
+    expect(await finishWorktree(wt, { description: "Links", interrupted: false })).toContain("1 commit");
     expect(git(repo, "show", `${wt.branch}:elsewhere`)).toBe(repo); // committed as a link
   });
 
@@ -150,7 +183,7 @@ describe("createWorktree / finishWorktree", () => {
     await mkdir(join(wt.dir, "locked"));
     await chmod(join(wt.dir, "locked"), 0);
     try {
-      const line = finishWorktree(wt, { description: "Locked", interrupted: false });
+      const line = await finishWorktree(wt, { description: "Locked", interrupted: false });
       expect(line).toContain(`still in ${wt.dir}`);
       expect(existsSync(wt.dir)).toBe(true);
     } finally {
@@ -163,7 +196,7 @@ describe("createWorktree / finishWorktree", () => {
     git(repo, "worktree", "add", "-q", "-b", "mine", other);
     await rm(other, { recursive: true, force: true }); // e.g. on a drive that isn't mounted right now
     const wt = createWorktree({ root: repo, baseDir: trees, description: "Tidy" });
-    finishWorktree(wt, { description: "Tidy", interrupted: false });
+    await finishWorktree(wt, { description: "Tidy", interrupted: false });
     expect(git(repo, "worktree", "list")).toContain(other);
     expect(git(repo, "worktree", "list")).not.toContain(wt.dir);
   });
@@ -173,7 +206,7 @@ describe("createWorktree / finishWorktree", () => {
     await writeFile(join(wt.dir, "d.txt"), "d\n");
     process.env.GIT_INDEX_FILE = join(trees, "elsewhere-index");
     try {
-      expect(finishWorktree(wt, { description: "Env", interrupted: false })).toContain("1 commit");
+      expect(await finishWorktree(wt, { description: "Env", interrupted: false })).toContain("1 commit");
     } finally {
       delete process.env.GIT_INDEX_FILE;
     }
@@ -182,7 +215,7 @@ describe("createWorktree / finishWorktree", () => {
   test("leftover changes are committed, the folder removed, the branch kept", async () => {
     const wt = createWorktree({ root: repo, baseDir: trees, description: "Add b" });
     await writeFile(join(wt.dir, "b.txt"), "bee\n");
-    const line = finishWorktree(wt, { description: "Add b", interrupted: false });
+    const line = await finishWorktree(wt, { description: "Add b", interrupted: false });
     expect(line).toContain(`Branch ${wt.branch}: 1 commit on ${wt.base}`);
     expect(existsSync(wt.dir)).toBe(false);
     expect(git(repo, "show", `${wt.branch}:b.txt`)).toBe("bee");
@@ -197,7 +230,7 @@ describe("createWorktree / finishWorktree", () => {
     git(repo, "commit", "-q", "-m", "tracked but ignored");
     const wt = createWorktree({ root: repo, baseDir: trees, description: "Ignored" });
     await writeFile(join(wt.dir, "a.txt"), "two\n");
-    expect(finishWorktree(wt, { description: "Ignored", interrupted: false })).toContain("1 commit");
+    expect(await finishWorktree(wt, { description: "Ignored", interrupted: false })).toContain("1 commit");
     expect(git(repo, "show", `${wt.branch}:keep.env`)).toBe("secret=1");
     expect(git(repo, "show", `${wt.branch}:a.txt`)).toBe("two");
   });
@@ -207,7 +240,7 @@ describe("createWorktree / finishWorktree", () => {
     const wt = createWorktree({ root: repo, baseDir: trees, description: "No index" });
     await rm(join(wt.adminDir, "index"));
     await writeFile(join(wt.dir, "b.txt"), "bee\n");
-    const line = finishWorktree(wt, { description: "No index", interrupted: false });
+    const line = await finishWorktree(wt, { description: "No index", interrupted: false });
     expect(line).toContain(`still in ${wt.dir}`);
     expect(existsSync(join(wt.dir, "b.txt"))).toBe(true);
     expect(git(repo, "rev-list", "--count", `main..${wt.branch}`)).toBe("0");
@@ -220,7 +253,7 @@ describe("createWorktree / finishWorktree", () => {
     git(repo, "config", "gpg.program", gpg);
     const wt = createWorktree({ root: repo, baseDir: trees, description: "Signed" });
     await writeFile(join(wt.dir, "b.txt"), "bee\n");
-    expect(finishWorktree(wt, { description: "Signed", interrupted: false })).toContain("1 commit");
+    expect(await finishWorktree(wt, { description: "Signed", interrupted: false })).toContain("1 commit");
     expect(git(repo, "show", `${wt.branch}:b.txt`)).toBe("bee");
   });
 
@@ -230,7 +263,7 @@ describe("createWorktree / finishWorktree", () => {
     await writeFile(join(wt.dir, "ro", "f.txt"), "f\n");
     await chmod(join(wt.dir, "ro"), 0o555);
     try {
-      const line = finishWorktree(wt, { description: "Stuck", interrupted: false });
+      const line = await finishWorktree(wt, { description: "Stuck", interrupted: false });
       expect(line).toContain(`Branch ${wt.branch}: 1 commit on ${wt.base}`);
       expect(line).toContain(`The folder couldn't be removed: ${wt.dir}.`);
       expect(git(repo, "show", `${wt.branch}:ro/f.txt`)).toBe("f");
@@ -242,13 +275,13 @@ describe("createWorktree / finishWorktree", () => {
   test("an interrupted subagent's work is committed and marked", async () => {
     const wt = createWorktree({ root: repo, baseDir: trees, description: "Half done" });
     await writeFile(join(wt.dir, "c.txt"), "c\n");
-    finishWorktree(wt, { description: "Half done", interrupted: true });
+    await finishWorktree(wt, { description: "Half done", interrupted: true });
     expect(git(repo, "log", "-1", "--format=%s", wt.branch)).toBe("marv: Half done (interrupted)");
   });
 
-  test("no changes: the branch is deleted too", () => {
+  test("no changes: the branch is deleted too", async () => {
     const wt = createWorktree({ root: repo, baseDir: trees, description: "Nothing" });
-    expect(finishWorktree(wt, { description: "Nothing", interrupted: false })).toBe(`No changes (branch ${wt.branch} removed).`);
+    expect(await finishWorktree(wt, { description: "Nothing", interrupted: false })).toBe(`No changes (branch ${wt.branch} removed).`);
     expect(git(repo, "branch", "--list", wt.branch)).toBe("");
   });
 

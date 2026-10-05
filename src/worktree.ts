@@ -13,9 +13,11 @@
 // - Repositories that use a split index or the reftable ref format can't be
 //   committed automatically (Marv's own git dir lacks their extra files); git
 //   fails, so the folder is kept and reported, nothing is lost.
-// - `nestedRepo` walks the whole worktree synchronously before the commit,
-//   which takes a moment in a very large tree.
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+// - The git calls themselves are synchronous (short, with a timeout); the walk
+//   for nested repositories and the folder's removal are not, so a big
+//   node_modules doesn't freeze the UI.
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { GIT_TIMEOUT_MS, runGit } from "./git.ts";
@@ -96,24 +98,44 @@ const repoGit = (wt: Worktree, ...args: string[]) => git(wt.repo, args);
 /**
  * Another git repository inside the worktree (e.g. in a submodule's folder):
  * when git looks into it, it uses that repository's own config, which could
- * make it run a program outside the sandbox. Found anywhere, at any depth.
- * Symlinks aren't followed (git doesn't either; `readdirSync`'s `recursive`
- * would, out of the worktree and around loops). Throws if a folder can't be read.
+ * make it run a program outside the sandbox. Found at any depth, except in
+ * `skip`: folders git ignores, which `git add -A` never looks into (so a
+ * `node_modules/x/.git` or a `.venv/src/<pkg>/.git` is no reason to refuse,
+ * and walking them is most of the work after an install). Symlinks aren't
+ * followed (git doesn't either; `readdir`'s `recursive` would, out of the
+ * worktree and around loops). Async, so a big tree doesn't freeze the UI.
+ * Throws if a folder can't be read.
  */
-function nestedRepo(root: string): string | undefined {
+async function nestedRepo(root: string, skip: Set<string>): Promise<string | undefined> {
   const pending = [""];
   while (pending.length > 0) {
     const folder = pending.pop()!;
-    for (const entry of readdirSync(join(root, folder), { withFileTypes: true })) {
+    for (const entry of await readdir(join(root, folder), { withFileTypes: true })) {
       const path = join(folder, entry.name);
       if (entry.name === ".git") {
         if (folder) return path; // the top-level one is the worktree's own pointer, which Marv's git never reads
-      } else if (entry.isDirectory()) {
+      } else if (entry.isDirectory() && !skip.has(path)) {
         pending.push(path);
       }
     }
   }
   return undefined;
+}
+
+/**
+ * The folders git ignores in the worktree, relative to its top ("node_modules"), listed by the same git
+ * (same git dir, index and ignore rules) that then runs `add -A`. Empty if git can't list them: then
+ * everything is walked (slower, never less safe).
+ */
+function ignoredFolders(run: (...args: string[]) => { ok: boolean; out: string }): Set<string> {
+  const listed = run("ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory");
+  if (!listed.ok) return new Set();
+  return new Set(
+    listed.out
+      .split("\0")
+      .filter((path) => path.endsWith("/"))
+      .map((path) => path.slice(0, -1)),
+  );
 }
 
 /**
@@ -159,8 +181,11 @@ export function createWorktree({ root, baseDir, description }: { root: string; b
   return { dir, branch, base: repo.base, repo: root, gitDir, adminDir, prefix: repo.prefix, workDir };
 }
 
-/** Commits everything in the worktree to its branch. Returns why it couldn't, or undefined. */
-function commitChanges(wt: Worktree, message: string): string | undefined {
+/**
+ * Commits everything in the worktree to its branch, unless it holds another repository (`nestedRepo`).
+ * Returns why it couldn't, or undefined.
+ */
+async function commitChanges(wt: Worktree, message: string): Promise<string | undefined> {
   let gitDir: string;
   try {
     gitDir = commitGitDir(wt);
@@ -169,6 +194,13 @@ function commitChanges(wt: Worktree, message: string): string | undefined {
   }
   const run = (...args: string[]) => git(wt.dir, args, { GIT_DIR: gitDir, GIT_COMMON_DIR: wt.gitDir, GIT_WORK_TREE: wt.dir });
   try {
+    let nested: string | undefined;
+    try {
+      nested = await nestedRepo(wt.dir, ignoredFolders(run));
+    } catch (error) {
+      return `couldn't look through the worktree (${errorMessage(error)}).`;
+    }
+    if (nested) return `the worktree contains another git repository (${nested}), so Marv didn't commit it automatically.`;
     const status = run("status", "--porcelain");
     if (!status.ok) return `couldn't read the changes (${status.out}).`;
     if (!status.out) return undefined;
@@ -181,7 +213,7 @@ function commitChanges(wt: Worktree, message: string): string | undefined {
     if (run("status", "--porcelain").out) return "some changes couldn't be committed.";
     return undefined;
   } finally {
-    rmSync(gitDir, { recursive: true, force: true });
+    await rm(gitDir, { recursive: true, force: true });
   }
 }
 
@@ -191,16 +223,9 @@ function commitChanges(wt: Worktree, message: string): string | undefined {
  * reads. If anything can't be committed, the folder is kept and its path
  * reported, so no work is lost.
  */
-export function finishWorktree(wt: Worktree, { description, interrupted }: { description: string; interrupted: boolean }): string {
+export async function finishWorktree(wt: Worktree, { description, interrupted }: { description: string; interrupted: boolean }): Promise<string> {
   const keep = (why: string) => `Branch ${wt.branch}: ${why} The changes are still in ${wt.dir}.`;
-  let nested: string | undefined;
-  try {
-    nested = nestedRepo(wt.dir);
-  } catch (error) {
-    return keep(`couldn't look through the worktree (${errorMessage(error)}).`);
-  }
-  if (nested) return keep(`the worktree contains another git repository (${nested}), so Marv didn't commit it automatically.`);
-  const problem = commitChanges(wt, `marv: ${description}${interrupted ? " (interrupted)" : ""}`);
+  const problem = await commitChanges(wt, `marv: ${description}${interrupted ? " (interrupted)" : ""}`);
   if (problem) return keep(problem);
   const commits = repoGit(wt, "rev-list", "--count", `${wt.base}..${wt.branch}`);
   if (!commits.ok) return keep(`couldn't count its commits (${commits.out}).`);
@@ -209,7 +234,8 @@ export function finishWorktree(wt: Worktree, { description, interrupted }: { des
   // worktree, and `git worktree prune` would also drop the user's worktrees whose folders are missing right now.
   // Everything is committed by now, so a folder that can't be removed (e.g. one the subagent made read-only) only
   // needs mentioning.
-  const leftovers = [wt.dir, wt.adminDir].filter((path) => !remove(path));
+  const removed = await Promise.all([wt.dir, wt.adminDir].map(remove));
+  const leftovers = [wt.dir, wt.adminDir].filter((_, i) => !removed[i]);
   const note = leftovers.map((path) => ` The folder couldn't be removed: ${path}.`).join("");
   if (count === 0) {
     repoGit(wt, "branch", "-D", wt.branch);
@@ -218,10 +244,10 @@ export function finishWorktree(wt: Worktree, { description, interrupted }: { des
   return `Branch ${wt.branch}: ${count} commit${count === 1 ? "" : "s"} on ${wt.base}. Review it with \`git diff ${wt.base}...${wt.branch}\`, then merge it.${note}`;
 }
 
-/** Deletes a folder; false if it couldn't. */
-function remove(path: string): boolean {
+/** Deletes a folder (asynchronously: a node_modules can take seconds); false if it couldn't. */
+async function remove(path: string): Promise<boolean> {
   try {
-    rmSync(path, { recursive: true, force: true });
+    await rm(path, { recursive: true, force: true });
     return true;
   } catch {
     return false;

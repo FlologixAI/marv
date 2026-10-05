@@ -46,7 +46,7 @@ sandboxed("builds, tests and reads git inside the sandbox; Marv commits afterwar
   expect(result.output).toContain("?? hi.txt");
   expect(result.output).toContain("first");
   expect(result.exitCode).toBe(0);
-  expect(finishWorktree(wt, { description: "sandbox check", interrupted: false })).toContain("1 commit");
+  expect(await finishWorktree(wt, { description: "sandbox check", interrupted: false })).toContain("1 commit");
   expect(git(repo, "show", `${wt.branch}:hi.txt`)).toBe("hi");
 }, 130_000);
 
@@ -83,7 +83,7 @@ sandboxed("inside the sandbox, the repository can't be changed", async () => {
   expect(await readFile(join(wt.gitDir, "config"), "utf8")).toBe(config);
   expect(await readFile(join(wt.adminDir, "commondir"), "utf8")).toBe(commondir);
   expect(git(repo, "for-each-ref")).toBe(refs);
-  finishWorktree(wt, { description: "escape check", interrupted: false });
+  await finishWorktree(wt, { description: "escape check", interrupted: false });
 }, 130_000);
 
 sandboxed("Marv's own folder stays hidden: only personal skills are visible", async () => {
@@ -95,7 +95,7 @@ sandboxed("Marv's own folder stays hidden: only personal skills are visible", as
   const config = await inWorktree(wt, "cat ~/.marv/config.json");
   expect(config.exitCode).not.toBe(0);
   expect(config.output).toContain("No such file or directory");
-  finishWorktree(wt, { description: "home check", interrupted: false });
+  await finishWorktree(wt, { description: "home check", interrupted: false });
 }, 130_000);
 
 online("installs a real dependency inside the sandbox", async () => {
@@ -113,5 +113,5 @@ online("installs a real dependency inside the sandbox", async () => {
   expect(offline.output).toContain("1 pass");
   expect(offline.output).toContain("true");
   expect(offline.exitCode).toBe(0);
-  finishWorktree(wt, { description: "deps check", interrupted: false });
+  await finishWorktree(wt, { description: "deps check", interrupted: false });
 }, 130_000);

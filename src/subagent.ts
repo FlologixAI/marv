@@ -178,7 +178,7 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
   } finally {
     if (worktree) {
       try {
-        branchLine = fromMarv(finishWorktree(worktree, { description: input.description, interrupted: reason !== "end" }));
+        branchLine = fromMarv(await finishWorktree(worktree, { description: input.description, interrupted: reason !== "end" }));
       } catch (err) {
         branchLine = fromMarv(`couldn't finish the worktree (${err instanceof Error ? err.message : String(err)}); it's at ${worktree.dir}.`);
       }
