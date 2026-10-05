@@ -21,6 +21,8 @@ export interface GetOptions {
   signal?: AbortSignal;
   /** Tests only: let a local server through the address check. */
   allowPrivate?: boolean;
+  /** Tests only: send headers over plain http too (a local test server has no TLS). */
+  allowHttp?: boolean;
   /** Sent to the first URL's host only: a token mustn't follow a redirect to another site. */
   headers?: Record<string, string>;
   timeoutMs?: number;
@@ -71,7 +73,8 @@ export const httpError = (got: Got) => new ToolError(`${got.status} ${got.status
 
 /** Credentials go only where the user's URL pointed, and only over https: `URL.host` ignores the scheme, so a
  * redirect from https to http on the same host would otherwise send a token in clear. */
-export const sendsHeaders = (first: URL, current: URL) => current.origin === first.origin && current.protocol === "https:";
+export const sendsHeaders = (first: URL, current: URL, allowHttp = false) =>
+  current.origin === first.origin && (current.protocol === "https:" || allowHttp);
 
 /** GETs a URL, following redirects by hand so each one is checked. Error statuses are returned, not thrown: the caller knows what they mean. */
 export async function get(url: string, options: GetOptions = {}): Promise<Got> {
@@ -84,7 +87,7 @@ export async function get(url: string, options: GetOptions = {}): Promise<Got> {
     for (let redirects = 0; ; redirects++) {
       await checkAddress(current, { ...options, signal }); // the lookup counts toward the time limit and stops on abort
       if (current.protocol !== "http:" && current.protocol !== "https:") throw new ToolError(`Refused: ${current.href} is not an http(s) address.`);
-      const headers = { "user-agent": USER_AGENT, accept: ACCEPT, "accept-encoding": "gzip, deflate, br", ...(sendsHeaders(first, current) ? options.headers : {}) };
+      const headers = { "user-agent": USER_AGENT, accept: ACCEPT, "accept-encoding": "gzip, deflate, br", ...(sendsHeaders(first, current, options.allowHttp) ? options.headers : {}) };
       // Ours to abort once this response is dealt with. Merely leaving a body unread doesn't close the
       // connection (a server kept sending 27 GB until the timeout), so we cut it. It only ever happens after
       // the outcome is decided, so it can't be mistaken for the user's abort or a timeout.

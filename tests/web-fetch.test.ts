@@ -134,6 +134,7 @@ describe("get", () => {
     expect(sendsHeaders(u("https://a.example/x"), u("https://a.example:8443/y"))).toBe(false);
     expect(sendsHeaders(u("https://a.example/x"), u("http://a.example/y"))).toBe(false); // downgrade, same host
     expect(sendsHeaders(u("http://a.example/x"), u("http://a.example/y"))).toBe(false); // never in clear
+    expect(sendsHeaders(u("http://a.example/x"), u("http://a.example/y"), true)).toBe(true); // test-only escape
   });
 
   test("headers are not sent over http, nor along a redirect to another host", async () => {
