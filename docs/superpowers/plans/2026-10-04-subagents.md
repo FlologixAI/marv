@@ -33,6 +33,7 @@
 | `src/ui/Approval.tsx` | modify | Who's asking, how many are waiting, Esc = cancel all |
 | `src/ui/MessageView.tsx`, `src/ui/Transcript.tsx`, `src/ui/StatusBar.tsx`, `src/types.ts` | modify | Live agent line, ctrl+o steps, "N agents running" |
 | `src/app.tsx` | modify | Approval queue, agent host, progress batching, counts, ctrl+o |
+| `src/printable.ts` | new | Strip terminal control sequences from model text before drawing |
 | `src/commands/index.ts` | modify | `/agents` |
 | `src/cli.tsx` | modify | Load agents, worktrees dir |
 | `CLAUDE.md`, `README.md` | modify | Document it |
@@ -2441,6 +2442,72 @@ git commit -m "App: subagents as live entries, ctrl+o for their steps, N agents 
 
 ---
 
+### Task 11b: Model text can't send terminal control sequences
+
+Model-written text reaches the terminal through Ink unchanged: assistant replies, tool labels and summaries, a subagent's progress line, steps and report, approval previews. A raw escape sequence in that text (for example OSC 52, which writes the clipboard, or cursor movement that redraws the screen) would be executed by the terminal. This predates subagents, but subagents add more paths (an untrusted file read by a subagent can steer what it writes).
+
+**Files:**
+- Create: `src/printable.ts`
+- Modify: `src/ui/MessageView.tsx`, `src/ui/Markdown.tsx`, `src/ui/Approval.tsx` (wherever model- or file-controlled strings are rendered)
+- Test: `tests/printable.test.ts`, `tests/messageview.test.tsx`
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/printable.test.ts`:
+```ts
+import { expect, test } from "bun:test";
+import { printable } from "../src/printable.ts";
+
+test("removes C0/C1 control characters and escape sequences, keeps newlines, tabs and Unicode", () => {
+  expect(printable("a\x1b]52;c;aGk=\x07b")).toBe("ab"); // OSC 52 clipboard write
+  expect(printable("x\x1b[2Jy")).toBe("xy"); // clear screen
+  expect(printable("\x9b31mred")).toBe("red"); // 8-bit CSI
+  expect(printable("line 1\nline 2\tok · ✓ 日本")).toBe("line 1\nline 2\tok · ✓ 日本");
+  expect(printable("bell\x07 back\x08")).toBe("bell back");
+});
+```
+In `tests/messageview.test.tsx`, add: an assistant message, a tool entry (label and summary) and a system message containing `\x1b]52;c;aGk=\x07` render without `\x1b` in `lastFrame()` (strip Ink's own SGR colour codes first, or render with colours off, as the file's other tests do).
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `bun test tests/printable tests/messageview`
+Expected: FAIL (module missing; escape sequences present).
+
+- [ ] **Step 3: Implement**
+
+`src/printable.ts`:
+```ts
+// Text written by a model (or read from a file) is shown in the terminal. A
+// raw escape sequence in it would be executed by the terminal, not shown: it
+// could write the clipboard (OSC 52), retitle the window or redraw the screen.
+// Everything that isn't printable is dropped before Ink sees it.
+
+// ESC-introduced sequences (CSI … final byte, OSC/DCS/APC/PM … terminator), then any other C0/C1 control except \t and \n.
+const SEQUENCES = /\x1b(?:\[[0-?]*[ -/]*[@-~]|[\]PX^_][\s\S]*?(?:\x07|\x1b\\|$)|[@-Z\\-_])|[\x9b\x9d\x90\x98\x9e\x9f][\s\S]*?(?:[@-~]|\x07|$)/g;
+const CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
+export function printable(text: string): string {
+  return text.replace(SEQUENCES, "").replace(CONTROLS, "");
+}
+```
+(If the 8-bit CSI test shows the pattern is off, adjust it; the tests are the contract.)
+
+Apply `printable()` where untrusted strings enter the UI, once, at render time: in `MessageView` for `message.text`, `tool.label`, `tool.summary` and each of `tool.steps`; in `Markdown` on the text before `marked.lexer()`; in `Approval` on `request.agent`, `preview.title`, `preview.command`, `preview.text`, `preview.note`, `preview.warning` and each diff line. Keep it out of the model's conversation: only what's drawn changes.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `bun test && bun run typecheck`
+Expected: all PASS (the render-performance tests too: `printable` is two regex passes per string).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/printable.ts src/ui/MessageView.tsx src/ui/Markdown.tsx src/ui/Approval.tsx tests/printable.test.ts tests/messageview.test.tsx
+git commit -m "Never send model text's control sequences to the terminal"
+```
+
+---
+
 ### Task 12: `/agents`, loading at startup, help
 
 **Files:**
@@ -2731,7 +2798,7 @@ Add an architecture bullet after **Memory**:
 ```md
 - **Subagents (`src/agents.ts`, `src/subagent.ts`, `src/tools/agent.ts`, `src/worktree.ts`)**: the `agent` tool runs `runAgent()` again with a fresh history, the type's system prompt (`subagentPrompt`) and its tools; only its last message returns to the parent. Types are `.marv/agents/<name>.md` / `~/.marv/agents/<name>.md` (frontmatter `name`, `description`, optional `tools` — Claude Code names are mapped — and `model`), plus the built-in `general-purpose`; `findAgent` also tries a name without its `plugin:` prefix. Subagents never get `agent` or `memory`, and `runTool(call, ctx, available)` refuses tools they weren't given. Consecutive `agent` calls in one reply run in parallel (`MAX_PARALLEL` = 4; results appended in call order for the cache). `isolation: "worktree"` creates `~/.marv/worktrees/<project>/<slug>-<id>` on branch `marv/<slug>-<id>`; the dispatch is approved once (scope `agent:worktree`), then its changes are auto-approved while the sandbox is on, except `network: true`; its sandbox shows the repo's `.git` read-only (status/diff/log work; it can't commit, plant hooks or change config, which git would run outside the sandbox). When it ends, Marv commits its changes (every git path pinned via `GIT_DIR`/`GIT_COMMON_DIR`/`GIT_WORK_TREE`, hooks and fsmonitor off), deletes the folder, prunes, and keeps the branch (deleted if empty); the parent merges with git. Approvals are a FIFO queue in the App (`1 more waiting`; Esc/ctrl+c decline all); requests carry `agent` (who asks). Progress reaches the transcript through `AgentHost.onProgress`, batched with streamed text; ctrl+o shows each subagent's last 20 steps (`ink-text-input` is patched so ctrl+letter doesn't type).
 ```
-Add `agent` to the list of `CommandAction`s only if one was added (none was: `/agents` is a `print`).
+Add `agent` to the list of `CommandAction`s only if one was added (none was: `/agents` is a `print`). Also note under **Tools** that "don't ask again" scopes are shared by the main agent and its subagents (an "always" for file changes in one covers the other), and under **Rendering** that model text passes through `printable()` (`src/printable.ts`) before it's drawn.
 
 - [ ] **Step 2: `README.md`**
 
