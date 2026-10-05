@@ -187,7 +187,7 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
   const output = [text.trim() || "(The subagent gave no report.)", stopped, branchLine].filter(Boolean).join("\n\n");
   // A "no" that came with an interrupt (Esc declines what's waiting, then
   // stops the run) is reported as the interrupt it was.
-  if (declined && !ctx.signal?.aborted) return { output, summary: `declined · ${stats}`, declined: true };
+  if (declined && reason !== "aborted") return { output, summary: `declined · ${stats}`, declined: true };
   if (stopped) return { output, summary: `stopped · ${stats}`, isError: true };
   const first = text.trim().split("\n")[0]!.slice(0, 80);
   return { output, summary: `done · ${stats}${first ? ` · "${first}"` : ""}` };
