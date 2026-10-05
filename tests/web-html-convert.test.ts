@@ -2,7 +2,8 @@
 // speed: a loaded machine can be ten times slower, so time limits are ~10x what was measured, and the fallback is
 // tested with a timeout too short for any conversion.
 import { expect, test } from "bun:test";
-import { convertHtml, lastConverterPid } from "../src/tools/web/convert.ts";
+import { fileURLToPath } from "node:url";
+import { convertHtml, lastConverterPid, runningConverters } from "../src/tools/web/convert.ts";
 import { htmlToMarkdown } from "../src/tools/web/html.ts";
 import { MAX_CHARS, plainText } from "../src/tools/web/plain.ts";
 
@@ -44,6 +45,7 @@ test("converts in its own process, with the same result as htmlToMarkdown", asyn
   const html = page(`<nav>Menu</nav><article><h1>Title</h1><p>${LOREM.repeat(4)} <a href="/x">x</a></p></article>`);
   expect(await convertHtml(html, "https://e.com/")).toEqual(htmlToMarkdown(html, "https://e.com/"));
   expect(alive(lastConverterPid()!)).toBe(false); // it exited
+  expect(runningConverters()).toBe(0); // and isn't left for the exit handler
 }, 30_000);
 
 test("an ordinary 200 KB page is converted, not given up on", async () => {
@@ -68,6 +70,21 @@ for (const [name, html] of [
   }, 60_000);
 }
 
+test("a converter still running when Marv exits is killed by the exit handler", async () => {
+  // In a child Bun, so the exit that's tested isn't this test's own: it starts a slow conversion, then exits mid-way.
+  const script = `
+    import { convertHtml, lastConverterPid } from ${JSON.stringify(fileURLToPath(new URL("../src/tools/web/convert.ts", import.meta.url)))};
+    void convertHtml("<ul>" + "<li><a href='/p'>x</a></li>".repeat(200_000) + "</ul>", "https://e.com/");
+    setTimeout(() => { console.log(lastConverterPid()); process.exit(0); }, 300);
+  `;
+  const parent = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "inherit" });
+  const pid = Number((await new Response(parent.stdout).text()).trim());
+  await parent.exited;
+  expect(pid).toBeGreaterThan(0);
+  await Bun.sleep(100); // SIGKILL is immediate, but the kernel may take a moment to reap it
+  expect(alive(pid)).toBe(false); // without the handler it kept converting for ~5 s
+}, 30_000);
+
 test("too slow: the converter is killed and the page's plain text comes back", async () => {
   const html = page(`<script>var secret = 1;</script><p hidden>HIDDEN</p><p>Visible &amp; <b>kept</b></p>${fill(`<li><a href="/p">x</a></li>`, 2 * MB)}`);
   const result = await convertHtml(html, "https://e.com/", { timeoutMs: 1 });
@@ -76,6 +93,7 @@ test("too slow: the converter is killed and the page's plain text comes back", a
   expect(result.markdown).not.toContain("secret");
   expect(result.markdown).not.toContain("HIDDEN");
   expect(alive(lastConverterPid()!)).toBe(false); // gone by the time the promise settled, not merely told to stop
+  expect(runningConverters()).toBe(0);
 }, 30_000);
 
 test("aborting kills the converter and rejects with the signal's reason", async () => {
@@ -86,6 +104,7 @@ test("aborting kills the converter and rejects with the signal's reason", async 
   setTimeout(() => controller.abort(reason), 20);
   await expect(pending).rejects.toBe(reason);
   expect(alive(lastConverterPid()!)).toBe(false);
+  expect(runningConverters()).toBe(0);
   const pid = lastConverterPid();
   await expect(convertHtml(html, "https://e.com/", { signal: controller.signal })).rejects.toBe(reason); // already aborted
   expect(lastConverterPid()).toBe(pid); // nothing was started

@@ -31,6 +31,26 @@ let lastPid: number | undefined;
 /** For tests: the pid of the converter the last convertHtml started, to check it's really gone. */
 export const lastConverterPid = () => lastPid;
 
+/** Converters still running. If Marv exits mid-conversion (process.exit, ctrl+c twice), its children would be
+ *  orphaned and keep converting for seconds, so an exit handler kills whatever is left. (A SIGKILL of Marv itself
+ *  runs no handler: such a child finishes its one page and exits on its own.) */
+const running = new Set<Subprocess>();
+let exitHandlerInstalled = false;
+/** For tests: how many converters are running. */
+export const runningConverters = () => running.size;
+
+function track(child: Subprocess): void {
+  if (!exitHandlerInstalled) {
+    exitHandlerInstalled = true;
+    // Synchronous, as "exit" handlers must be; like McpManager.kill() for local MCP servers.
+    process.on("exit", () => {
+      for (const c of running) c.kill("SIGKILL");
+    });
+  }
+  running.add(child);
+  void child.exited.finally(() => running.delete(child));
+}
+
 /** htmlToMarkdown in its own process. Resolves with the Markdown, or with the page's plain text (`plain: true`,
  *  `reason` "timeout" or "error") if converting took too long or failed; rejects only if the signal aborts or the
  *  process can't be started. Either way the process has exited by the time the promise settles. */
@@ -51,6 +71,7 @@ export function convertHtml(html: string, url: string, { signal, timeoutMs = CON
     return Promise.reject(error);
   }
   lastPid = child.pid;
+  track(child);
 
   return new Promise<Markdown>((resolve, reject) => {
     let done = false;
