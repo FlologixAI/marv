@@ -51,7 +51,10 @@ export function resolveType(host: AgentHost, name = "general-purpose"): AgentTyp
  * they run without asking: the worktree is the boundary, and merging its
  * branch is the review. Network access still asks (a worktree limits what a
  * command changes, not what it sends out). Otherwise the user is asked, with
- * the request labeled by which subagent is asking.
+ * the request labeled by which subagent is asking. Without an approver (a
+ * session with no one to ask) there is no auto-yes either: `approve` stays
+ * undefined, so a worktree subagent's changes get the same rule as the main
+ * agent's: only what yolo vouches for runs, the rest is refused.
  */
 export function subagentApprove(approve: ToolContext["approve"], agent: string, auto: boolean): ToolContext["approve"] {
   if (!approve) return undefined;

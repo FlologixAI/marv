@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTool } from "../src/tools/index.ts";
@@ -23,4 +23,11 @@ test("with no one to ask, anything else is refused, as an error the model can re
   const result = await runTool(write("a.txt"), { root, yolo: false });
   expect(result).toMatchObject({ isError: true, output: "write_file needs the user's approval, and there's no one to ask." });
   expect(existsSync(join(root, "a.txt"))).toBe(false);
+});
+
+test("with yolo on, a call it doesn't vouch for is still refused when there's no one to ask", async () => {
+  await mkdir(join(root, ".git"));
+  const result = await runTool(write(".git/config"), { root, yolo: true });
+  expect(result).toMatchObject({ isError: true, output: "write_file needs the user's approval, and there's no one to ask." });
+  expect(existsSync(join(root, ".git", "config"))).toBe(false);
 });
