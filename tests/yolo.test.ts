@@ -64,6 +64,12 @@ describe("file changes", () => {
     expect(asked).toHaveLength(1);
   });
 
+  test("the result says how it was approved (for trajectories)", async () => {
+    expect((await run("write_file", { path: "b.txt", content: "b" })).approval).toBe("auto");
+    expect((await run("write_file", { path: "c.txt", content: "c" }, { yolo: false })).approval).toBe("yes");
+    expect((await run("read_file", { path: "a.txt" })).approval).toBeUndefined();
+  });
+
   test("a call that can't succeed still fails before anything runs", async () => {
     const result = await run("edit_file", { path: "a.txt", old_string: "missing", new_string: "x" });
     expect(result.isError).toBe(true);

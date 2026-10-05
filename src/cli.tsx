@@ -12,6 +12,7 @@ import { projectKey, shortenHome } from "./paths.ts";
 import { loadInstructions } from "./prompt.ts";
 import { loadSkills } from "./skills.ts";
 import { SessionStore } from "./sessions.ts";
+import { TrajectoryStore } from "./trajectory.ts";
 import { loadMemory, memoryPaths } from "./memory.ts";
 import { renderOptions } from "./render-options.ts";
 import { selection } from "./selection.ts";
@@ -28,6 +29,7 @@ Usage:
 Config:
   ~/.marv/config.json   created by the setup screen (/setup to change it)
   ~/.marv/sessions/     saved conversations, one folder per project
+  ~/.marv/trajectories/ every turn, step by step, with your ratings (/trajectories)
   ~/.marv/agents/       your subagent types (a project's go in .marv/agents/)
   ~/.marv/worktrees/    subagents' worktrees while they run
   OPENROUTER_API_KEY    overrides the saved OpenRouter key
@@ -90,6 +92,7 @@ const instance = render(
     agentProblems={agentProblems}
     worktreesDir={join(defaultConfigDir(process.env), "worktrees", projectKey(root))}
     sessions={new SessionStore(join(defaultConfigDir(process.env), "sessions"))}
+    trajectories={new TrajectoryStore(join(defaultConfigDir(process.env), "trajectories"))}
     memory={memory}
     resume={args.includes("-c") || args.includes("--continue") ? "latest" : args.includes("-r") || args.includes("--resume") ? "pick" : undefined}
   />,

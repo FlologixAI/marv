@@ -18,6 +18,9 @@ export type CommandAction =
   | { type: "thinking"; on: boolean }
   | { type: "sandbox"; on: boolean }
   | { type: "yolo"; on: boolean }
+  | { type: "trajectories"; on: boolean }
+  /** Rate or tag the last turn: 1 good, -1 bad, 0 labels only. */
+  | { type: "feedback"; score: 1 | -1 | 0; note?: string; labels?: string[] }
   | { type: "resume" }
   | { type: "remember"; scope: "personal" | "project"; text: string }
   | { type: "forget"; text: string }
@@ -38,6 +41,8 @@ export interface CommandContext {
   agentProblems?: string[];
   /** Skills that couldn't be loaded, and why. */
   skillProblems?: string[];
+  /** Where this project's trajectories are logged, for /trajectories. */
+  trajectoriesPath?: string;
   /** Tokens and cost so far, for /cost. */
   usage?: { totals: Totals; last: Usage | null; contextLength?: number };
 }
@@ -146,6 +151,34 @@ export const commands: Command[] = [
     },
   },
   {
+    name: "good",
+    description: "Rate the last turn as good (/good <optional note>)",
+    run: (args) => ({ type: "feedback", score: 1, ...(args.trim() ? { note: args.trim() } : {}) }),
+  },
+  {
+    name: "bad",
+    description: "Rate the last turn as bad (/bad <what went wrong>)",
+    run: (args) => ({ type: "feedback", score: -1, ...(args.trim() ? { note: args.trim() } : {}) }),
+  },
+  {
+    name: "label",
+    description: "Tag the last turn (/label refactor, tests)",
+    run: (args) => {
+      const labels = args.split(/[\s,]+/).filter(Boolean);
+      return labels.length ? { type: "feedback", score: 0, labels } : { type: "print", text: "Usage: /label <tag> [more tags]", isError: true };
+    },
+  },
+  {
+    name: "trajectories",
+    description: "Show or set run logging (/trajectories on, /trajectories off)",
+    run: (args, { config, trajectoriesPath }) => {
+      const arg = args.toLowerCase();
+      if (arg === "on" || arg === "off") return { type: "trajectories", on: arg === "on" };
+      if (arg) return { type: "print", text: "Usage: /trajectories, /trajectories on, or /trajectories off", isError: true };
+      return { type: "print", text: `Trajectories: ${trajectoriesStatus(config, trajectoriesPath)}` };
+    },
+  },
+  {
     name: "clear",
     description: "Clear the conversation",
     run: () => ({ type: "clear" }),
@@ -192,11 +225,18 @@ function configText({ config, configPath }: CommandContext): string {
     `Thinking:  ${config.thinking ? "on" : "off"}`,
     `Sandbox:   ${sandboxStatus(config)}`,
     `Yolo:      ${config.yolo ? "on" : "off"} (/yolo)`,
+    `Trajectories: ${config.trajectories ? "on" : "off"} (/trajectories)`,
     `Endpoint:  ${config.baseUrl}`,
     ...(config.provider === "ollama" ? [`Context:   ${config.contextLength.toLocaleString("en-US")} tokens (contextLength in the config file)`] : []),
     `API key:   ${key}`,
     `File:      ${configPath}`,
   ].join("\n");
+}
+
+export function trajectoriesStatus(config: Config, path = "~/.marv/trajectories"): string {
+  return config.trajectories
+    ? `on: every turn is logged to ${path} (rate turns with /good, /bad, /label)`
+    : "off: turns aren't logged";
 }
 
 /** What yolo mode does with this config, for the notice when it's turned on. */

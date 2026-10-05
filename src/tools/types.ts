@@ -82,6 +82,12 @@ export interface ToolResult {
   isError?: boolean;
   /** The user said no: the agent stops so they can say what to do instead. */
   declined?: boolean;
+  /**
+   * How a call that needed approval got it (for trajectories): "auto" in yolo
+   * mode, otherwise the answer (a "yes" may come from a session's "don't ask
+   * again", or a worktree's own rule). Absent: it needed none.
+   */
+  approval?: "auto" | Decision;
 }
 
 /**

@@ -55,6 +55,8 @@ const FileConfigSchema = z.object({
   sandbox: z.boolean().optional(),
   /** Run what the sandbox confines without asking: sandboxed commands, edits outside .git (default on). */
   yolo: z.boolean().optional(),
+  /** Log every turn to ~/.marv/trajectories (default on). */
+  trajectories: z.boolean().optional(),
 });
 
 /** 32k fits fully on a 12 GB GPU for 9-12B models and holds a fair amount of code. */
@@ -74,6 +76,7 @@ export interface Config {
   contextLength: number;
   sandbox: boolean;
   yolo: boolean;
+  trajectories: boolean;
 }
 
 export type Env = Record<string, string | undefined>;
@@ -147,6 +150,7 @@ export function resolveConfig(file: FileConfig | null, env: Env): Config {
     contextLength: file?.contextLength ?? DEFAULT_CONTEXT_LENGTH,
     sandbox: file?.sandbox ?? true,
     yolo: file?.yolo ?? true,
+    trajectories: file?.trajectories ?? true,
   };
 }
 

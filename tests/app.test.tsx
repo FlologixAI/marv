@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,8 @@ import type { ModelInfo } from "../src/provider/models.ts";
 import { SessionStore } from "../src/sessions.ts";
 import { loadMemory, memoryPaths, type MemoryPaths } from "../src/memory.ts";
 import { GENERAL_PURPOSE } from "../src/agents.ts";
+import { projectKey } from "../src/paths.ts";
+import { TrajectoryStore } from "../src/trajectory.ts";
 import { FakeProvider, RoutedProvider, ScriptedProvider } from "./fake-provider.ts";
 
 const ENTER = "\r";
@@ -779,6 +781,132 @@ describe("App", () => {
       await tick(100);
       expect(model.requests[1]!.options.system).toContain("- likes tabs");
     });
+  });
+});
+
+describe("trajectories", () => {
+  const reply = (text: string, usage = { promptTokens: 100, completionTokens: 10 }) =>
+    [{ type: "text_delta", text }, { type: "usage", usage }, { type: "done" }] as AgentEvent[];
+  const calls = (...list: { id: string; name: string; args: unknown }[]) =>
+    [...list.map(({ id, name, args }) => ({ type: "tool_call", call: { id, name, arguments: JSON.stringify(args) } })), { type: "done" }] as AgentEvent[];
+
+  let trajDir: string;
+  beforeEach(async () => {
+    trajDir = await mkdtemp(join(tmpdir(), "marv-traj-app-"));
+  });
+  afterEach(async () => {
+    await rm(trajDir, { recursive: true, force: true });
+  });
+
+  function renderLogged(model: Provider, file: FileConfig = LOCAL) {
+    const store2 = new TrajectoryStore(trajDir);
+    const app = render(
+      <App
+        store={store}
+        initialFile={file}
+        env={{}}
+        version="9.9.9"
+        cwd="~/x"
+        root={project}
+        splashMs={0}
+        makeProvider={() => model}
+        loadModels={async () => []}
+        agents={[GENERAL_PURPOSE]}
+        trajectories={store2}
+      />,
+    );
+    const records = async () => {
+      const folder = join(trajDir, projectKey(project));
+      if (!existsSync(folder)) return [];
+      const files = readdirSync(folder);
+      expect(files).toHaveLength(1);
+      return (await Bun.file(join(folder, files[0]!)).text())
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, any>);
+    };
+    return { ...app, records };
+  }
+
+  test("a turn is logged step by step, a subagent's steps under its own id", async () => {
+    const model = new ScriptedProvider([
+      calls({ id: "w1", name: "write_file", args: { path: "made.txt", content: "hi\n" } }),
+      calls({ id: "a1", name: "agent", args: { description: "Read notes", prompt: "What's in notes.txt?" } }),
+      calls({ id: "r1", name: "read_file", args: { path: "notes.txt" } }),
+      reply("Milk."),
+      reply("Done: made it, and the notes say milk."),
+    ]);
+    const { stdin, records } = renderLogged(model);
+    await type(stdin, "make a file and check the notes");
+    await tick(400);
+    const log = await records();
+    expect(log.map((r) => [r.type, r.agent])).toEqual([
+      ["session", undefined],
+      ["turn_start", undefined],
+      ["tool", "main"],
+      ["subagent_start", "main"],
+      ["tool", expect.stringMatching(/\.1$/)],
+      ["request", expect.stringMatching(/\.1$/)],
+      ["assistant", expect.stringMatching(/\.1$/)],
+      ["agent_end", expect.stringMatching(/\.1$/)],
+      ["tool", "main"],
+      ["request", "main"],
+      ["assistant", "main"],
+      ["agent_end", "main"],
+    ]);
+    const turn = log[1]!.turn;
+    expect(log.slice(1).every((r) => r.turn === turn)).toBe(true);
+    expect(log[0]).toMatchObject({ v: 1, root: project, marv: "9.9.9", model: "qwen3.5:9b", tools: expect.arrayContaining(["bash", "agent"]) });
+    expect(log[0]!.system).toContain("Marv");
+    expect(log[1]).toMatchObject({ text: "make a file and check the notes", model: "qwen3.5:9b", yolo: true });
+    expect(log[2]).toMatchObject({ call: { name: "write_file" }, approval: "auto", isError: false });
+    expect(log[3]).toMatchObject({ subagent: log[4]!.agent, agentType: "general-purpose", description: "Read notes", prompt: "What's in notes.txt?" });
+    expect(log[4]).toMatchObject({ call: { name: "read_file" }, approval: "none", output: expect.stringContaining("remember the milk") });
+    expect(log.at(-1)).toMatchObject({ reason: "end", steps: 1, tools: 2 });
+  });
+
+  test("/good and /bad rate the last turn; the next message's praise or correction is logged too", async () => {
+    const model = new ScriptedProvider([reply("Hi."), reply("Fixed."), reply("Ok.")]);
+    const { stdin, lastFrame, records } = renderLogged(model);
+    await type(stdin, "/good");
+    await tick();
+    expect(lastFrame()).toContain("Nothing to rate yet");
+
+    await type(stdin, "hello");
+    await tick(150);
+    await type(stdin, "/bad too terse");
+    await tick();
+    expect(lastFrame()).toContain("Rated the last turn: bad (too terse).");
+    await type(stdin, "/label greeting, smalltalk");
+    await tick();
+    expect(lastFrame()).toContain("Labeled the last turn: greeting, smalltalk.");
+    await type(stdin, "that's wrong, try again");
+    await tick(150);
+    await type(stdin, "perfect, thanks");
+    await tick(150);
+
+    const log = await records();
+    const turns = log.filter((r) => r.type === "turn_start").map((r) => r.turn);
+    expect(turns).toHaveLength(3);
+    expect(log.filter((r) => r.type === "feedback")).toEqual([
+      expect.objectContaining({ turn: turns[0], score: -1, source: "explicit", note: "too terse" }),
+      expect.objectContaining({ turn: turns[0], score: 0, source: "explicit", labels: ["greeting", "smalltalk"] }),
+      expect.objectContaining({ turn: turns[0], score: -1, source: "implicit", phrase: "that's wrong" }),
+      expect.objectContaining({ turn: turns[1], score: 1, source: "implicit", phrase: "perfect" }),
+    ]);
+  });
+
+  test("/trajectories off stops logging and saves it", async () => {
+    const { stdin, lastFrame, records } = renderLogged(new ScriptedProvider([reply("Hi.")]));
+    await type(stdin, "/trajectories off");
+    await tick(100);
+    expect(await store.load()).toEqual({ ...LOCAL, trajectories: false });
+    await type(stdin, "hello");
+    await tick(150);
+    await type(stdin, "/good");
+    await tick();
+    expect(lastFrame()).toContain("Trajectory logging is off");
+    expect(await records()).toEqual([]);
   });
 });
 

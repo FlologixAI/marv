@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun src/cli.tsx",
     "test": "bun test",
+    "stats": "bun scripts/trajectory-stats.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

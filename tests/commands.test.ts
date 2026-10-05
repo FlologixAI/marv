@@ -13,6 +13,7 @@ const ctx: CommandContext = {
     contextLength: 32768,
     sandbox: true,
     yolo: true,
+    trajectories: true,
   },
   configPath: "~/.marv/config.json",
 };
@@ -48,7 +49,7 @@ describe("slash commands", () => {
   });
 
   test("/config says when no key is needed (Ollama)", () => {
-    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://localhost:11434", thinking: false, contextLength: 32768, sandbox: true, yolo: true } });
+    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://localhost:11434", thinking: false, contextLength: 32768, sandbox: true, yolo: true, trajectories: true } });
     expect(action).toMatchObject({ type: "print", text: expect.stringContaining("API key:   not needed") });
   });
 
@@ -70,6 +71,24 @@ describe("slash commands", () => {
     expect(runCommand("/yolo on")).toEqual({ type: "yolo", on: true });
     expect(runCommand("/yolo maybe")).toMatchObject({ type: "print", isError: true });
     expect(runCommand("/config")).toMatchObject({ type: "print", text: expect.stringContaining("Yolo:      on") });
+  });
+
+  test("/good and /bad rate the last turn, with an optional note; /label tags it", () => {
+    expect(runCommand("/good")).toEqual({ type: "feedback", score: 1 });
+    expect(runCommand("/bad  edited the wrong file ")).toEqual({ type: "feedback", score: -1, note: "edited the wrong file" });
+    expect(runCommand("/label refactor, flaky-test  ui")).toEqual({ type: "feedback", score: 0, labels: ["refactor", "flaky-test", "ui"] });
+    expect(runCommand("/label")).toMatchObject({ type: "print", isError: true });
+  });
+
+  test("/trajectories shows where runs are logged, or turns logging on and off", () => {
+    expect(runCommand("/trajectories off")).toEqual({ type: "trajectories", on: false });
+    expect(runCommand("/trajectories on")).toEqual({ type: "trajectories", on: true });
+    expect(run("/trajectories", { ...ctx, trajectoriesPath: "~/.marv/trajectories/-p" })).toMatchObject({
+      type: "print",
+      text: expect.stringContaining("on: every turn is logged to ~/.marv/trajectories/-p"),
+    });
+    expect(runCommand("/trajectories maybe")).toMatchObject({ type: "print", isError: true });
+    expect(runCommand("/config")).toMatchObject({ type: "print", text: expect.stringContaining("Trajectories: on") });
   });
 
   test("/skills lists skills, or explains how to add one", () => {

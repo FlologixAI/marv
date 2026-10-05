@@ -68,13 +68,13 @@ export async function runTool(call: ToolCall, ctx: ToolContext, available: Tool[
       // as the interrupt it was; `declined` stops the loop like any other stop
       // (runAgent checks the abort first, so the model reads "Interrupted").
       if (ctx.signal?.aborted) {
-        return { output: NOT_RUN.aborted, summary: "interrupted", declined: true, label };
+        return { output: NOT_RUN.aborted, summary: "interrupted", declined: true, label, approval: "no" };
       }
       // Yolo: a call the tool vouches for runs without asking, confined (bash
       // then can't touch .git). It still went through the preview above, so
       // a call that can't succeed fails the same way.
       if (ctx.yolo && tool.autoSafe?.(parsed.data, ctx)) {
-        return { ...(await tool.run(parsed.data, { ...ctx, callId: call.id, confined: true })), label };
+        return { ...(await tool.run(parsed.data, { ...ctx, callId: call.id, confined: true })), label, approval: "auto" };
       }
       const decision = await ctx.approve({ tool: call.name, label, preview, scope, ...network });
       if (decision === "no") {
@@ -83,8 +83,10 @@ export async function runTool(call: ToolCall, ctx: ToolContext, available: Tool[
           summary: "declined",
           declined: true,
           label,
+          approval: "no",
         };
       }
+      return { ...(await tool.run(parsed.data, { ...ctx, callId: call.id })), label, approval: decision };
     }
     return { ...(await tool.run(parsed.data, { ...ctx, callId: call.id })), label };
   } catch (err) {

@@ -1,10 +1,11 @@
+import { join } from "node:path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, useApp, useInput, useWindowSize, type DOMElement } from "ink";
 import { runAgent } from "./agent.ts";
 import { applyEvent, createAgentLog, type AgentLog } from "./agent-log.ts";
 import { GENERAL_PURPOSE, type AgentType } from "./agents.ts";
 import { copyToClipboard } from "./clipboard.ts";
-import { commands, isCommand, runCommand, yoloStatus } from "./commands/index.ts";
+import { commands, isCommand, runCommand, trajectoriesStatus, yoloStatus } from "./commands/index.ts";
 import {
   needsSetup,
   PRESETS,
@@ -15,7 +16,9 @@ import {
   type FileConfig,
   type ProviderId,
 } from "./config/config.ts";
-import { shortenHome } from "./paths.ts";
+import { classifyReply } from "./feedback.ts";
+import { runGit } from "./git.ts";
+import { projectKey, shortenHome } from "./paths.ts";
 import { mouse, type MouseEvent } from "./mouse.ts";
 import { createProvider } from "./provider/index.ts";
 import { listModels, type ModelInfo } from "./provider/models.ts";
@@ -27,8 +30,10 @@ import { COMPACT_AT, compactedHistory, summarize } from "./compact.ts";
 import { addMemory, findMemory, loadMemory, removeMemory, type Memories, type MemoryPaths } from "./memory.ts";
 import { newSession, timeAgo, type Session, type SessionStore, type SessionSummary } from "./sessions.ts";
 import { skillMessage, type Skill } from "./skills.ts";
+import { AgentRecorder, type Trajectory, type TrajectoryRecord, type TrajectoryStore } from "./trajectory.ts";
 import { isParallelCall, runTool, toolSpecsFor } from "./tools/index.ts";
 import type { AgentHost, AgentProgress, ApprovalRequest, Decision } from "./tools/types.ts";
+import type { CommandAction } from "./commands/index.ts";
 import type { Message } from "./types.ts";
 import { AgentView, AgentViewHeader } from "./ui/AgentView.tsx";
 import { Approval } from "./ui/Approval.tsx";
@@ -51,14 +56,20 @@ const NOTICE_MS = 2000;
  */
 const STREAM_FLUSH_MS = 33;
 
-/** The task an agent call hands its subagent (the first entry in its view). */
-function agentPrompt(args: string): string {
+/** What an agent call asked for: its task (the first entry in its view) and the rest, for its trajectory. */
+function agentArgs(args: string): { prompt: string; type: string; description: string; isolation?: string } {
+  let parsed: Record<string, unknown> = {};
   try {
-    const { prompt } = JSON.parse(args) as { prompt?: unknown };
-    return typeof prompt === "string" ? prompt : "";
-  } catch {
-    return "";
-  }
+    parsed = JSON.parse(args) as Record<string, unknown>;
+  } catch {}
+  const text = (key: string) => (typeof parsed[key] === "string" ? (parsed[key] as string) : undefined);
+  return { prompt: text("prompt") ?? "", type: text("type") ?? "general-purpose", description: text("description") ?? "", isolation: text("isolation") };
+}
+
+/** The project's commit, so a trajectory says what code a run started from. */
+function gitHead(root: string): string | undefined {
+  const head = runGit(root, ["rev-parse", "HEAD"], { timeoutMs: 2000 });
+  return head.ok ? head.out.trim() : undefined;
 }
 // Defaults defined once, so they're the same objects on every render (the
 // system prompt and send() depend on them).
@@ -90,6 +101,8 @@ interface Props {
   loadModels?: (config: Pick<Config, "provider" | "baseUrl">) => Promise<ModelInfo[]>;
   /** Where sessions are saved; without it, nothing is saved. */
   sessions?: SessionStore;
+  /** Where every turn is logged (trajectories); without it, nothing is logged. */
+  trajectories?: TrajectoryStore;
   /** Start by resuming: the latest session here (marv -c), or a picker (marv -r). */
   resume?: "latest" | "pick";
   /** Where memory lives, and what it held at startup. */
@@ -119,6 +132,7 @@ export function App({
   copy = copyToClipboard,
   loadModels = listModels,
   sessions,
+  trajectories,
   resume,
   memory,
   agents = DEFAULT_AGENTS,
@@ -144,6 +158,12 @@ export function App({
   const configRef = useRef(config);
   configRef.current = config;
   const sessionRef = useRef<Session>(newSession(root, config));
+  // The trajectory log for the current session (one file per session), the
+  // session whose "session" record this process wrote, and the latest turn
+  // (what /good, /bad, /label and the next message's implicit feedback rate).
+  const trajectoryRef = useRef<Trajectory | null>(null);
+  const sessionLogged = useRef<string | null>(null);
+  const lastTurn = useRef<{ id: string; session: string } | null>(null);
   const [picker, setPicker] = useState<SessionSummary[] | null>(null);
 
   // Built once per session, so they're byte-identical in every request.
@@ -282,6 +302,18 @@ export function App({
     return id;
   }, []);
 
+  /** This session's trajectory log, or null when logging is off. */
+  const trajectory = useCallback((): Trajectory | null => {
+    if (!trajectories || !configRef.current.trajectories) return null;
+    const id = sessionRef.current.id;
+    if (trajectoryRef.current?.session !== id) {
+      const log = trajectories.open(root, id);
+      log.onError = (text) => addMessage({ role: "system", text, isError: true });
+      trajectoryRef.current = log;
+    }
+    return trajectoryRef.current;
+  }, [trajectories, root, addMessage]);
+
   const updateMessage = useCallback((id: number, patch: Partial<Message>) => {
     setItems((prev) =>
       prev.map((item) => (item.kind === "message" && item.message.id === id ? { ...item, message: { ...item.message, ...patch } } : item)),
@@ -347,6 +379,8 @@ export function App({
         return false;
       }
       conversation.current = compactedHistory(result.summary);
+      // From here the model sees the summary, not the turns before it: the trajectory needs it to say what the model saw.
+      trajectory()?.write({ type: "compact", ...(lastTurn.current ? { turn: lastTurn.current.id } : {}), summary: result.summary });
       setUsage(null);
       const usedBefore = before ? before.promptTokens + before.completionTokens : undefined;
       const why = automatic && usedBefore && contextLength ? ` (the context was ${Math.round((100 * usedBefore) / contextLength)}% full)` : "";
@@ -357,13 +391,45 @@ export function App({
       });
       return true;
     },
-    [provider, system, specs, countUsage, contextLength, addMessage],
+    [provider, system, specs, countUsage, contextLength, addMessage, trajectory],
   );
 
   const send = useCallback(
     // `forModel`: what the model gets, when it differs from what the user typed (a /skill).
     async (text: string, forModel = text) => {
       addMessage({ role: "user", text });
+      // Trajectory: the session's setup (once), what this message says about
+      // the last turn, and the new turn. Everything below records into it.
+      const log = trajectory();
+      const turn = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      if (log) {
+        if (sessionLogged.current !== log.session) {
+          const { provider: providerId, model } = configRef.current;
+          log.write({ type: "session", root, marv: version, provider: providerId, model, system, tools: specs.map((t) => t.name), git: gitHead(root) });
+          sessionLogged.current = log.session;
+        }
+        const previous = lastTurn.current;
+        const signal = forModel === text ? classifyReply(text) : null; // a /skill's arguments aren't a reply
+        if (previous?.session === log.session && signal) {
+          log.write({ type: "feedback", turn: previous.id, score: signal.score, source: "implicit", phrase: signal.phrase });
+        }
+        log.write({
+          type: "turn_start",
+          turn,
+          text,
+          ...(forModel !== text ? { forModel } : {}),
+          provider: config.provider,
+          model: config.model,
+          yolo: config.yolo,
+          sandbox: config.sandbox,
+        });
+      }
+      lastTurn.current = { id: turn, session: sessionRef.current.id };
+      const record = (r: TrajectoryRecord) => log?.write(r);
+      const main = new AgentRecorder(record, { turn, agent: "main" });
+      // Subagents' recorders, by call id; ids are unique within the turn.
+      const subRecorders = new Map<string, AgentRecorder>();
+      let subagents = 0;
       // Nearly out of context: summarize first, so this message (and what follows) fits.
       const last = usageRef.current;
       if (contextLength && last && last.promptTokens + last.completionTokens >= contextLength * COMPACT_AT) {
@@ -439,6 +505,7 @@ export function App({
           scheduleFlush();
         },
         onEvent: (callId, event) => {
+          subRecorders.get(callId)?.event(event);
           const log = logs.get(callId);
           if (over || !log) return;
           applyEvent(log, event);
@@ -461,6 +528,7 @@ export function App({
           signal: controller.signal,
           isParallel: isParallelCall,
         })) {
+          main.event(event);
           switch (event.type) {
             case "thinking_delta":
               thought += event.text;
@@ -492,7 +560,11 @@ export function App({
               toolLines.set(event.call.id, { label: event.label, line });
               logs.delete(event.call.id);
               if (event.call.name === "agent") {
-                const log = createAgentLog({ title: event.label, prompt: agentPrompt(event.call.arguments) });
+                const args = agentArgs(event.call.arguments);
+                const subagent = `${turn}.${++subagents}`;
+                record({ type: "subagent_start", turn, agent: "main", subagent, call: event.call.id, agentType: args.type, description: args.description, prompt: args.prompt, isolation: args.isolation });
+                subRecorders.set(event.call.id, new AgentRecorder(record, { turn, agent: subagent }));
+                const log = createAgentLog({ title: event.label, prompt: args.prompt });
                 logs.set(event.call.id, log);
                 agentLogs.current.set(`msg-${line}`, log);
               }
@@ -509,6 +581,9 @@ export function App({
               const summary = result.isError && result.summary === "error" ? result.output.split("\n")[0] : result.summary;
               const status = result.declined ? "declined" : result.isError ? "error" : "done";
               if (entry) updateMessage(entry.line, { tool: { label: result.label, status, summary, steps: callSteps } });
+              // A subagent that failed before its loop started never sent done.
+              subRecorders.get(event.call.id)?.finish(result.isError ? "error" : "end");
+              subRecorders.delete(event.call.id);
               const log = logs.get(event.call.id);
               if (log) {
                 // It may have ended before its loop started (a failed check): either way it's over now.
@@ -539,6 +614,8 @@ export function App({
         addMessage({ role: "system", text: `Error: ${(err as Error).message}`, isError: true });
       } finally {
         over = true;
+        for (const sub of subRecorders.values()) sub.finish("interrupted");
+        main.finish("error"); // only if the loop threw: otherwise its done already ended the turn
         if (flushTimer) clearTimeout(flushTimer);
         // The loop stopped early (it threw): close the entries it never ended.
         for (const [callId, entry] of toolLines) {
@@ -571,6 +648,10 @@ export function App({
       declineAll,
       config.sandbox,
       config.yolo,
+      config.provider,
+      config.model,
+      trajectory,
+      version,
       countUsage,
       compact,
       contextLength,
@@ -648,6 +729,7 @@ export function App({
       agents,
       agentProblems,
       usage: { totals, last: usage, contextLength },
+      trajectoriesPath: trajectories && shortenHome(join(trajectories.dir, projectKey(root))),
     });
     switch (action.type) {
       case "print":
@@ -693,6 +775,12 @@ export function App({
             : "Sandbox off: bash commands run directly on your system (each still needs your approval).",
         );
         break;
+      case "trajectories":
+        void saveConfig({ ...(file ?? { provider: config.provider }), trajectories: action.on }, `Trajectories ${trajectoriesStatus({ ...config, trajectories: action.on })}`);
+        break;
+      case "feedback":
+        rateLastTurn(action);
+        break;
       case "yolo":
         void saveConfig({ ...(file ?? { provider: config.provider }), yolo: action.on }, yoloStatus({ ...config, yolo: action.on }));
         break;
@@ -703,6 +791,21 @@ export function App({
       case "exit":
         exit();
         break;
+    }
+  };
+
+  /** /good, /bad, /label: feedback on the latest turn of this session, in its trajectory. */
+  const rateLastTurn = ({ score, note, labels }: Extract<CommandAction, { type: "feedback" }>) => {
+    const log = trajectory();
+    const turn = lastTurn.current;
+    if (!log) {
+      addMessage({ role: "system", text: "Trajectory logging is off, so there's nothing to rate (/trajectories on).", isError: true });
+    } else if (!turn || turn.session !== log.session) {
+      addMessage({ role: "system", text: "Nothing to rate yet: ratings apply to the last turn of this conversation.", isError: true });
+    } else {
+      log.write({ type: "feedback", turn: turn.id, score, source: "explicit", ...(labels ? { labels } : {}), ...(note ? { note } : {}) });
+      const what = labels ? `Labeled the last turn: ${labels.join(", ")}` : `Rated the last turn: ${score > 0 ? "good" : "bad"}`;
+      addMessage({ role: "system", text: `${what}${note ? ` (${note})` : ""}.` });
     }
   };
 
