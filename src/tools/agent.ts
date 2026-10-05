@@ -1,14 +1,17 @@
 import { z } from "zod";
 import { sandboxAvailable } from "../sandbox.ts";
-import { resolveType, runSubagent } from "../subagent.ts";
+import { NO_SUBAGENTS, NO_WORKTREES, resolveType, runSubagent } from "../subagent.ts";
 import { inspectRepo, NOT_A_REPO } from "../worktree.ts";
 import { ToolError, type Tool } from "./types.ts";
 
 const PREVIEW_CHARS = 400;
+/** Longest task description (the transcript label and the branch name come from it). Defined here, not in
+ * src/subagent.ts: the two modules import each other, so top-level code can't use the other's exports. */
+const MAX_DESCRIPTION_CHARS = 120;
 
 const input = z.object({
   type: z.string().optional().describe('The agent type, from the list in the system prompt. Default "general-purpose".'),
-  description: z.string().min(1).describe('A short name for the task, 3-5 words, e.g. "Task 2: parser errors".'),
+  description: z.string().min(1).max(MAX_DESCRIPTION_CHARS).describe('A short name for the task, 3-5 words, e.g. "Task 2: parser errors".'),
   prompt: z
     .string()
     .min(1)
@@ -34,7 +37,9 @@ export const agent: Tool<typeof input> = {
   scope: () => ({ key: "agent:worktree", description: "subagents in their own worktrees" }),
 
   async preview({ type, description, prompt }, ctx) {
-    if (!ctx.agentHost) throw new ToolError("Subagents can't start subagents.");
+    if (!ctx.agentHost) throw new ToolError(NO_SUBAGENTS);
+    // Every check runSubagent makes before it starts, so the user is never asked to approve one that can't run.
+    if (!ctx.agentHost.worktreesDir) throw new ToolError(NO_WORKTREES);
     const found = resolveType(ctx.agentHost, type);
     const repo = inspectRepo(ctx.root);
     if (!repo) throw new ToolError(NOT_A_REPO);

@@ -1,15 +1,18 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runAgent } from "../src/agent.ts";
 import { GENERAL_PURPOSE, type AgentType } from "../src/agents.ts";
+import type { MemoryPaths } from "../src/memory.ts";
 import type { AgentEvent, ChatTurn, Provider, StreamOptions, ToolCall, Usage } from "../src/provider/types.ts";
 import { sandboxAvailable } from "../src/sandbox.ts";
+import { subagentContext } from "../src/subagent.ts";
 import { isParallelCall, runTool } from "../src/tools/index.ts";
 import type { AgentHost, AgentProgress, ApprovalRequest, Decision, ToolContext } from "../src/tools/types.ts";
-import { NOT_A_REPO } from "../src/worktree.ts";
+import * as worktreeModule from "../src/worktree.ts";
+import { NOT_A_REPO, worktreeEnv, type Worktree } from "../src/worktree.ts";
 import { RoutedProvider, ScriptedProvider } from "./fake-provider.ts";
 
 let root: string;
@@ -106,8 +109,8 @@ describe("the agent tool", () => {
     const { host } = makeHost(provider);
     const result = await runTool(agentCall({ description: "x", prompt: "p" }), ctxWith(host).ctx);
     expect(result.isError).toBe(true);
-    expect(result.output).toContain("Partial findings.");
-    expect(result.output).toContain("Rate limited");
+    expect(result.output).toStartWith("Partial findings.");
+    expect(result.output).toContain("[Marv: It stopped on an error: Rate limited]");
     expect(result.summary).toStartWith("stopped ·");
   });
 
@@ -121,7 +124,7 @@ describe("the agent tool", () => {
   test("unknown types and nesting are errors the model can read", async () => {
     const { host } = makeHost(new ScriptedProvider([]));
     expect((await runTool(agentCall({ type: "nope", description: "x", prompt: "p" }), ctxWith(host).ctx)).output).toContain('no agent type "nope". Available: general-purpose');
-    expect((await runTool(agentCall({ description: "x", prompt: "p" }), { root })).output).toContain("Subagents can't start subagents");
+    expect((await runTool(agentCall({ description: "x", prompt: "p" }), { root })).output).toContain("Subagents aren't available here.");
   });
 
   test("a shared-folder subagent's changes are approved by the user, labeled with who asks", async () => {
@@ -160,7 +163,8 @@ describe("the agent tool", () => {
       expect(asked[0]!.tool).toBe("agent");
       expect(asked[0]!.scope.key).toBe("agent:worktree");
       expect(asked).toHaveLength(sandboxAvailable() ? 1 : 2);
-      const branch = /Branch (marv\/add-file-[0-9a-f]{4}): 1 commit/.exec(result.output)?.[1];
+      expect(result.output).toStartWith("Added new.txt.");
+      const branch = /\n\nMarv: Branch (marv\/add-file-[0-9a-f]{4}): 1 commit/.exec(result.output)?.[1];
       expect(branch).toBeDefined();
       expect(git(root, "show", `${branch}:new.txt`)).toBe("new");
       expect(existsSync(join(root, "new.txt"))).toBe(false);
@@ -190,8 +194,86 @@ describe("the agent tool", () => {
       const result = await runTool(agentCall({ description: "boom", prompt: "p", isolation: "worktree" }), ctxWith(host).ctx);
       expect(result.isError).toBe(true);
       expect(result.output).toContain("connection reset");
-      expect(result.output).toMatch(/No changes \(branch marv\/boom-[0-9a-f]{4} removed\)/);
+      expect(result.output).toMatch(/Marv: No changes \(branch marv\/boom-[0-9a-f]{4} removed\)/);
       expect(git(root, "worktree", "list").split("\n")).toHaveLength(1);
+    });
+
+    test("with the sandbox off, its edits ask the user, labeled with who asks", async () => {
+      const provider = new ScriptedProvider([useTool("w1", "write_file", { path: "new.txt", content: "new\n" }), say("Added.")]);
+      const { host } = makeHost(provider);
+      const { ctx, asked } = ctxWith(host);
+      await runTool(agentCall({ description: "x", prompt: "p", isolation: "worktree" }), { ...ctx, sandbox: false });
+      expect(asked.map((r) => [r.tool, r.agent])).toEqual([
+        ["agent", undefined],
+        ["write_file", "general-purpose · x"],
+      ]);
+    });
+
+    test("an interrupt mid-run commits what it did, marked interrupted", async () => {
+      const controller = new AbortController();
+      let step = 0;
+      const provider: Provider = {
+        name: "interrupted",
+        async *stream() {
+          step++;
+          if (step === 1) {
+            yield* useTool("w1", "write_file", { path: "half.txt", content: "half\n" });
+            return;
+          }
+          yield { type: "text_delta", text: "Halfway there." };
+          controller.abort();
+          yield { type: "done" };
+        },
+      };
+      const { host } = makeHost(provider);
+      const { ctx } = ctxWith(host);
+      const result = await runTool(agentCall({ description: "halt", prompt: "p", isolation: "worktree" }), { ...ctx, signal: controller.signal });
+      expect(result.isError).toBe(true);
+      expect(result.output).toStartWith("Halfway there.");
+      expect(result.output).toContain("[Marv: Interrupted by the user before it finished.]");
+      const branch = /\n\nMarv: Branch (marv\/halt-[0-9a-f]{4}): 1 commit/.exec(result.output)?.[1];
+      expect(branch).toBeDefined();
+      expect(git(root, "log", "-1", "--format=%s", branch!)).toBe("marv: halt (interrupted)");
+      expect(git(root, "show", `${branch}:half.txt`)).toBe("half");
+    });
+
+    test("if finishing the worktree throws, the report says where it is", async () => {
+      const finish = spyOn(worktreeModule, "finishWorktree").mockImplementation(() => {
+        throw new Error("disk on fire");
+      });
+      try {
+        const { host } = makeHost(new ScriptedProvider([say("Done.")]));
+        const result = await runTool(agentCall({ description: "fire", prompt: "p", isolation: "worktree" }), ctxWith(host).ctx);
+        expect(result.output).toMatch(new RegExp(`^Done\\.\\n\\nMarv: couldn't finish the worktree \\(disk on fire\\); it's at ${trees}/fire-[0-9a-f]{4}\\.$`));
+      } finally {
+        finish.mockRestore();
+      }
+    });
+
+    test.skipIf(!sandboxAvailable())("in the sandbox, git status works but the shared .git is read-only", async () => {
+      const gitFile = join(root, ".git", "planted");
+      const provider = new ScriptedProvider([
+        [
+          { type: "tool_call", call: { id: "b1", name: "bash", arguments: JSON.stringify({ command: "git status" }) } },
+          { type: "tool_call", call: { id: "b2", name: "bash", arguments: JSON.stringify({ command: `touch ${gitFile}` }) } },
+          { type: "done", reason: "tool_calls" },
+        ],
+        say("Checked."),
+      ]);
+      const { host } = makeHost(provider);
+      await runTool(agentCall({ description: "probe", prompt: "p", isolation: "worktree" }), ctxWith(host).ctx);
+      const results = provider.requests[1]!.history.filter((t) => t.role === "tool").map((t) => (t.role === "tool" ? t.text : ""));
+      expect(results[0]).toMatch(/On branch marv\/probe-[0-9a-f]{4}[\s\S]*\[exit code 0\]$/);
+      expect(results[1]).toMatch(/Read-only file system[\s\S]*\[exit code 1\]$/);
+      expect(existsSync(gitFile)).toBe(false);
+    });
+
+    test("without a worktrees folder, a worktree dispatch fails before asking", async () => {
+      const { host } = makeHost(new ScriptedProvider([]), { worktreesDir: undefined });
+      const { ctx, asked } = ctxWith(host);
+      const result = await runTool(agentCall({ description: "x", prompt: "p", isolation: "worktree" }), ctx);
+      expect(result.output).toContain("Worktrees aren't available here.");
+      expect(asked).toHaveLength(0);
     });
 
     test("the approval warns about uncommitted changes", async () => {
@@ -200,6 +282,62 @@ describe("the agent tool", () => {
       const { ctx, asked } = ctxWith(host);
       await runTool(agentCall({ description: "x", prompt: "p", isolation: "worktree" }), ctx);
       expect(asked[0]!.preview.warning).toContain("1 uncommitted change in the project won't be in the worktree");
+    });
+  });
+
+  test("a description is short", async () => {
+    const { host } = makeHost(new ScriptedProvider([]));
+    const result = await runTool(agentCall({ description: "x".repeat(121), prompt: "p" }), ctxWith(host).ctx);
+    expect(result.output).toStartWith("Invalid input for agent");
+  });
+
+  describe("a subagent's tool context", () => {
+    const wt: Worktree = {
+      dir: "/trees/x-1a2b",
+      branch: "marv/x-1a2b",
+      base: "abc1234",
+      repo: "/proj",
+      gitDir: "/proj/.git",
+      adminDir: "/proj/.git/worktrees/x-1a2b",
+    };
+    const parent = (host: AgentHost): ToolContext => ({
+      root: "/proj",
+      agentHost: host,
+      memory: { personal: "/m/p.md", project: "/m/q.md" } satisfies MemoryPaths,
+      callId: "a1",
+      sandbox: false,
+      approve: async () => "no",
+    });
+
+    test("in a worktree: its folder, the shared .git read-only, git pinned, no host or memory", async () => {
+      const { host } = makeHost(new ScriptedProvider([]));
+      const sub = subagentContext(parent(host), "general-purpose · x", wt);
+      expect(sub.root).toBe(wt.dir);
+      expect(sub.readOnly).toEqual([wt.gitDir]);
+      expect(sub.gitEnv).toEqual(worktreeEnv(wt));
+      expect(sub.agentHost).toBeUndefined();
+      expect(sub.memory).toBeUndefined();
+      expect(sub.callId).toBeUndefined();
+      expect(sub.sandbox).toBe(false);
+    });
+
+    test("in the shared folder: the project, nothing extra", async () => {
+      const { host } = makeHost(new ScriptedProvider([]));
+      const sub = subagentContext(parent(host), "general-purpose · x");
+      expect(sub.root).toBe("/proj");
+      expect(sub.readOnly).toBeUndefined();
+      expect(sub.gitEnv).toBeUndefined();
+      expect(sub.agentHost).toBeUndefined();
+      expect(sub.memory).toBeUndefined();
+    });
+
+    test("with the sandbox off, even a worktree's requests go to the user", async () => {
+      const { host } = makeHost(new ScriptedProvider([]));
+      const asked: ApprovalRequest[] = [];
+      const sub = subagentContext({ ...parent(host), approve: async (r) => (asked.push(r), "no") }, "general-purpose · x", wt);
+      const request = { tool: "write_file", label: "a.txt", preview: { title: "Write a.txt" }, scope: { key: "write_file", description: "" } };
+      expect(await sub.approve!(request)).toBe("no");
+      expect(asked).toEqual([{ ...request, agent: "general-purpose · x" }]);
     });
   });
 

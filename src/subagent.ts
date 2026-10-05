@@ -35,6 +35,10 @@ const STOPPED: Record<string, string> = {
   error: "It stopped on an error:",
 };
 
+/** Only the main agent has an AgentHost; a subagent (or a session without one) gets this. */
+export const NO_SUBAGENTS = "Subagents aren't available here.";
+export const NO_WORKTREES = "Worktrees aren't available here. Start the agent without isolation.";
+
 export function resolveType(host: AgentHost, name = "general-purpose"): AgentType {
   const type = findAgent(host.agents, name);
   if (!type) throw new ToolError(`There's no agent type "${name}". Available: ${host.agents.map((a) => a.name).join(", ")}.`);
@@ -53,17 +57,40 @@ export function subagentApprove(approve: ToolContext["approve"], agent: string, 
   return (request) => (auto && !request.network ? Promise.resolve<Decision>("yes") : approve({ ...request, agent }));
 }
 
+/**
+ * The tool context a subagent's tools run with. Built from scratch rather than
+ * copied from the parent's, so nothing is inherited by accident: no agentHost
+ * (it can't start subagents), no memory (only the main agent changes it), no
+ * callId. In a worktree it works in the worktree's folder, bash sees the
+ * shared .git read-only, and Marv's own git calls are pinned to the worktree.
+ */
+export function subagentContext(ctx: ToolContext, who: string, worktree?: Worktree): ToolContext {
+  const sandboxed = (ctx.sandbox ?? true) && sandboxAvailable();
+  return {
+    root: worktree?.dir ?? ctx.root,
+    signal: ctx.signal,
+    sandbox: ctx.sandbox,
+    skills: ctx.skills,
+    readOnly: worktree ? [worktree.gitDir] : undefined,
+    gitEnv: worktree && worktreeEnv(worktree),
+    approve: subagentApprove(ctx.approve, who, Boolean(worktree) && sandboxed),
+  };
+}
+
+/** Marv's own lines in a report, marked so the subagent's text can't pass for them. */
+const fromMarv = (text: string) => `Marv: ${text}`;
+
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promise<ToolResult> {
   const host = ctx.agentHost;
-  if (!host) throw new ToolError("Subagents can't start subagents.");
+  if (!host) throw new ToolError(NO_SUBAGENTS);
   const type = resolveType(host, input.type);
   const who = `${type.name} · ${input.description}`;
 
   let worktree: Worktree | undefined;
   if (input.isolation === "worktree") {
-    if (!host.worktreesDir) throw new ToolError("Worktrees aren't available here. Start the agent without isolation.");
+    if (!host.worktreesDir) throw new ToolError(NO_WORKTREES);
     worktree = createWorktree({ root: ctx.root, baseDir: host.worktreesDir, description: input.description });
   }
 
@@ -87,22 +114,12 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
   try {
     // Only subagent tools (never agent or memory, whatever the type lists),
     // and skill only when there are skills to load.
-    const sandboxed = (ctx.sandbox ?? true) && sandboxAvailable();
     const hasSkills = (ctx.skills?.length ?? 0) > 0;
     const available = tools.filter(
       (t) => SUBAGENT_TOOLS.includes(t.name) && type.tools.includes(t.name) && (t.name !== "skill" || hasSkills),
     );
     const names = available.map((t) => t.name);
-    // No agentHost (so it can't start subagents) and no memory.
-    const subCtx: ToolContext = {
-      root: worktree?.dir ?? ctx.root,
-      signal: ctx.signal,
-      sandbox: ctx.sandbox,
-      skills: ctx.skills,
-      readOnly: worktree ? [worktree.gitDir] : undefined,
-      gitEnv: worktree && worktreeEnv(worktree),
-      approve: subagentApprove(ctx.approve, who, Boolean(worktree) && sandboxed),
-    };
+    const subCtx = subagentContext(ctx, who, worktree);
     const system = subagentPrompt({
       cwd: worktree ? shortenHome(worktree.dir) : host.cwd,
       tools: names,
@@ -155,11 +172,18 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
     reason = "error";
     error = err instanceof Error ? err.message : String(err);
   } finally {
-    if (worktree) branchLine = finishWorktree(worktree, { description: input.description, interrupted: reason !== "end" });
+    if (worktree) {
+      try {
+        branchLine = fromMarv(finishWorktree(worktree, { description: input.description, interrupted: reason !== "end" }));
+      } catch (err) {
+        branchLine = fromMarv(`couldn't finish the worktree (${err instanceof Error ? err.message : String(err)}); it's at ${worktree.dir}.`);
+      }
+    }
   }
 
   const stats = `${plural(toolCount, "tool")} · ${tokens(used)} tokens`;
-  const stopped = reason === "end" || reason === "declined" ? "" : `[${STOPPED[reason] ?? `It stopped (${reason}).`}${error ? ` ${error}` : ""}]`;
+  const stopped = reason === "end" || reason === "declined" ? "" : `[${fromMarv(STOPPED[reason] ?? `It stopped (${reason}).`)}${error ? ` ${error}` : ""}]`;
+  // The subagent's own text first, then Marv's lines.
   const output = [text.trim() || "(The subagent gave no report.)", stopped, branchLine].filter(Boolean).join("\n\n");
   if (declined) return { output, summary: `declined · ${stats}`, declined: true };
   if (stopped) return { output, summary: `stopped · ${stats}`, isError: true };
