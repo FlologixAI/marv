@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { agentLabel } from "../agent.ts";
 import { sandboxAvailable } from "../sandbox.ts";
 import { NO_SUBAGENTS, NO_WORKTREES, resolveType, runSubagent } from "../subagent.ts";
 import { inspectRepo, NOT_A_REPO } from "../worktree.ts";
@@ -33,7 +34,7 @@ export const agent: Tool<typeof input> = {
   // Starting one in a worktree is the user's one approval for it; a
   // shared-folder subagent asks before each change it makes instead.
   needsApproval: ({ isolation }) => isolation === "worktree",
-  label: ({ type, description }) => `${type ?? "general-purpose"} · ${description}`,
+  label: ({ type, description }) => agentLabel(type, description),
   scope: () => ({ key: "agent:worktree", description: "subagents in their own worktrees" }),
 
   async preview({ type, description, prompt }, ctx) {

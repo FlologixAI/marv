@@ -57,11 +57,18 @@ interface Options {
   maxParallel?: number;
 }
 
+/**
+ * A subagent's label ("explore · Find the config"): used here before the call
+ * runs and by the agent tool's own `label` (src/tools/agent.ts) after, so the
+ * transcript entry doesn't change when the call starts.
+ */
+export const agentLabel = (type: unknown, description: string) => `${typeof type === "string" ? type : "general-purpose"} · ${description}`;
+
 /** The transcript label for a call before it runs ("src/app.ts"), falling back to the raw arguments. */
 function labelOf(call: ToolCall): string {
   try {
     const args = JSON.parse(call.arguments) as Record<string, unknown>;
-    const agent = typeof args.description === "string" ? `${args.type ?? "general-purpose"} · ${args.description}` : undefined;
+    const agent = typeof args.description === "string" ? agentLabel(args.type, args.description) : undefined;
     return String(args.path ?? args.pattern ?? args.command ?? agent ?? call.arguments);
   } catch {
     return call.arguments;

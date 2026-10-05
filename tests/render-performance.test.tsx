@@ -174,5 +174,4 @@ test("4 subagents reporting progress still reach React in batches", async () => 
   const SLACK = 10;
   const bound = Math.ceil(elapsed / 33) + SLACK;
   if (renders > bound) throw new Error(`${renders} renders in ${elapsed} ms; bound is ${bound} (ceil(elapsed/33) + ${SLACK})`);
-  console.log(`subagent renders: ${renders}, elapsed ${elapsed} ms, bound ${bound}`);
 }, 30000);
