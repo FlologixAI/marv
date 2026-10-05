@@ -6,9 +6,9 @@
 //
 //   ~/.marv/mcp-trust.json  { "<project key>": ["<server config key>", …] }
 import { existsSync } from "node:fs";
-import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { projectKey } from "../paths.ts";
+import { writePrivate } from "../private-file.ts";
 import type { McpServerConfig } from "./config.ts";
 
 type Trusted = Record<string, string[]>;
@@ -34,10 +34,6 @@ export class McpTrust {
     const all = await this.read();
     const key = projectKey(root);
     all[key] = [...new Set([...(all[key] ?? []), ...servers.map((s) => s.key)])];
-    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-    const temp = `${this.path}.tmp`;
-    await writeFile(temp, JSON.stringify(all, null, 2), { mode: 0o600 });
-    await chmod(temp, 0o600);
-    await rename(temp, this.path);
+    await writePrivate(this.path, JSON.stringify(all, null, 2));
   }
 }

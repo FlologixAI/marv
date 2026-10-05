@@ -9,9 +9,10 @@
 // so an instruction planted by a malicious file and saved there would come
 // back in every future session (a persistent prompt injection).
 import { existsSync } from "node:fs";
-import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
+import { rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { legacyProjectKey, projectKey } from "./paths.ts";
+import { writePrivate } from "./private-file.ts";
 
 export type MemoryScope = "personal" | "project";
 
@@ -58,11 +59,7 @@ async function readEntries(path: string): Promise<string[]> {
 
 async function writeEntries(path: string, entries: string[]) {
   const scope = scopeOf(path);
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temp = `${path}.tmp`;
-  await writeFile(temp, `${HEADERS[scope]}\n\n${entries.map((e) => `- ${e}`).join("\n")}\n`, { mode: 0o600 });
-  await chmod(temp, 0o600);
-  await rename(temp, path);
+  await writePrivate(path, `${HEADERS[scope]}\n\n${entries.map((e) => `- ${e}`).join("\n")}\n`);
 }
 
 export async function loadMemory(paths: MemoryPaths): Promise<Memories> {

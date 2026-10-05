@@ -6,11 +6,12 @@
 // transcript the user saw and the conversation the model saw, plus which
 // model it used and what it cost. Files are private (0600): they contain
 // your code and prompts. Saved after every turn, atomically (write a temp
-// file, then rename), so a crash never leaves a half-written session.
+// file, then rename; see src/private-file.ts), so a crash never leaves a half-written session.
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { legacyProjectKey, projectKey } from "./paths.ts";
+import { writePrivate } from "./private-file.ts";
 import type { ChatTurn } from "./provider/types.ts";
 import type { Message } from "./types.ts";
 import { emptyTotals, type Totals } from "./usage.ts";
@@ -68,13 +69,7 @@ export class SessionStore {
   /** Saves (or overwrites) a session. Sessions without a user message aren't saved. */
   async save(session: Session): Promise<void> {
     if (!session.transcript.some((m) => m.role === "user")) return;
-    const folder = this.folder(session.root);
-    await mkdir(folder, { recursive: true, mode: 0o700 });
-    const file = join(folder, `${session.id}.json`);
-    const temp = `${file}.tmp`;
-    await writeFile(temp, JSON.stringify({ ...session, updatedAt: Date.now() }), { mode: 0o600 });
-    await chmod(temp, 0o600);
-    await rename(temp, file);
+    await writePrivate(join(this.folder(session.root), `${session.id}.json`), JSON.stringify({ ...session, updatedAt: Date.now() }));
     // Saved under the old key before: it lives in the new folder from now on.
     await rm(join(this.legacyFolder(session.root), `${session.id}.json`), { force: true });
   }

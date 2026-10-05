@@ -78,6 +78,14 @@ describe("SessionStore", () => {
     expect((await store.list("/home/me/a-b")).map((s) => s.title)).toEqual(["my old task"]);
   });
 
+  test("overlapping saves of one session never leave it unreadable", async () => {
+    const s = session("/home/me/proj", "task", 1000);
+    for (let round = 0; round < 30; round++) {
+      await Promise.all([1, 2, 3].map((n) => store.save({ ...s, transcript: [...s.transcript, ...Array.from({ length: n * 200 }, (_, i) => ({ id: 10 + i, role: "assistant" as const, text: "x".repeat(500) }))] })));
+      expect(await store.load("/home/me/proj", s.id)).not.toBeNull();
+    }
+  });
+
   test("doesn't save a session with nothing in it", async () => {
     await store.save(newSession("/home/me/proj", { provider: "ollama", model: "m" }));
     expect(await store.list("/home/me/proj")).toEqual([]);
