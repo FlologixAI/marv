@@ -58,11 +58,31 @@ function columnsOnRow(selection: Selection, y: number): [number, number] | null 
   return [y === start.y ? start.x : 0, y === end.y ? end.x + 1 : Infinity];
 }
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * The columns [from, to) widened to whole characters. A wide character (CJK, emoji) takes two cells, and a
+ * mouse edge can land on its second half; slicing there would drop it from both sides (the line shrinks and
+ * shifts, and the copy loses it). Columns past the end are clamped to the line's width.
+ */
+export function wholeCells(line: string, [from, to]: [number, number]): [number, number] {
+  const plain = stripAnsi(line);
+  let col = 0;
+  let start = Math.min(from, stringWidth(plain));
+  let end = Math.min(to, stringWidth(plain));
+  for (const { segment } of graphemes.segment(plain)) {
+    const next = col + stringWidth(segment);
+    if (from > col && from < next) start = col; // `from` inside this character: start at its first cell
+    if (to > col && to < next) end = next; // `to` inside it: take all of it
+    col = next;
+  }
+  return [start, end];
+}
+
 /** Shows the cells [from, to) of a line in inverse video, keeping its colors either side. */
-export function highlightRow(line: string, [from, to]: [number, number]): string {
+export function highlightRow(line: string, columns: [number, number]): string {
   const width = stringWidth(line);
-  const start = Math.min(from, width);
-  const end = Math.min(to, width);
+  const [start, end] = wholeCells(line, columns);
   if (start >= end) return line;
   // slice-ansi closes and reopens colors at the cut points, so the text on
   // either side keeps its style. The selected part is shown as plain inverse.
@@ -165,8 +185,8 @@ export class SelectionStore {
     for (let y = start.y; y <= end.y; y++) {
       const row = this.rows.get(y);
       if (row === undefined) continue;
-      const [from, to] = columnsOnRow(selection, y)!;
-      text.push(sliceAnsi(row, from, Math.min(to, stringWidth(row))).trimEnd());
+      const [from, to] = wholeCells(row, columnsOnRow(selection, y)!);
+      text.push(sliceAnsi(row, from, to).trimEnd());
     }
     return text.join("\n");
   }

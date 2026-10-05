@@ -30,6 +30,15 @@ describe("highlightRow", () => {
     expect(line).toStartWith("\x1b[31mab");
   });
 
+  test("an edge inside a wide character takes the whole character (it never disappears)", () => {
+    const line = "ab中文cd😀ef";
+    for (const range of [[2, 3], [3, 5], [8, 9], [3, 4]] as [number, number][]) {
+      const out = highlightRow(line, range);
+      expect(stripAnsi(out)).toBe(line); // nothing lost, the rest of the line doesn't shift
+    }
+    expect(highlightRow(line, [3, 5])).toContain(`${INVERSE}中文\x1b[27m`);
+  });
+
   test("counts wide characters by their screen width", () => {
     expect(stripAnsi(highlightRow("● 日本 ok", [2, 6]))).toBe("● 日本 ok");
     expect(highlightRow("● 日本 ok", [2, 6])).toContain(`${INVERSE}日本\x1b[27m`);
@@ -44,6 +53,16 @@ describe("SelectionStore", () => {
     store.drag({ x: 3, y: 3 }); // to "line" of "line 3"
     expect(highlighted(store.transformOutput(screenFor(store, 0)))).toEqual(["line 1", "line 2", "line 3"]);
     expect(store.release()).toBe("1\nline 2\nline");
+  });
+
+  test("copying across wide characters copies whole characters", () => {
+    const store = new SelectionStore();
+    const frame = ["ab中文cd😀ef", "> prompt"].join("\n");
+    store.setViewport({ top: 0, height: 1, scrollTop: 0, contentHeight: 1, width: 40 }, () => {});
+    store.transformOutput(frame);
+    store.press({ x: 3, y: 0 }); // the second half of 中
+    store.drag({ x: 4, y: 0 }); // the first half of 文
+    expect(store.release()).toBe("中文");
   });
 
   test("the highlight stays on the same text when the transcript scrolls", () => {
