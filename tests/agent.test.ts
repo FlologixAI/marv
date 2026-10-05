@@ -317,6 +317,38 @@ describe("runAgent", () => {
       expect(events.at(-1)).toEqual({ type: "done", reason: "declined" });
     });
 
+    // Esc at an approval declines what's waiting and aborts the run: the model must read that as an
+    // interrupt, not as the user saying no to those calls.
+    const escOn = (controller: AbortController, id: string) => async (c: ToolCall) => {
+      if (c.id === id) controller.abort();
+      await Bun.sleep(5);
+      return { output: `out ${c.id}`, summary: "ok", label: c.id, ...(c.id === id ? { declined: true } : {}) };
+    };
+
+    test("after Esc (a decline and an abort), a group's queued calls read as interrupted", async () => {
+      const controller = new AbortController();
+      const provider = new ScriptedProvider([useTools(sub("a", 5), sub("b", 5), sub("c", 5)), say("never")]);
+      const history: ChatTurn[] = [{ role: "user", text: "go" }];
+      const events = await run(provider, history, { signal: controller.signal, runTool: escOn(controller, "a"), isParallel, maxParallel: 1 });
+      expect(history.filter((t) => t.role === "tool").map((t) => t.role === "tool" && t.text)).toEqual([
+        "out a",
+        "Interrupted by the user before this tool ran.",
+        "Interrupted by the user before this tool ran.",
+      ]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
+
+    test("after Esc, the calls after the group read as interrupted too", async () => {
+      const controller = new AbortController();
+      const provider = new ScriptedProvider([useTools(sub("a", 5), call("r", "x.ts")), say("never")]);
+      const history: ChatTurn[] = [{ role: "user", text: "go" }];
+      await run(provider, history, { signal: controller.signal, runTool: escOn(controller, "a"), isParallel });
+      expect(history.filter((t) => t.role === "tool").map((t) => t.role === "tool" && t.text)).toEqual([
+        "out a",
+        "Interrupted by the user before this tool ran.",
+      ]);
+    });
+
     test("an agent call is labeled with its type and description while it runs", async () => {
       const typed: ToolCall = { id: "t", name: "agent", arguments: JSON.stringify({ type: "explore", description: "Find the config" }) };
       const provider = new ScriptedProvider([useTools(sub("Read notes", 0), typed), say("ok")]);

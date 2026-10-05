@@ -205,7 +205,8 @@ describe("runTool: subagent support", () => {
     const result = await runTool(call("sometimes", { ask: true }), { root, approve, signal: controller.signal }, [slow]);
     expect(asked).toHaveLength(0);
     expect(ran).toBe(false);
-    expect(result).toMatchObject({ declined: true, summary: "declined", output: "Interrupted by the user before this tool ran." });
+    // Reported as the interrupt it was, not as a "no" (declined still stops the loop).
+    expect(result).toMatchObject({ declined: true, summary: "interrupted", output: "Interrupted by the user before this tool ran." });
   });
 });
 

@@ -64,9 +64,11 @@ export async function runTool(call: ToolCall, ctx: ToolContext, available: Tool[
       const scope = tool.scope?.(parsed.data) ?? { key: call.name, description: call.name };
       const network = tool.usesNetwork?.(parsed.data) ? { network: true } : {};
       // Stopped while the preview was being made (a parallel subagent when the
-      // user pressed Esc): don't raise a prompt for a run that's over.
+      // user pressed Esc): don't raise a prompt for a run that's over. Summed up
+      // as the interrupt it was; `declined` stops the loop like any other stop
+      // (runAgent checks the abort first, so the model reads "Interrupted").
       if (ctx.signal?.aborted) {
-        return { output: NOT_RUN.aborted, summary: "declined", declined: true, label };
+        return { output: NOT_RUN.aborted, summary: "interrupted", declined: true, label };
       }
       const decision = await ctx.approve({ tool: call.name, label, preview, scope, ...network });
       if (decision === "no") {

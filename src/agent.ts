@@ -93,7 +93,8 @@ async function* runGroup(
   let active = 0;
   let settled = 0;
   let declined = false;
-  const notRun = (call: ToolCall): Result => ({ output: declined ? NOT_RUN.declined : NOT_RUN.aborted, summary: "not run", label: call.name });
+  // The abort first: Esc declines what's waiting *and* aborts, and that's an interrupt, not a "no".
+  const notRun = (call: ToolCall): Result => ({ output: signal.aborted ? NOT_RUN.aborted : NOT_RUN.declined, summary: "not run", label: call.name });
   /** Reserves free slots for queued calls (or answers them, after an interrupt or a "no"). Runs nothing. */
   const startMore = () => {
     while (active < limit && next < group.length) {
@@ -220,7 +221,8 @@ export async function* runAgent({
       const group = calls.slice(i, end);
       i = end;
       if (signal.aborted || declined) {
-        for (const call of group) history.push({ role: "tool", callId: call.id, name: call.name, text: declined ? NOT_RUN.declined : NOT_RUN.aborted });
+        // The abort first, as in runGroup: after Esc the model reads "Interrupted", not "the user declined".
+        for (const call of group) history.push({ role: "tool", callId: call.id, name: call.name, text: signal.aborted ? NOT_RUN.aborted : NOT_RUN.declined });
         continue;
       }
       const results: Result[] = [];
