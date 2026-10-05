@@ -176,6 +176,15 @@ test("a server whose tool list never ends (the same next-page cursor forever) do
   expect(m.status()[0]).toMatchObject({ state: "connected", tools: ["mcp__paging__only"] });
 });
 
+test("if two servers' tools end up with the same name, the second is reported, not silently dropped", async () => {
+  const m = manager([stdio("test"), stdio("test", { key: "other" })]);
+  await m.start();
+  const [first, second] = m.status();
+  expect(first!.tools).toContain("mcp__test__echo");
+  expect(second!.skipped).toContain("mcp__test__echo");
+  expect(m.tools.filter((t) => t.name === "mcp__test__echo")).toHaveLength(1);
+});
+
 describe("trust", () => {
   test("/mcp trust while servers are still starting doesn't start yours a second time", async () => {
     const connects = spyOn(McpManager.prototype as unknown as { connect: () => Promise<void> }, "connect");

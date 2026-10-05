@@ -41,6 +41,8 @@ export interface McpServerStatus {
   error?: string;
   /** The end of a local server's stderr (it's kept off the screen). */
   stderr?: string;
+  /** Its tools not offered because another server's tool already has that name. */
+  skipped?: string[];
 }
 
 interface Connection {
@@ -49,6 +51,8 @@ interface Connection {
   client?: Client;
   transport?: Transport;
   tools: { tool: Tool; spec: ToolSpec }[];
+  /** Tool names already taken by an earlier server (set by rebuild). */
+  skipped?: string[];
   error?: string;
   stderr: string[];
 }
@@ -140,7 +144,8 @@ export class McpManager {
       reads: c.config.reads ?? [],
       runsProjectFiles: c.config.runsProjectFiles ?? [],
       state: c.state,
-      tools: c.tools.map((t) => t.tool.name),
+      tools: c.tools.map((t) => t.tool.name).filter((name) => !c.skipped?.includes(name)),
+      ...(c.skipped?.length ? { skipped: c.skipped } : {}),
       ...(c.error ? { error: c.error } : {}),
       ...(c.stderr.length ? { stderr: c.stderr.join("\n") } : {}),
     }));
@@ -213,7 +218,13 @@ export class McpManager {
   /** New arrays, so anything holding the old ones keeps a consistent set. Tool names must be unique across servers. */
   private rebuild() {
     const seen = new Set<string>();
-    const all = this.connections.flatMap((c) => c.tools).filter(({ tool }) => !seen.has(tool.name) && seen.add(tool.name));
+    const all = this.connections.flatMap((c) => {
+      // Names are unique within a server; across servers the first one keeps a name, and the others say so in /mcp.
+      c.skipped = c.tools.filter(({ tool }) => seen.has(tool.name)).map(({ tool }) => tool.name);
+      const kept = c.tools.filter(({ tool }) => !seen.has(tool.name));
+      for (const { tool } of kept) seen.add(tool.name);
+      return kept;
+    });
     this.tools = all.map((t) => t.tool);
     this.specs = all.map((t) => t.spec);
   }

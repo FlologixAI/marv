@@ -117,6 +117,9 @@ function projectFiles(root: string, transport: McpTransport): { files: string[];
 
 function parseServer(name: string, raw: unknown, source: McpServerConfig["source"], env: Env, where: string): McpServerConfig {
   if (!NAME.test(name)) throw new Error(`"${name}" in ${where}: use letters, digits, - and _ (at most 32)`);
+  // mcp__<server>__<tool> must read one way only: with "a__b" or "a_" allowed, server "a" + tool "b__c" and server
+  // "a__b" + tool "c" (or "a" + "_x" and "a_" + "x") would get the same tool name.
+  if (name.includes("__") || name.endsWith("_")) throw new Error(`"${name}" in ${where}: a server name can't contain "__" or end in "_"`);
   const type = (raw as { type?: unknown } | null)?.type;
   if (type === "sse") throw new Error(`"${name}" in ${where}: the old sse transport isn't supported; most servers also speak "type": "http"`);
   const key = createHash("sha256").update(JSON.stringify(raw)).digest("hex");

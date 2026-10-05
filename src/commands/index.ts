@@ -286,7 +286,8 @@ function mcpText(mcp: CommandContext["mcp"]): string {
     switch (s.state) {
       case "connected": {
         const tools = s.tools.map((t) => `\`${t.replace(`mcp__${s.name}__`, "")}\``).join(", ");
-        return `${who}connected · ${s.tools.length} tool${s.tools.length === 1 ? "" : "s"}${tools ? `: ${tools}` : ""}`;
+        const skipped = s.skipped?.length ? `; not offered (another server's tool has the name): ${s.skipped.map((t) => `\`${t}\``).join(", ")}` : "";
+        return `${who}connected · ${s.tools.length} tool${s.tools.length === 1 ? "" : "s"}${tools ? `: ${tools}` : ""}${skipped}`;
       }
       case "untrusted": {
         const reads = s.reads.length ? `; reads ${s.reads.map((v) => `\`$${v}\``).join(", ")} from your environment` : "";

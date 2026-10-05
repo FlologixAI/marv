@@ -104,6 +104,13 @@ describe("loadMcpConfig", () => {
     expect(before.runsProjectFiles).toEqual(["mcp/server.js"]);
   });
 
+  test("server names can't contain __ or end in _ (tool names mcp__<server>__<tool> must stay unambiguous)", async () => {
+    await personal({ "a__b": { command: "x" }, "a_": { command: "y" }, ok_name: { command: "z" } });
+    const { servers, problems } = await loadMcpConfig({ root, configDir, env: {} });
+    expect(servers.map((s) => s.name)).toEqual(["ok_name"]);
+    expect(problems).toEqual([expect.stringContaining('"a__b"'), expect.stringContaining('"a_"')]);
+  });
+
   test("names must be usable in tool names", async () => {
     await mkdir(join(root, "x"));
     await project({ "my server!": { command: "x" } });
