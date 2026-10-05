@@ -5,13 +5,13 @@
 //   - the whole system is visible but read-only;
 //   - the home folder is replaced by an empty one, so secrets there (~/.ssh,
 //     ~/.marv with the API key, browser profiles, …) can't be read, except a
-//     few toolchain folders (bun, cargo, git config…), mounted read-only;
-//   - the project folder is the only writable place (plus a private /tmp and
-//     bun's cache, below); a caller may add folders that are visible
-//     read-only, e.g. a worktree's .git;
-//   - bun gets a download cache of the sandbox's own (~/.marv/sandbox-cache/bun),
-//     never the user's ~/.bun/install/cache: code an install runs (lifecycle
-//     scripts) could otherwise plant packages the user's real projects would use;
+//     few toolchain folders (bun, cargo, git config…), mounted read-only, with
+//     the credential files inside them hidden;
+//   - the project folder is the only writable place (plus a private /tmp); a
+//     caller may add folders that are visible read-only, e.g. a worktree's .git;
+//   - bun's download cache is a throwaway one in that private /tmp, gone when
+//     the command ends: a shared or host cache would let one sandboxed command
+//     (e.g. an install's lifecycle scripts) plant packages for another context;
 //   - there's no network unless the command asked for it;
 //   - the environment starts empty, so API keys can't leak into commands.
 // Approval decides *whether* a command runs; the sandbox limits *what an
@@ -83,8 +83,13 @@ function realOrSelf(path: string): string {
   }
 }
 
-/** bun's download cache inside the sandbox: the sandbox's own, outside the user's ~/.bun. */
-export const sandboxBunCache = (home: string) => join(home, ".marv", "sandbox-cache", "bun");
+/**
+ * Credential files inside the toolchain folders above, replaced by an empty file: an approved (or
+ * auto-approved) command could otherwise print them into the conversation, which goes to the model
+ * provider. Tokens written into ~/.gitconfig itself can't be hidden this way (it's a single file the
+ * sandbox needs whole).
+ */
+const CREDENTIALS = [".cargo/credentials", ".cargo/credentials.toml", ".config/git/credentials"];
 
 /** bwrap's arguments (everything before `-- command`). Order matters: later mounts sit on top of earlier ones. */
 export function sandboxArgs({ root, home, network, path, readOnly = [], exists = existsSync }: SandboxOptions): string[] {
@@ -93,12 +98,11 @@ export function sandboxArgs({ root, home, network, path, readOnly = [], exists =
     const full = join(home, dir);
     if (exists(full)) args.push("--ro-bind", full, full);
   }
-  // `bun install` needs a writable cache (it stages downloads inside it and fails at once if it can't),
-  // but never the user's: an install runs the project's scripts, which could plant packages there that
-  // the user's own projects would later install outside the sandbox. So the sandbox has its own, which
-  // the caller creates (see runCommand). Bound after the hidden home, so it sits on top of it.
-  const cache = sandboxBunCache(home);
-  args.push("--bind", cache, cache);
+  // On top of the toolchain mounts, so the empty file hides the real one.
+  for (const file of CREDENTIALS) {
+    const full = join(home, file);
+    if (exists(full)) args.push("--ro-bind", "/dev/null", full);
+  }
   args.push("--bind", root, root);
   // Bind the resolved path (what was checked), at the path the caller gave.
   for (const dir of readOnly) args.push("--ro-bind", resolveExtra(dir, home, root), dir);
@@ -113,7 +117,11 @@ export function sandboxArgs({ root, home, network, path, readOnly = [], exists =
     "--setenv", "LANG", process.env.LANG ?? "C.UTF-8",
     "--setenv", "TERM", "dumb",
     "--setenv", "TMPDIR", "/tmp",
-    "--setenv", "BUN_INSTALL_CACHE_DIR", cache,
+    // `bun install` needs a writable cache (it stages downloads inside it and fails at once if it can't).
+    // Not the user's ~/.bun/install/cache, nor any cache that outlives the command: an install runs the
+    // project's scripts, which could plant packages there for the user's own projects or another
+    // sandbox. Packages land in the project's node_modules, which stays.
+    "--setenv", "BUN_INSTALL_CACHE_DIR", "/tmp/bun-cache",
     "--chdir", root,
   );
   return args;

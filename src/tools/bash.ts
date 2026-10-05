@@ -1,7 +1,6 @@
-import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { z } from "zod";
-import { sandboxArgs, sandboxAvailable, sandboxBunCache } from "../sandbox.ts";
+import { sandboxArgs, sandboxAvailable } from "../sandbox.ts";
 import type { Tool } from "./types.ts";
 
 const DEFAULT_TIMEOUT_S = 120;
@@ -41,8 +40,6 @@ const hasSetsid = Bun.which("setsid") !== null;
 export async function runCommand({ command, root, sandbox, network, timeoutMs, signal, readOnly }: RunOptions): Promise<CommandResult> {
   const path = process.env.PATH ?? "/usr/bin:/bin";
   const home = homedir();
-  // bwrap can only mount a folder that exists. Private (0700): another user's sandbox mustn't read or plant packages in it.
-  if (sandbox) mkdirSync(sandboxBunCache(home), { recursive: true, mode: 0o700 });
   const script = `exec 2>&1\n${command}`; // stderr into stdout, so the output stays in order
   const argv = sandbox
     ? ["bwrap", ...sandboxArgs({ root, home, network, path, readOnly }), "--", "bash", "-c", script]

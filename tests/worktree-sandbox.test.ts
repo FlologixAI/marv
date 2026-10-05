@@ -58,7 +58,8 @@ sandboxed("inside the sandbox, the repository can't be changed", async () => {
 
   for (const command of [
     "touch x && git add x", // the index lives in .git/worktrees/<id>
-    `echo 'touch /tmp/x' > ${join(wt.gitDir, "hooks", "pre-commit")}`, // a hook git would run outside the sandbox
+    // A hook git would run outside the sandbox (fails at the mkdir if there's no hooks folder yet, at the write if there is).
+    `mkdir -p ${join(wt.gitDir, "hooks")} && echo 'touch /tmp/x' > ${join(wt.gitDir, "hooks", "pre-commit")}`,
     "git config core.fsmonitor 'touch /tmp/x'", // config that runs a program
     `echo /elsewhere > ${join(wt.adminDir, "commondir")}`, // repointing the worktree's record
     "git branch other", // a new ref
@@ -85,6 +86,18 @@ sandboxed("inside the sandbox, the repository can't be changed", async () => {
   finishWorktree(wt, { description: "escape check", interrupted: false });
 }, 130_000);
 
+sandboxed("Marv's own folder stays hidden: only personal skills are visible", async () => {
+  const wt = createWorktree({ root: repo, baseDir: trees, description: "home check" });
+  const listing = await inWorktree(wt, "ls -A ~/.marv");
+  const skills = existsSync(join(homedir(), ".marv", "skills"));
+  if (skills) expect(listing.output.trim()).toBe("skills");
+  else expect(listing.exitCode).not.toBe(0); // no ~/.marv at all
+  const config = await inWorktree(wt, "cat ~/.marv/config.json");
+  expect(config.exitCode).not.toBe(0);
+  expect(config.output).toContain("No such file or directory");
+  finishWorktree(wt, { description: "home check", interrupted: false });
+}, 130_000);
+
 online("installs a real dependency inside the sandbox", async () => {
   const wt = createWorktree({ root: repo, baseDir: trees, description: "deps check" });
   await writeFile(join(wt.dir, "package.json"), JSON.stringify({ name: "demo", private: true, dependencies: { "is-number": "7.0.0" } }));
@@ -92,9 +105,12 @@ online("installs a real dependency inside the sandbox", async () => {
   const result = await inWorktree(wt, run, true);
   expect(result.output).toContain("true");
   expect(result.exitCode).toBe(0);
-  // Downloaded into the sandbox's own cache, so it installs again without the network.
-  await rm(join(wt.dir, "node_modules"), { recursive: true, force: true });
-  const offline = await inWorktree(wt, run);
+  // bun's cache was thrown away with the command, but the packages are in the worktree's node_modules,
+  // so later commands use them without the network (and without reinstalling).
+  await writeFile(join(wt.dir, "dep.test.ts"), 'import { expect, test } from "bun:test";\nimport isNumber from "is-number";\ntest("dep", () => expect(isNumber(5)).toBe(true));\n');
+  const offline = await inWorktree(wt, "ls /tmp; bun test dep.test.ts && bun -e 'console.log(require(\"is-number\")(5))'");
+  expect(offline.output).not.toContain("bun-cache");
+  expect(offline.output).toContain("1 pass");
   expect(offline.output).toContain("true");
   expect(offline.exitCode).toBe(0);
   finishWorktree(wt, { description: "deps check", interrupted: false });
