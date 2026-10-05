@@ -180,6 +180,6 @@ Three dependencies are patched (in [`patches/`](patches/), applied by `bun insta
 
 - **ink**: adds a `transformOutput` hook and `repaint()` (for drawing the mouse-selection highlight), skips drawing off-screen nodes, and skips a whole-tree search for `<Static>` on every update. Long sessions would otherwise slow every frame.
 - **string-width**: caches results and skips a costly emoji regex for characters that can't be emoji, which was the biggest cost while scrolling.
-- **ink-text-input**: ignores every ctrl+letter, so shortcuts like ctrl+o don't type the letter into the prompt.
+- **ink-text-input**: ignores ctrl+letter (only letters: ctrl+arrows still move the cursor), so shortcuts like ctrl+o don't type the letter into the prompt.
 
 Edit a patch with `bun patch <package>`, change the files in `node_modules/<package>`, then run `bun patch --commit node_modules/<package>`.

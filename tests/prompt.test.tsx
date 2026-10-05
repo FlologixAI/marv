@@ -121,3 +121,10 @@ test("ctrl+letter combinations don't type the letter", async () => {
   await press(stdin, "\x0f", "\x01", "x", ENTER); // ctrl+o, ctrl+a, x
   expect(onSubmit).toHaveBeenCalledWith("x");
 });
+
+test("ctrl+arrows aren't typed, and still move the cursor", async () => {
+  const onSubmit = mock();
+  const { stdin } = render(<Harness onSubmit={onSubmit} />);
+  await press(stdin, "a", "b", "\x1b[1;5D", "x", "\x1b[1;5C", "y", ENTER); // ctrl+←, ctrl+→
+  expect(onSubmit).toHaveBeenCalledWith("axby");
+});
