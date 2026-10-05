@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -7,6 +7,8 @@ import { Profiler, useEffect, useState } from "react";
 import { render as renderForTest } from "ink-testing-library";
 import { App } from "../src/app.tsx";
 import { ConfigStore } from "../src/config/config.ts";
+import { GENERAL_PURPOSE } from "../src/agents.ts";
+import { RoutedProvider, ScriptedProvider } from "./fake-provider.ts";
 import type { AgentEvent, Provider } from "../src/provider/types.ts";
 import { Box, render, Text } from "ink";
 import { renderOptions } from "../src/render-options.ts";
@@ -127,4 +129,44 @@ test("streamed tokens reach React in batches, not one render per token", async (
   await rm(dir, { recursive: true, force: true });
   // Unbatched, this was one render per token (~300). At ~30 updates a second it's a few dozen at most.
   expect(renders).toBeLessThan(tokens / 3);
+}, 30000);
+
+test("4 subagents reporting progress still reach React in batches", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "marv-agents-perf-"));
+  await writeFile(join(dir, "f.txt"), "x\n");
+  const STEPS = 40;
+  const busy = (n: number) =>
+    new ScriptedProvider([
+      ...Array.from({ length: STEPS }, (_, i) => [
+        { type: "tool_call", call: { id: `r${n}-${i}`, name: "read_file", arguments: '{"path":"f.txt"}' } },
+        { type: "done" },
+      ] as AgentEvent[]),
+      [{ type: "text_delta", text: `agent ${n} done` }, { type: "done" }] as AgentEvent[],
+    ]);
+  const parent = new ScriptedProvider([
+    [
+      ...[0, 1, 2, 3].map((n) => ({ type: "tool_call", call: { id: `a${n}`, name: "agent", arguments: JSON.stringify({ description: `job ${n}`, prompt: `job number ${n}` }) } })),
+      { type: "done" },
+    ] as AgentEvent[],
+    [{ type: "text_delta", text: "all four finished" }, { type: "done" }] as AgentEvent[],
+  ]);
+  const model = new RoutedProvider({ "go now": parent, "job number 0": busy(0), "job number 1": busy(1), "job number 2": busy(2), "job number 3": busy(3) });
+  let renders = 0;
+  const { stdin, lastFrame, unmount } = renderForTest(
+    <Profiler id="app" onRender={() => renders++}>
+      <App store={new ConfigStore(dir)} initialFile={{ provider: "ollama", model: "m" }} env={{}} version="0" cwd="~" root={dir} splashMs={0} makeProvider={() => model} loadModels={async () => []} agents={[GENERAL_PURPOSE]} />
+    </Profiler>,
+  );
+  await Bun.sleep(50);
+  stdin.write("go now");
+  await Bun.sleep(20);
+  renders = 0;
+  stdin.write("\r");
+  while (!lastFrame()!.includes("all four finished")) await Bun.sleep(10);
+  unmount();
+  await rm(dir, { recursive: true, force: true });
+  // 4 x 40 tool calls = 320 progress reports. Batched this measures ~8 renders;
+  // with progress flushed immediately it measures ~46 (React coalesces some
+  // of the synchronous updates). 25 sits well clear of both.
+  expect(renders).toBeLessThan(25);
 }, 30000);
