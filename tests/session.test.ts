@@ -214,3 +214,87 @@ describe("approvals", () => {
     expect(events).toContainEqual({ type: "step_limit", steps: 25, continued: false });
   });
 });
+
+/** Stands in for McpManager: the parts a session uses. */
+function fakeMcp(ready: Promise<void>, specs: ToolSpec[] = []): McpManager {
+  const mcp = { settled: false, ready, specs, tools: [], status: () => [] };
+  void ready.then(() => (mcp.settled = true));
+  return mcp as unknown as McpManager;
+}
+
+describe("MCP servers", () => {
+  test("the first request waits for them, and offers their tools", async () => {
+    let start!: () => void;
+    const spec: ToolSpec = { name: "mcp__x__ping", description: "[x] ping", parameters: { type: "object" } };
+    const provider = new ScriptedProvider([say("Pong.")]);
+    const session = makeSession(provider, { mcp: fakeMcp(new Promise<void>((resolve) => (start = resolve)), [spec]) });
+    for await (const event of session.send("ping")) {
+      if (event.type === "status" && event.status === "waiting_for_mcp") {
+        expect(provider.requests).toHaveLength(0);
+        start();
+      }
+    }
+    expect(provider.requests[0]!.options.tools).toContainEqual(spec);
+  });
+
+  test("interrupting the wait ends the turn before anything is sent", async () => {
+    const provider = new ScriptedProvider([say("never")]);
+    const session = makeSession(provider, { mcp: fakeMcp(new Promise<void>(() => {})) });
+    const events: SessionEvent[] = [];
+    for await (const event of session.send("ping")) {
+      events.push(event);
+      if (event.type === "status") session.interrupt();
+    }
+    expect(types(events)).toEqual(["turn_start", "status", "turn_end"]);
+    expect(events.at(-1)).toMatchObject({ reason: "interrupted" });
+    expect(provider.requests).toHaveLength(0);
+  });
+});
+
+describe("compaction", () => {
+  const used = (promptTokens: number): AgentEvent => ({ type: "usage", usage: { promptTokens, completionTokens: 0 } });
+
+  test("a nearly full context is summarized before the next message", async () => {
+    const provider = new ScriptedProvider([[used(900), ...say("First answer.")], say("SUMMARY of it all"), say("Second answer.")], 1000);
+    const session = makeSession(provider);
+    await collect(session.send("first"));
+    const events = await collect(session.send("second"));
+    expect(events).toContainEqual({ type: "status", status: "compacting" });
+    expect(events).toContainEqual({ type: "compaction", result: { compacted: true, summary: "SUMMARY of it all", tokensBefore: 900 } });
+    const after = provider.requests[2]!.history;
+    expect(after[0]!.text).toContain("SUMMARY of it all");
+    expect(after.at(-1)).toEqual({ role: "user", text: "second" });
+  });
+
+  test("stopping the compaction stops the turn, and the message isn't sent", async () => {
+    const first = new ScriptedProvider([[used(900), ...say("First answer.")]]);
+    const hanging = new Hanging();
+    let requests = 0;
+    const provider: Provider = {
+      name: "first, then hanging",
+      contextLength: 1000,
+      stream: (history, options) => (++requests === 1 ? first.stream(history, options) : hanging.stream(history, options)),
+    };
+    const session = makeSession(provider);
+    await collect(session.send("first"));
+    const events: SessionEvent[] = [];
+    for await (const event of session.send("second")) {
+      events.push(event);
+      if (event.type === "status" && event.status === "compacting") session.interrupt();
+    }
+    expect(events).toContainEqual({ type: "compaction", result: { compacted: false, reason: "stopped", error: "Stopped." } });
+    expect(events.at(-1)).toMatchObject({ type: "turn_end", reason: "interrupted" });
+    expect(requests).toBe(2); // the first answer and the summary: "second" was never sent
+  });
+
+  test("compact(): nothing to do on an empty conversation; afterwards the next request starts from the summary", async () => {
+    const provider = new ScriptedProvider([say("Answer."), say("THE SUMMARY"), say("Next.")]);
+    const session = makeSession(provider);
+    expect(await session.compact()).toEqual({ compacted: false, reason: "empty", error: "Nothing to compact yet." });
+    await collect(session.send("first"));
+    expect(await session.compact("the plan")).toMatchObject({ compacted: true, summary: "THE SUMMARY" });
+    expect(provider.requests[1]!.history.at(-1)!.text).toContain("Focus especially on: the plan");
+    await collect(session.send("next"));
+    expect(provider.requests[2]!.history[0]!.text).toContain("THE SUMMARY");
+  });
+});
