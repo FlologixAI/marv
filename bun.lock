@@ -26,6 +26,7 @@
   },
   "patchedDependencies": {
     "ink@8.0.0": "patches/ink@8.0.0.patch",
+    "ink-text-input@6.0.0": "patches/ink-text-input@6.0.0.patch",
     "string-width@8.3.0": "patches/string-width@8.3.0.patch",
   },
   "packages": {

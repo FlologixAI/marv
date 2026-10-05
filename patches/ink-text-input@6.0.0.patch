@@ -1,0 +1,13 @@
+diff --git a/build/index.js b/build/index.js
+index ada7cdcac9d6893879753f769fb07a8e234fdc15..3dd67f761210dc368be44badec958359d51f1528 100644
+--- a/build/index.js
++++ b/build/index.js
+@@ -48,7 +48,7 @@ function TextInput({ value: originalValue, placeholder = '', focus = true, mask,
+     useInput((input, key) => {
+         if (key.upArrow ||
+             key.downArrow ||
+-            (key.ctrl && input === 'c') ||
++            key.ctrl ||
+             key.tab ||
+             (key.shift && key.tab)) {
+             return;

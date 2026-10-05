@@ -114,3 +114,10 @@ test("matchCommands puts prefix matches first, then other matches", () => {
   expect(matchCommands("/model x", COMMANDS)).toEqual([]); // has arguments: menu closed
   expect(matchCommands("hi", COMMANDS)).toEqual([]);
 });
+
+test("ctrl+letter combinations don't type the letter", async () => {
+  const onSubmit = mock();
+  const { stdin } = render(<Harness onSubmit={onSubmit} />);
+  await press(stdin, "\x0f", "\x01", "x", ENTER); // ctrl+o, ctrl+a, x
+  expect(onSubmit).toHaveBeenCalledWith("x");
+});
