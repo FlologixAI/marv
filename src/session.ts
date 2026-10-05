@@ -84,7 +84,11 @@ export interface SessionInit {
   tools?: Tool[];
   /** Replaces Marv's system prompt, or appends to it. */
   systemPrompt?: string | { append: string };
-  /** Asked for every call that needs a yes; without it, only what yolo vouches for runs. */
+  /**
+   * Asked for every call that needs a yes; without it, only what yolo vouches for runs. Parallel subagents can ask
+   * at once: requests already waiting when you answer "always" for their scope are still asked (the TUI answers its
+   * queued requests in that scope itself; an approver can do the same).
+   */
   approve?: (request: ApprovalRequest) => Promise<Decision>;
   sandbox?: boolean;
   yolo?: boolean;
@@ -166,6 +170,8 @@ export class MarvSession {
   /** The default transcript (when the client keeps none of its own): what was asked, and the replies. */
   private messages: Message[] = [];
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Writes for a conversation the session has moved on from (its last save, its trajectory): flush() waits for them. */
+  private flushing: Promise<void> = Promise.resolve();
 
   constructor(private readonly init: SessionInit) {
     this.problems = init.problems ?? [];
@@ -213,16 +219,21 @@ export class MarvSession {
   }
 
   /**
-   * Runs one turn: the user's message, and everything the agent does until it stops. Iterate the events to the
-   * end: nothing starts until you do, and leaving the loop early (break) interrupts the turn. `forModel` is what
-   * the model gets when it differs from what the user typed (a /skill's instructions). Throws if a turn is running.
+   * Runs one turn: the user's message, and everything the agent does until it stops. The turn starts at once;
+   * iterate to see its events. Leaving the loop early (break) interrupts it; a turn you never read still runs to
+   * the end (with no approver, only what yolo vouches for runs). `forModel` is what the model gets when it differs
+   * from what the user typed (a /skill's instructions). Throws if a turn is running.
    */
   send(text: string, options: { forModel?: string; signal?: AbortSignal } = {}): AsyncIterable<SessionEvent> {
     this.idle();
     this.running = true;
     const stop = new AbortController();
     this.current = stop;
-    return this.turn(text, options.forModel ?? text, stop, options.signal);
+    // Started here, not when the client first reads: the turn's end (in runTurn) is what frees the session, so it
+    // must not depend on the client reading. Events wait in the queue until it does.
+    const queue = new EventQueue<SessionEvent>();
+    const work = this.runTurn(text, options.forModel ?? text, stop, options.signal, (event) => queue.push(event)).finally(() => queue.close());
+    return this.read(queue, stop, work);
   }
 
   /** Stops the running turn or compaction (Esc). Approvals still waiting are answered "no". */
@@ -248,17 +259,20 @@ export class MarvSession {
   /** /clear: a new conversation (and session file), with the memories saved during the last one. Totals stay. */
   clear(): Promise<void> {
     this.idle();
+    this.saveNow(); // the last turn's save may still be waiting: it must go to the old file, with the old conversation
     this.saved = newSession(this.init.root, { provider: this.factory.id, model: this.factory.model });
     this.conversation = [];
     this.messages = [];
     this.last = undefined;
     const memory = this.init.memory;
-    this.reloading = (async () => {
+    const reload = (async () => {
       if (memory) this.memories = await loadMemory(memory.paths).catch(() => this.memories);
       this.system = this.buildSystem();
-      this.init.onChange?.();
+      this.changed();
     })();
-    return this.reloading;
+    // The caller sees a failure; the next turns only wait for the reload to be over (they'd fail on it forever).
+    this.reloading = reload.catch(() => {});
+    return reload;
   }
 
   /** Brings back a saved session (its id, or the latest here); it keeps saving to the same file. Rejects during a turn. */
@@ -270,6 +284,7 @@ export class MarvSession {
     if (!saved) return null;
     // A turn may have started while it loaded: swapping the conversation under it would mix the two.
     this.idle();
+    this.saveNow(); // the last turn's save may still be waiting: it belongs to the conversation being left
     this.saved = saved;
     this.conversation = [...saved.conversation];
     this.messages = [...saved.transcript];
@@ -330,7 +345,7 @@ export class MarvSession {
   async flush(): Promise<void> {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
-    await Promise.all([this.save().catch(() => {}), this.log?.flush()]);
+    await Promise.all([this.save().catch(() => {}), this.log?.flush(), this.flushing]);
   }
 
   /** Stops what's running, flushes, and closes the MCP servers the session started. */
@@ -380,10 +395,19 @@ export class MarvSession {
         this.info = info;
         // Remade once the list says whether this model's reasoning can be turned off (/think on OpenRouter).
         if (info.reasoning) this.provider = factory.make(undefined, { reasoning: info.reasoning });
-        this.init.onChange?.();
+        this.changed();
       },
       () => {}, // offline: no context size or price estimates, that's all
     );
+  }
+
+  /** Tells the client something changed. Its callback failing is the client's problem, not the session's. */
+  private changed(): void {
+    try {
+      this.init.onChange?.();
+    } catch {
+      // A UI that can't redraw now will on its next update.
+    }
   }
 
   /** The caller's approver, with the session's "don't ask again" scopes, answered "no" once the run is stopped. */
@@ -399,9 +423,12 @@ export class MarvSession {
     };
   }
 
-  /** Adds a request's tokens and cost to the totals (the main agent's, subagents', summaries'). */
-  private count(usage: Usage): void {
-    const local = Boolean(this.factory.local);
+  /**
+   * Adds a request's tokens and cost to the totals (the main agent's, subagents', summaries'). `factory` is the one
+   * that made the provider the request went to (a turn's own, even if the user switched models meanwhile).
+   */
+  private count(usage: Usage, factory: ProviderFactory = this.factory): void {
+    const local = Boolean(factory.local);
     this.totals = { ...addUsage(this.totals, usage, this.info), local: (this.totals.requests === 0 || Boolean(this.totals.local)) && local };
   }
 
@@ -415,22 +442,30 @@ export class MarvSession {
   }
 
   /** Summarizes the conversation and continues from the summary (src/compact.ts). Only what the model sees changes. */
-  private async summarizeInto(focus: string | undefined, signal: AbortSignal): Promise<CompactResult> {
+  private async summarizeInto(
+    focus: string | undefined,
+    signal: AbortSignal,
+    provider: Provider = this.provider,
+    factory: ProviderFactory = this.factory,
+  ): Promise<CompactResult> {
     if (this.conversation.length === 0) return { compacted: false, reason: "empty", error: "Nothing to compact yet." };
     const before = this.last;
     const result = await summarize({
-      provider: this.provider,
+      provider,
       history: this.conversation,
       system: this.system,
       tools: this.offered().specs,
       signal,
       focus,
-      onUsage: (usage) => this.count(usage),
+      onUsage: (usage) => this.count(usage, factory),
     });
     if ("error" in result) return { compacted: false, reason: signal.aborted ? "stopped" : "failed", error: result.error };
     this.conversation = compactedHistory(result.summary);
     // From here the model sees the summary, not the turns before it: the trajectory needs it to say what the model saw.
-    this.trajectory()?.write({ type: "compact", ...(this.lastTurn ? { turn: this.lastTurn.id } : {}), summary: result.summary });
+    // The turn it follows only if that turn is in this file (after resume(), the last turn was in another one).
+    const log = this.trajectory();
+    const after = this.lastTurn && this.lastTurn.session === log?.session ? { turn: this.lastTurn.id } : {};
+    log?.write({ type: "compact", ...after, summary: result.summary });
     this.last = undefined;
     return { compacted: true, summary: result.summary, ...(before ? { tokensBefore: before.promptTokens + before.completionTokens } : {}) };
   }
@@ -440,6 +475,9 @@ export class MarvSession {
     const store = this.init.trajectories;
     if (!store || !this.logging) return null;
     if (this.log?.session !== this.saved.id) {
+      // The previous conversation's log may still have records queued: flush() must wait for those too.
+      const old = this.log;
+      if (old) this.flushing = Promise.all([this.flushing, old.flush().catch(() => {})]).then(() => {});
       this.log = store.open(this.init.root, this.saved.id);
       this.log.onError = (text) => this.init.onWarning?.(text);
     }
@@ -482,6 +520,18 @@ export class MarvSession {
     this.lastTurn = log ? { id: turn, session: log.session } : null;
   }
 
+  /**
+   * The waiting save, now: before the conversation is swapped (clear, resume), or the timer would save the new one
+   * and the old one's last turn would never reach its file. save() reads everything before its first await, so
+   * starting it here is enough; flush() waits for it to land.
+   */
+  private saveNow(): void {
+    if (!this.saveTimer) return;
+    clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    this.flushing = Promise.all([this.flushing, this.save().catch(() => {})]).then(() => {});
+  }
+
   private scheduleSave(): void {
     if (!this.init.sessions) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
@@ -491,30 +541,41 @@ export class MarvSession {
     }, SAVE_DELAY_MS);
   }
 
-  /** The stream send() returns: the turn's work feeds a queue, the client reads it. */
-  private async *turn(text: string, forModel: string, stop: AbortController, signal?: AbortSignal): AsyncGenerator<SessionEvent> {
-    const queue = new EventQueue<SessionEvent>();
-    const onAbort = () => stop.abort();
-    if (signal?.aborted) stop.abort();
-    else signal?.addEventListener("abort", onAbort, { once: true });
-    const work = this.runTurn(text, forModel, stop, (event) => queue.push(event)).finally(() => queue.close());
+  /**
+   * The stream send() returns: it only reads the queue the turn's work feeds. The session's bookkeeping (busy,
+   * saving) is runTurn's, so it happens whether or not anyone reads.
+   */
+  private async *read(queue: EventQueue<SessionEvent>, stop: AbortController, work: Promise<void>): AsyncGenerator<SessionEvent> {
     try {
       yield* queue;
     } finally {
-      // The client left before the end (break, or it threw): that's an interrupt. A no-op after a normal end.
+      // The client left before the end (break, or it threw): that's an interrupt. A no-op after a normal end, and
+      // it's this turn's own controller, so it can't stop a newer turn the client started at turn_end.
       stop.abort();
-      // Wait for the loop's cleanup: every tool call answered before the history is used again.
+      // Wait for the loop's cleanup, so after a break the history is valid (every tool call answered) before the
+      // client goes on.
       await work;
-      signal?.removeEventListener("abort", onAbort);
-      this.current = null;
-      this.running = false;
-      this.scheduleSave();
     }
   }
 
   /** One turn's work. Never rejects: whatever happens ends in turn_end. */
-  private async runTurn(text: string, forModel: string, stop: AbortController, emit: (event: SessionEvent) => void): Promise<void> {
+  private async runTurn(
+    text: string,
+    forModel: string,
+    stop: AbortController,
+    signal: AbortSignal | undefined,
+    push: (event: SessionEvent) => void,
+  ): Promise<void> {
     const turn = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    // Nothing after turn_end: a subagent's callback arriving late (a microtask after the turn ended) is dropped.
+    let ended = false;
+    const emit = (event: SessionEvent) => {
+      if (!ended) push(event);
+    };
+    // The caller's signal stops the turn like interrupt() does.
+    const onAbort = () => stop.abort();
+    if (signal?.aborted) stop.abort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
     emit({ type: "turn_start", turn });
     let reason: TurnEndReason = "error";
     let main: AgentRecorder | undefined;
@@ -537,18 +598,28 @@ export class MarvSession {
           return;
         }
       }
-      // What this turn runs with: settings changed while it runs apply from the next one.
+      // What this turn runs with, all read now: settings changed while it runs (configure(), or the model list
+      // arriving and remaking the provider) apply from the next turn. That includes the factory, so a subagent
+      // naming its own model gets it from the same provider as the turn, and its usage is counted as that one's.
       const { specs, tools } = this.offered();
-      const { sandbox, yolo } = this;
+      const { sandbox, yolo, factory, provider } = this;
       const log = this.trajectory();
       const record = (r: TrajectoryRecord) => log?.write(r);
       this.startTurnLog(log, turn, text, forModel, specs);
       main = new AgentRecorder(record, { turn, agent: "main" });
 
+      // Stopped before the message was even sent (an already-aborted signal, or interrupt() during the waits above):
+      // it isn't sent, so the conversation stays as it was.
+      if (stop.signal.aborted) {
+        main.finish("aborted");
+        reason = "interrupted";
+        return;
+      }
+
       // Nearly out of context: summarize first, so this message (and what follows) fits.
       if (this.nearlyFull()) {
         emit({ type: "status", status: "compacting" });
-        const result = await this.summarizeInto(undefined, stop.signal);
+        const result = await this.summarizeInto(undefined, stop.signal, provider, factory);
         emit({ type: "compaction", result });
         if (!result.compacted && result.reason === "stopped") {
           // Stopping meant "stop": the message too (it would run on the nearly full context).
@@ -561,7 +632,6 @@ export class MarvSession {
       this.note("user", text);
       emit({ type: "status", status: "running" });
 
-      const provider = this.provider;
       const approve = this.approver(stop.signal);
       let subagents = 0;
       // What the agent tool needs to start subagents. Only the main agent gets one; what a subagent does reaches
@@ -571,8 +641,8 @@ export class MarvSession {
         cwd: this.cwd,
         instructions: this.init.instructions,
         worktreesDir: this.init.worktreesDir,
-        providerFor: (model) => (model ? this.factory.make(model) : provider),
-        onUsage: (usage) => this.count(usage),
+        providerFor: (model) => (model ? factory.make(model) : provider),
+        onUsage: (usage) => this.count(usage, factory),
         onProgress: (callId, progress) => emit({ type: "subagent_progress", callId, progress }),
         onEvent: (callId, event) => {
           subRecorders.get(callId)?.event(event);
@@ -600,7 +670,7 @@ export class MarvSession {
         switch (event.type) {
           case "usage":
             this.last = event.usage;
-            this.count(event.usage);
+            this.count(event.usage, factory);
             break;
           case "assistant":
             this.note("assistant", event.text);
@@ -644,7 +714,14 @@ export class MarvSession {
       // Stop anything still running (a no-op after a normal end): subagents still running in a parallel group
       // would otherwise carry on unseen, and could still ask for approvals.
       stop.abort();
+      signal?.removeEventListener("abort", onAbort);
+      // The session is free before turn_end goes out, so a client can send the next message as soon as it sees it,
+      // and a turn nobody reads frees it too. (A newer turn can't have started yet: send() refuses while running.)
+      if (this.current === stop) this.current = null;
+      this.running = false;
+      this.scheduleSave();
       emit({ type: "turn_end", turn, reason });
+      ended = true;
     }
   }
 }

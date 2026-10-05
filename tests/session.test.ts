@@ -3,9 +3,11 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentType } from "../src/agents.ts";
 import type { McpManager } from "../src/mcp/manager.ts";
 import { addMemory, loadMemory, memoryPaths } from "../src/memory.ts";
 import type { ProviderFactory } from "../src/provider/factory.ts";
+import type { ModelInfo } from "../src/provider/models.ts";
 import type { AgentEvent, ChatTurn, Provider, StreamOptions, ToolCall, ToolSpec } from "../src/provider/types.ts";
 import { MarvSession, type SessionEvent, type SessionInit } from "../src/session.ts";
 import { SessionStore, type SavedSession } from "../src/sessions.ts";
@@ -499,5 +501,193 @@ describe("between turns", () => {
       expect(after.options.system).toBe(before.options.system); // the same system prompt
       expect(after.options.tools).toBe(before.options.tools); // the very same tool definitions
     }
+  });
+});
+
+/** Waits (at most ~1 s) for a condition that becomes true in the background. */
+async function until(condition: () => boolean): Promise<boolean> {
+  for (let i = 0; i < 100 && !condition(); i++) await Bun.sleep(10);
+  return condition();
+}
+
+describe("review fixes", () => {
+  test("a turn nobody reads still runs to the end and frees the session", async () => {
+    const provider = new ScriptedProvider([say("One."), say("Two.")]);
+    const session = makeSession(provider);
+    session.send("one"); // never iterated
+    expect(await until(() => !session.busy)).toBe(true);
+    const events = await collect(session.send("two"));
+    expect(events.at(-1)).toMatchObject({ type: "turn_end", reason: "end" });
+    expect(provider.requests.map((r) => r.history.at(-1)?.text)).toEqual(["one", "two"]);
+  });
+
+  test("a turn whose reader is dropped part-way still frees the session", async () => {
+    const session = makeSession(new ScriptedProvider([say("One."), say("Two.")]));
+    const reader = session.send("one")[Symbol.asyncIterator]();
+    await reader.next(); // turn_start, then the reader is simply forgotten (no return())
+    expect(await until(() => !session.busy)).toBe(true);
+    expect((await collect(session.send("two"))).at(-1)).toMatchObject({ type: "turn_end", reason: "end" });
+  });
+
+  test("the session is free at turn_end: a client can send the next message from inside its loop", async () => {
+    const provider = new ScriptedProvider([say("One."), say("Two.")]);
+    const session = makeSession(provider);
+    let next: AsyncIterable<SessionEvent> | undefined;
+    for await (const event of session.send("one")) {
+      if (event.type !== "turn_end") continue;
+      expect(session.busy).toBe(false);
+      next = session.send("two");
+    }
+    expect((await collect(next!)).at(-1)).toMatchObject({ type: "turn_end", reason: "end" });
+    expect(provider.requests.map((r) => r.history.at(-1)?.text)).toEqual(["one", "two"]);
+  });
+
+  test("clear() right after a turn still saves that turn's conversation", async () => {
+    const sessions = new SessionStore(dir);
+    const session = makeSession(new ScriptedProvider([say("Noted.")]), { sessions });
+    await collect(session.send("remember 42"));
+    const first = session.id;
+    await session.clear();
+    await session.flush();
+    expect((await sessions.load(project, first))?.conversation[0]).toEqual({ role: "user", text: "remember 42" });
+  });
+
+  test("so does resume() into another session", async () => {
+    const sessions = new SessionStore(dir);
+    const other = makeSession(new ScriptedProvider([say("Old.")]), { sessions });
+    await collect(other.send("an old conversation"));
+    await other.flush();
+    const session = makeSession(new ScriptedProvider([say("Noted.")]), { sessions });
+    await collect(session.send("remember 42"));
+    const first = session.id;
+    await session.resume(other.id);
+    await session.flush();
+    expect((await sessions.load(project, first))?.conversation[0]).toEqual({ role: "user", text: "remember 42" });
+    expect((await sessions.load(project, other.id))?.conversation[0]).toEqual({ role: "user", text: "an old conversation" });
+  });
+
+  test("a turn keeps the provider it started with: a subagent's model comes from the same factory", async () => {
+    const helper: AgentType = { name: "helper", description: "Helps.", body: "", tools: ["read_file"], model: "small", source: "project" };
+    const parent = new ScriptedProvider([
+      useTools(call("a1", "agent", { type: "helper", description: "help", prompt: "find the notes" })),
+      [{ type: "usage", usage: { promptTokens: 10, completionTokens: 1 } }, ...say("Parent done.")],
+    ]);
+    const sub = new ScriptedProvider([say("Found them.")]);
+    const made: string[] = [];
+    let session!: MarvSession;
+    const switched: ProviderFactory = {
+      id: "b",
+      model: "main",
+      make: (model) => (made.push(`b:${model ?? "main"}`), new ScriptedProvider([])),
+    };
+    const original: ProviderFactory = {
+      id: "a",
+      model: "main",
+      local: true,
+      make: (model) => {
+        if (model) return made.push(`a:${model}`), sub;
+        return {
+          name: "a",
+          stream: (history, options) => {
+            // The user switches models while the turn runs, before the subagent starts.
+            if (parent.requests.length === 0) session.configure({ provider: switched });
+            return parent.stream(history, options);
+          },
+        };
+      },
+    };
+    session = makeSession(original, { agents: [helper] });
+    const events = await collect(session.send("go"));
+    expect(events.at(-1)).toMatchObject({ type: "turn_end", reason: "end" });
+    expect(made).toContain("a:small");
+    expect(made).not.toContain("b:small");
+    expect(sub.requests).toHaveLength(1);
+    // Counted as the turn's (local) model, not the one switched to meanwhile.
+    expect(session.usage().totals.local).toBe(true);
+  });
+
+  test("an onChange that throws doesn't break the session", async () => {
+    const provider = new ScriptedProvider([say("Hi.")]);
+    const factory = fixed(provider, { lookup: async () => ({ id: "test-model", context: 1000 }) });
+    const session = makeSession(factory, {
+      onChange: () => {
+        throw new Error("the UI broke");
+      },
+    });
+    await Bun.sleep(0); // the lookup's onChange throws here
+    await session.clear().catch(() => {});
+    const events = await collect(session.send("hi"));
+    expect(events.at(-1)).toMatchObject({ type: "turn_end", reason: "end" });
+  });
+
+  test("a signal that's already aborted ends the turn before anything is sent", async () => {
+    const provider = new ScriptedProvider([say("Next.")]);
+    const session = makeSession(provider);
+    const events = await collect(session.send("hi", { signal: AbortSignal.abort() }));
+    expect(events.at(-1)).toMatchObject({ type: "turn_end", reason: "interrupted" });
+    expect(provider.requests).toHaveLength(0);
+    await collect(session.send("next"));
+    expect(provider.requests[0]!.history).toEqual([{ role: "user", text: "next" }]);
+  });
+
+  test("configure() with the same model keeps what the model list said", async () => {
+    const made: unknown[] = [];
+    const factory: ProviderFactory = {
+      id: "openrouter",
+      model: "x/y",
+      make: (_model, info) => (made.push(info), new ScriptedProvider([])),
+      lookup: async () => ({ id: "x/y", context: 200_000, reasoning: "optional" }),
+    };
+    const session = makeSession(factory);
+    await Bun.sleep(0);
+    session.configure({ provider: { ...factory } });
+    expect(session.modelInfo?.reasoning).toBe("optional");
+    expect(made.at(-1)).toEqual({ reasoning: "optional" });
+  });
+
+  test("a lookup for a provider that was replaced meanwhile is ignored", async () => {
+    let answer!: (info: ModelInfo) => void;
+    let changed = 0;
+    const stale = fixed(new ScriptedProvider([]), { lookup: () => new Promise<ModelInfo>((resolve) => (answer = resolve)) });
+    const session = makeSession(stale, { onChange: () => changed++ });
+    session.configure({ provider: fixed(new ScriptedProvider([]), { id: "other", model: "other-model" }) });
+    answer({ id: "test-model", context: 123 });
+    await Bun.sleep(0);
+    expect(session.modelInfo).toBeUndefined();
+    expect(session.contextLength).toBeUndefined();
+    expect(changed).toBe(0);
+  });
+
+  test("after resume(), a compaction doesn't point at a turn in the other session's log", async () => {
+    const sessions = new SessionStore(dir);
+    const other = makeSession(new ScriptedProvider([say("Old.")]), { sessions });
+    await collect(other.send("an old conversation"));
+    await other.flush();
+    const store = new TrajectoryStore(dir);
+    const session = makeSession(new ScriptedProvider([say("New."), say("THE SUMMARY")]), { sessions, trajectories: store });
+    await collect(session.send("a new one"));
+    await session.resume(other.id);
+    expect(await session.compact()).toMatchObject({ compacted: true });
+    await session.flush();
+    const text = await readFile(store.open(project, other.id).path, "utf8");
+    const compact = text
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+      .find((r) => r.type === "compact");
+    expect(compact).toMatchObject({ summary: "THE SUMMARY" });
+    expect(compact.turn).toBeUndefined();
+  });
+
+  test("a failed automatic compaction lets the turn go on", async () => {
+    const used: AgentEvent = { type: "usage", usage: { promptTokens: 900, completionTokens: 0 } };
+    const provider = new ScriptedProvider([[used, ...say("First.")], [{ type: "error", message: "summary failed" }], say("Second.")], 1000);
+    const session = makeSession(provider);
+    await collect(session.send("first"));
+    const events = await collect(session.send("second"));
+    expect(events).toContainEqual({ type: "compaction", result: { compacted: false, reason: "failed", error: "summary failed" } });
+    expect(events).toContainEqual({ type: "assistant", text: "Second." });
+    expect(events.at(-1)).toMatchObject({ type: "turn_end", reason: "end" });
+    expect(provider.requests[2]!.history.map((t) => t.text)).toEqual(["first", "First.", "second"]);
   });
 });
