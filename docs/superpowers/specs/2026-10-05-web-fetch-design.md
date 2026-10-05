@@ -35,7 +35,7 @@ per-domain approval, and output marked as untrusted data.
      - `text/*`, JSON, Markdown, XML: as is.
      - Anything else (images, PDFs, archives): an error naming the type.
   5. The text is cut into pages of 30,000 characters. The output starts with a header:
-     `Fetched <final url> · <title> · part 1 of 3 (offset: 30000 for the next)`.
+     `Fetched <final url> · <title> · characters 0-30000 of 81234 (offset: 30000 for the next part)`.
 - The model can only `GET`: no method, headers or body of its own.
 - `web_fetch` is added to `tools` and to `SUBAGENT_TOOLS`, so subagents can research links in parallel.
 
