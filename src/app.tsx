@@ -31,6 +31,7 @@ import { addMemory, findMemory, loadMemory, removeMemory, type Memories, type Me
 import { newSession, timeAgo, type Session, type SessionStore, type SessionSummary } from "./sessions.ts";
 import { skillMessage, type Skill } from "./skills.ts";
 import { AgentRecorder, type Trajectory, type TrajectoryRecord, type TrajectoryStore } from "./trajectory.ts";
+import { pastedScopes } from "./tools/web-fetch.ts";
 import { isParallelCall, runTool, tools as builtinTools, toolSpecsFor } from "./tools/index.ts";
 import type { McpManager, McpServerStatus } from "./mcp/manager.ts";
 import type { AgentHost, AgentProgress, ApprovalRequest, Decision } from "./tools/types.ts";
@@ -432,6 +433,10 @@ export function App({
     // `forModel`: what the model gets, when it differs from what the user typed (a /skill).
     async (text: string, forModel = text) => {
       addMessage({ role: "user", text });
+      // Sites the user pasted are theirs to fetch: web_fetch reads them without asking. Only what they typed
+      // counts (not a /skill's instructions, a file or a page), since links found there are where a planted
+      // instruction would send the model.
+      for (const key of pastedScopes(text)) alwaysAllowed.current.add(key);
       // MCP servers still starting: their tools must be in place before the first request (the list can't change
       // after). The turn is busy from here, so a second message can't start a second run on the same history, and
       // Esc or ctrl+c (they abort whatever abortRef holds) cancel the wait.
