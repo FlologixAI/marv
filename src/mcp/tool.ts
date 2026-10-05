@@ -116,7 +116,18 @@ export function makeMcpTool(server: McpServerConfig, info: McpToolInfo, call: Mc
       return { output, summary: `${lines} line${lines === 1 ? "" : "s"}` };
     },
   };
-  // A schema needs "type": "object" at the top for every provider.
-  const parameters = { ...info.inputSchema, type: "object" };
-  return { tool: tool as Tool, spec: { name, description, parameters } };
+  return { tool: tool as Tool, spec: { name, description, parameters: acceptableSchema(info.inputSchema) } };
+}
+
+/**
+ * The server's schema, made acceptable to every provider: one tool they reject fails every request of the
+ * session (the tool list can't change), so it's better to send a looser schema; the server validates the
+ * arguments anyway. `$schema` (which SDK servers include) is dropped; a root that isn't a plain object
+ * (anyOf/oneOf/allOf, or another type) becomes an open object; there's always a `properties`.
+ */
+export function acceptableSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const { $schema: _, ...rest } = schema;
+  const plainObject = (rest.type === undefined || rest.type === "object") && !("anyOf" in rest || "oneOf" in rest || "allOf" in rest);
+  if (!plainObject) return { type: "object", properties: {} };
+  return { ...rest, type: "object", properties: rest.properties ?? {} };
 }

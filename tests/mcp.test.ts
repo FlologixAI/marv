@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { McpServerConfig } from "../src/mcp/config.ts";
 import { McpManager } from "../src/mcp/manager.ts";
-import { formatMcpResult, mcpToolName } from "../src/mcp/tool.ts";
+import { formatMcpResult, makeMcpTool, mcpToolName } from "../src/mcp/tool.ts";
 import { McpTrust } from "../src/mcp/trust.ts";
 import type { ToolCall } from "../src/provider/types.ts";
 import { runTool } from "../src/tools/index.ts";
@@ -235,6 +235,18 @@ describe("naming and output", () => {
     const long = mcpToolName("server-with-a-long-name", "a_really_long_tool_name_that_goes_on_and_on_forever");
     expect(long.length).toBeLessThanOrEqual(64);
     expect(long).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  test("a schema providers would reject is made acceptable (one bad tool would fail every request)", () => {
+    const config = stdio();
+    const spec = (inputSchema: Record<string, unknown>) => makeMcpTool(config, { name: "t", inputSchema }, async () => ({})).spec.parameters;
+    expect(spec({ $schema: "http://json-schema.org/draft-07/schema#", type: "object", properties: { a: { type: "string" } } })).toEqual({
+      type: "object",
+      properties: { a: { type: "string" } },
+    });
+    expect(spec({ anyOf: [{ type: "object" }, { type: "object" }] })).toEqual({ type: "object", properties: {} });
+    expect(spec({ type: "string" })).toEqual({ type: "object", properties: {} });
+    expect(spec({})).toEqual({ type: "object", properties: {} });
   });
 
   test("structured results and huge outputs", () => {
