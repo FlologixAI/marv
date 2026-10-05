@@ -83,7 +83,7 @@ describe("the agent tool", () => {
     await runTool(agentCall({ description: "x", prompt: "p" }), ctx);
     await runTool(agentCall({ type: "superpowers:reviewer", description: "x", prompt: "p" }), ctx);
 
-    expect(provider.requests[0]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "edit_file", "write_file", "bash"]);
+    expect(provider.requests[0]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "web_fetch", "edit_file", "write_file", "bash"]);
     expect(provider.requests[1]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "grep"]);
     expect(provider.requests[1]!.options.system).toStartWith("You review code.");
   });
