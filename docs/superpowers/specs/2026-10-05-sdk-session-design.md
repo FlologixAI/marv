@@ -203,3 +203,34 @@ One commit per step, all existing tests green after each:
 promises, and runs the README example against a fake provider.
 
 The 640 existing tests, unchanged, are the check that the TUI behaves exactly as before.
+
+## Amendments from planning
+
+Found while writing the implementation plan; they replace what's above where they differ.
+
+- **The client supplies the transcript, not an opaque snapshot.** `SessionOptions.transcript?: () => Message[]`
+  (the TUI passes its transcript). Without it the session saves its own: the user's messages and the replies.
+  The saved file keeps its `transcript` field, so existing files, the picker's titles and `marv -r` work
+  unchanged. `resume()` returns `Resumed { id, updatedAt, model, transcript, totals }`.
+- **One compaction event:** `{ type: "compaction"; result: CompactResult }` replaces `compacted` and
+  `compact_failed`. `CompactResult` is `{ compacted: true; summary; tokensBefore? }` or
+  `{ compacted: false; reason: "empty" | "stopped" | "failed"; error }`; `compact()` returns the same type.
+- **`clear()` returns a `Promise<void>`** (it reloads memory for the new system prompt); it throws at once
+  during a turn. The next turn waits for the reload.
+- **`configure()` never throws.** What a turn runs with (provider, sandbox, yolo, logging) is read when the turn
+  starts, so a change during a turn applies from the next one. It also takes `trajectories?: boolean`.
+- **`rate()` returns `"rated" | "off" | "nothing"`** so the TUI can say why nothing was rated.
+- **Also on `Session`:** `busy`, `providerName`, `contextLength`, `modelInfo`, `memory`, `problems` (config files
+  that couldn't be read), `save()` and `flush()` (the TUI saves between turns too, and flushes on exit).
+- **`createSession()` lives in `src/sdk.ts`;** `src/session.ts` holds the class. Providers are made by a
+  `ProviderFactory` (`src/provider/factory.ts`): the TUI builds one from its `Config`, the SDK from
+  `ProviderOption`. `SessionOptions` gains `configDir` (default `~/.marv` or `$MARV_CONFIG_DIR`).
+- **`"user"` is everything under `~/.marv`**, project memory included (it lives in
+  `~/.marv/memory/projects/`, never in the repository). `"project"` is what's in the repository.
+- **`runTool` checks for an approver after yolo:** with no approver, a call yolo vouches for still runs; the
+  "no one to ask" error is for the rest. (It used to refuse every gated call when there was no approver.)
+- **`src/cli.tsx` keeps loading what it loads today** and passes it to `App` as props; it doesn't use
+  `loadSources`, which exists for `createSession()`.
+- **Events are delivered through a queue:** the loop no longer waits for the consumer to handle `tool_start`
+  before running the tool. Order is unchanged (a subagent's events always come after its `tool_start`), and a
+  consumer that stops reading interrupts the turn.
