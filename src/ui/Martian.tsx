@@ -2,25 +2,30 @@ import { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import { theme } from "./theme.ts";
 
-// Marv's mascot: a sturdy little martian, drawn in heavy box lines, with
-// antennae, arms and feet. One color (the theme accent).
+// Marv's mascot: a sturdy little martian, drawn in solid blocks, with
+// antennae, arms and feet. One color (the theme accent); the eyes and mouth
+// are cut out of the fill, so the terminal's background shows through.
 // Every frame is the same 12×7 block (the raised arm uses the last column),
 // so swapping frames never moves the layout.
-const BODY = [" ┃   ◡   ┃  ", " ┗┳━━━━━┳┛  ", "  ┻     ┻   "];
-const ANTENNAE = [" ●       ●  ", "  ╲     ╱   "];
-const HEAD = " ┏━━━━━━━┓  ";
+const ANTENNAE = [" ●       ●  ", "  ▀▄   ▄▀   "];
+const HEAD = " ▄███████▄  ";
+const FACE = "▄██ ███ ██▄ ";
+const MOUTH = " ███▀▀▀███  ";
+const BODY = [" ▀███████▀  ", "  ▀▀   ▀▀   "];
 
 export const FRAMES = {
-  idle: [...ANTENNAE, HEAD, "━┫ ◉   ◉ ┣━ ", ...BODY],
-  blink: [...ANTENNAE, HEAD, "━┫ ─   ─ ┣━ ", ...BODY],
-  lookLeft: [...ANTENNAE, HEAD, "━┫◉   ◉  ┣━ ", " ┃  ◡    ┃  ", ...BODY.slice(1)],
-  lookRight: [...ANTENNAE, HEAD, "━┫  ◉   ◉┣━ ", " ┃    ◡  ┃  ", ...BODY.slice(1)],
+  idle: [...ANTENNAE, HEAD, FACE, MOUTH, ...BODY],
+  // Half-height eye slits.
+  blink: [...ANTENNAE, HEAD, "▄██▄███▄██▄ ", MOUTH, ...BODY],
+  // Eyes and mouth shift a column together.
+  lookLeft: [...ANTENNAE, HEAD, "▄█ ███ ███▄ ", " ██▀▀▀████  ", ...BODY],
+  lookRight: [...ANTENNAE, HEAD, "▄███ ███ █▄ ", " ████▀▀▀██  ", ...BODY],
   // Both antennae lean the same way; alternating the two is the wiggle.
-  tiltLeft: [" ●     ●    ", "  ╲     ╲   ", HEAD, "━┫ ◉   ◉ ┣━ ", ...BODY],
-  tiltRight: ["   ●     ●  ", "  ╱     ╱   ", HEAD, "━┫ ◉   ◉ ┣━ ", ...BODY],
-  // The right arm raised; alternating the hand between ╱ and │ is the wave.
-  waveOut: [...ANTENNAE, " ┏━━━━━━━┓ ╱", "━┫ ◉   ◉ ┣╯ ", ...BODY],
-  waveUp: [...ANTENNAE, " ┏━━━━━━━┓│ ", "━┫ ◉   ◉ ┣╯ ", ...BODY],
+  tiltLeft: [" ●     ●    ", "  ▀▄    ▀▄  ", HEAD, FACE, MOUTH, ...BODY],
+  tiltRight: ["   ●     ●  ", "  ▄▀   ▄▀   ", HEAD, FACE, MOUTH, ...BODY],
+  // The right arm raised; alternating the hand between ▞ (out) and ▌ (up) is the wave.
+  waveOut: [...ANTENNAE, " ▄███████▄ ▞", "▄██ ███ ███▘", MOUTH, ...BODY],
+  waveUp: [...ANTENNAE, " ▄███████▄ ▌", "▄██ ███ ███▘", MOUTH, ...BODY],
 } as const;
 
 type FrameName = keyof typeof FRAMES;

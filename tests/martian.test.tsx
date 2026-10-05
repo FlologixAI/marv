@@ -46,9 +46,9 @@ describe("Martian", () => {
 test("the welcome banner shows the martian beside the text", () => {
   const { lastFrame } = render(<Welcome version="9.9.9" cwd="~/x" animate={false} />);
   const frame = lastFrame()!;
-  expect(frame).toContain("━┫ ◉   ◉ ┣━");
+  expect(frame).toContain("▄██ ███ ██▄"); // its face
   const textRow = frame.split("\n").find((line) => line.includes("Welcome to Marv"));
-  expect(textRow).toMatch(/[┏┃┫].*Welcome to Marv v9\.9\.9/); // the martian is beside the text
+  expect(textRow).toMatch(/[▄█▀].*Welcome to Marv v9\.9\.9/); // the martian is beside the text
   expect(frame).toContain("cwd: ~/x");
 });
 
