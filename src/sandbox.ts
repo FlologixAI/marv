@@ -8,7 +8,8 @@
 //     few toolchain folders (bun, cargo, git config…), mounted read-only;
 //   - the project folder is the only writable place (plus a private /tmp); a
 //     caller may add folders that are visible read-only, e.g. a worktree's .git;
-//   - there's no network unless the command asked for it;
+//   - there's no network unless the command asked for it (and then bun's
+//     download cache is writable too, so `bun install` works);
 //   - the environment starts empty, so API keys can't leak into commands.
 // Approval decides *whether* a command runs; the sandbox limits *what an
 // approved command can touch*.
@@ -85,6 +86,15 @@ export function sandboxArgs({ root, home, network, path, readOnly = [], exists =
   for (const dir of TOOLCHAINS) {
     const full = join(home, dir);
     if (exists(full)) args.push("--ro-bind", full, full);
+  }
+  // Installing packages needs the network and a writable download cache: bun stages downloads in a
+  // temporary folder inside its cache (so it can rename them into place), and fails at once if it can't
+  // write there. Only the cache, not the toolchain: the bun binary itself stays read-only. Mounted after
+  // ~/.bun so it sits on top of it, and only with the network on, because the cache is shared with
+  // installs outside the sandbox.
+  if (network) {
+    const cache = join(home, ".bun", "install", "cache");
+    if (exists(cache)) args.push("--bind", cache, cache);
   }
   args.push("--bind", root, root);
   // Bind the resolved path (what was checked), at the path the caller gave.

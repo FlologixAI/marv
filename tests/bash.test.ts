@@ -87,6 +87,14 @@ describe("sandboxArgs", () => {
     expect(sandboxArgs({ ...base, network: true })).not.toContain("--unshare-net");
   });
 
+  test("with the network on, bun's download cache is writable (on top of the read-only ~/.bun)", () => {
+    const exists = (p: string) => p.endsWith(".bun") || p.endsWith(".bun/install/cache");
+    const online = sandboxArgs({ ...base, exists, network: true }).join(" ");
+    expect(online).toContain("--bind /home/me/.bun/install/cache /home/me/.bun/install/cache");
+    expect(online.indexOf("--bind /home/me/.bun/install/cache")).toBeGreaterThan(online.indexOf("--ro-bind /home/me/.bun /home/me/.bun"));
+    expect(sandboxArgs({ ...base, exists, network: false }).join(" ")).not.toContain("--bind /home/me/.bun/install/cache");
+  });
+
   test("the project is mounted after the home folder is hidden (so it stays visible)", () => {
     const args = sandboxArgs({ ...base, network: false });
     expect(args.indexOf("--bind")).toBeGreaterThan(args.indexOf("--tmpfs", args.indexOf("/tmp") + 1));
