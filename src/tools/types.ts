@@ -65,6 +65,8 @@ export interface ToolContext {
   readOnly?: string[];
   /** Lets the agent tool start subagents. Only the main agent has one, so subagents can't start subagents. */
   agentHost?: AgentHost;
+  /** Pins where git looks for this agent's file listing (a worktree subagent: its own .git file is within its reach). */
+  gitEnv?: Record<string, string>;
 }
 
 export interface ToolResult {

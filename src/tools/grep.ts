@@ -22,7 +22,7 @@ export const grep: Tool<typeof input> = {
   input,
   label: ({ pattern, path }) => (path ? `"${pattern}" in ${path}` : `"${pattern}"`),
 
-  async run({ pattern, path = ".", glob, ignoreCase }, { root, signal }) {
+  async run({ pattern, path = ".", glob, ignoreCase }, { root, signal, gitEnv }) {
     let regex: RegExp;
     try {
       regex = new RegExp(pattern, ignoreCase ? "i" : "");
@@ -36,7 +36,7 @@ export const grep: Tool<typeof input> = {
     const wanted = (file: string) =>
       !fileFilter || fileFilter.match(glob!.includes("/") ? file : file.slice(file.lastIndexOf("/") + 1));
 
-    const files = isDirectory(target) ? await filesUnder(root, base) : [base];
+    const files = isDirectory(target) ? await filesUnder(root, base, gitEnv) : [base];
     const lines: string[] = [];
     let matchCount = 0;
     const matchedFiles = new Set<string>();

@@ -17,13 +17,13 @@ export const glob: Tool<typeof input> = {
   input,
   label: ({ pattern, path }) => (path ? `${pattern} in ${path}` : pattern),
 
-  async run({ pattern, path = "." }, { root }) {
+  async run({ pattern, path = "." }, { root, gitEnv }) {
     const dir = resolveInProject(root, path);
     if (!isDirectory(dir)) throw new ToolError(`"${path}" is not a directory.`);
     const base = projectPath(root, dir);
     const matcher = new Bun.Glob(pattern);
 
-    const matches = (await filesUnder(root, base)).filter((file) =>
+    const matches = (await filesUnder(root, base, gitEnv)).filter((file) =>
       matcher.match(base === "." ? file : file.slice(base.length + 1)),
     );
     if (matches.length === 0) return { output: "No files match.", summary: "0 files" };

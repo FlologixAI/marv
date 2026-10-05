@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -183,5 +184,48 @@ describe("runTool: subagent support", () => {
     await runTool(call("bash", { command: "curl example.com", network: true }), { root, approve });
     await runTool(call("bash", { command: "ls" }), { root, approve });
     expect(asked.map((r) => r.network)).toEqual([true, undefined]);
+  });
+});
+
+describe("the file listing never runs a repository's programs", () => {
+  const gitIn = (cwd: string, ...args: string[]) => Bun.spawnSync(["git", ...args], { cwd });
+  const globCall = { id: "g1", name: "glob", arguments: JSON.stringify({ pattern: "**/*.txt" }) };
+
+  test("core.fsmonitor in the project's own config isn't run", async () => {
+    const pwned = join(outside, "PWNED");
+    gitIn(root, "init", "-q");
+    gitIn(root, "config", "core.fsmonitor", `touch ${pwned}`);
+    await writeFile(join(root, "a.txt"), "a\n");
+    const result = await runTool(globCall, { root });
+    expect(result.output).toContain("a.txt");
+    expect(existsSync(pwned)).toBe(false);
+  });
+
+  test("core.fsmonitor in a per-worktree config (config.worktree) isn't run", async () => {
+    const pwned = join(outside, "PWNED");
+    gitIn(root, "init", "-q");
+    gitIn(root, "config", "extensions.worktreeConfig", "true");
+    await writeFile(join(root, ".git", "config.worktree"), `[core]\n\tfsmonitor = touch ${pwned}\n`);
+    await writeFile(join(root, "w.txt"), "w\n");
+    const result = await runTool(globCall, { root });
+    expect(result.output).toContain("w.txt");
+    expect(existsSync(pwned)).toBe(false);
+  });
+
+  test("with gitEnv, a redirected .git file is ignored", async () => {
+    const pwned = join(outside, "PWNED");
+    // The real repository, outside the folder the agent works in.
+    const real = join(outside, "real.git");
+    gitIn(outside, "init", "-q", "--bare", real);
+    // A fake one the .git file in the work folder points to, with a program in its config.
+    const fake = join(outside, "fake.git");
+    gitIn(outside, "init", "-q", "--bare", fake);
+    gitIn(fake, "config", "core.fsmonitor", `touch ${pwned}`);
+    await writeFile(join(root, ".git"), `gitdir: ${fake}\n`);
+    await writeFile(join(root, "b.txt"), "b\n");
+
+    const result = await runTool(globCall, { root, gitEnv: { GIT_DIR: real, GIT_COMMON_DIR: real, GIT_WORK_TREE: root } });
+    expect(result.output).toContain("b.txt");
+    expect(existsSync(pwned)).toBe(false);
   });
 });

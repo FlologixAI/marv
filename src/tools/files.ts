@@ -2,6 +2,7 @@
 // listing the project's files.
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { gitEnvironment, NO_PROGRAMS } from "../worktree.ts";
 import { ToolError } from "./types.ts";
 
 /** Skipped when the project isn't a git repo (inside one, .gitignore decides). */
@@ -37,11 +38,15 @@ export const projectPath = (root: string, absolute: string) => relative(root, ab
 /**
  * Every file in the project, as project-relative paths, sorted. Inside a git
  * repo this is `git ls-files` (tracked + untracked, minus .gitignore'd), so
- * build output and dependencies stay out of the model's way.
+ * build output and dependencies stay out of the model's way. It runs outside
+ * the sandbox without approval, so it never runs the repository's programs
+ * (hooks, fsmonitor), and `gitEnv` pins where git looks.
  */
-export async function listProjectFiles(root: string): Promise<string[]> {
-  const git = Bun.spawnSync(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+export async function listProjectFiles(root: string, gitEnv?: Record<string, string>): Promise<string[]> {
+  const git = Bun.spawnSync(["git", ...NO_PROGRAMS, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
     cwd: root,
+    env: gitEnvironment(gitEnv),
+    stdin: "ignore",
     stdout: "pipe",
     stderr: "ignore",
   });
@@ -61,8 +66,8 @@ export async function listProjectFiles(root: string): Promise<string[]> {
 }
 
 /** Files under `dir` (a project-relative directory, "." for everything). */
-export async function filesUnder(root: string, dir: string): Promise<string[]> {
-  const all = await listProjectFiles(root);
+export async function filesUnder(root: string, dir: string, gitEnv?: Record<string, string>): Promise<string[]> {
+  const all = await listProjectFiles(root, gitEnv);
   if (dir === ".") return all;
   return all.filter((p) => p.startsWith(`${dir}/`) || p === dir);
 }
