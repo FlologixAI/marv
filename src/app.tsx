@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, useApp, useInput, useWindowSize, type DOMElement } from "ink";
-import { DEFAULT_MAX_STEPS, runAgent } from "./agent.ts";
+import { answerAllCalls, DEFAULT_MAX_STEPS, runAgent } from "./agent.ts";
 import { applyEvent, createAgentLog, type AgentLog } from "./agent-log.ts";
 import { GENERAL_PURPOSE, type AgentType } from "./agents.ts";
 import { copyToClipboard } from "./clipboard.ts";
@@ -119,6 +119,8 @@ interface Props {
   mcp?: McpManager;
   /** MCP config files that couldn't be read, and why. */
   mcpProblems?: string[];
+  /** Hands cli.tsx a function to run before the process exits: saves the session and flushes the trajectory. */
+  onFlush?: (flush: () => Promise<void>) => void;
   /** Start by resuming: the latest session here (marv -c), or a picker (marv -r). */
   resume?: "latest" | "pick";
   /** Where memory lives, and what it held at startup. */
@@ -151,6 +153,7 @@ export function App({
   trajectories,
   mcp,
   mcpProblems = NO_PROBLEMS,
+  onFlush,
   resume,
   memory,
   agents = DEFAULT_AGENTS,
@@ -1017,17 +1020,34 @@ export function App({
   // Typing anything clears the highlight, like in a terminal.
   useInput(() => selection.clear(), { isActive: phase === "main" });
 
+  // The session as it is now, saved. Reads refs, so it's also right when called on the way out, after unmounting.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const totalsRef = useRef(totals);
+  totalsRef.current = totals;
+  const saveSession = useCallback(async () => {
+    if (!sessions) return;
+    const transcript = itemsRef.current.flatMap((item) => (item.kind === "message" ? [item.message] : []));
+    const { provider: providerId, model } = configRef.current;
+    // answerAllCalls: on the way out a run may still be winding down, with tool calls not yet answered.
+    sessionRef.current = { ...sessionRef.current, provider: providerId, model, conversation: answerAllCalls(conversation.current), transcript, totals: totalsRef.current };
+    await sessions.save(sessionRef.current);
+  }, [sessions]);
+
   // Save the session once a turn is over (not mid-run), shortly after things settle.
   useEffect(() => {
     if (!sessions || busy) return;
-    const timer = setTimeout(() => {
-      const transcript = items.flatMap((item) => (item.kind === "message" ? [item.message] : []));
-      const { provider: providerId, model } = configRef.current;
-      sessionRef.current = { ...sessionRef.current, provider: providerId, model, conversation: [...conversation.current], transcript, totals };
-      void sessions.save(sessionRef.current).catch(() => {});
-    }, 200);
+    const timer = setTimeout(() => void saveSession().catch(() => {}), 200);
     return () => clearTimeout(timer);
-  }, [sessions, busy, items, totals]);
+  }, [sessions, busy, items, totals, saveSession]);
+
+  // On the way out (cli.tsx awaits this before exiting): quitting cancels the timer above, which could lose the
+  // last turn, so save now, and let pending trajectory records reach the disk.
+  useEffect(() => {
+    onFlush?.(async () => {
+      await Promise.all([saveSession().catch(() => {}), trajectoryRef.current?.flush()]);
+    });
+  }, [onFlush, saveSession]);
 
   /** Brings back a saved session: both histories, its cost, and it keeps saving to the same file. */
   const restore = useCallback(

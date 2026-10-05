@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runAgent, type LoopEvent } from "../src/agent.ts";
+import { answerAllCalls, runAgent, type LoopEvent } from "../src/agent.ts";
 import type { AgentEvent, ChatTurn, Provider, ToolCall, ToolSpec } from "../src/provider/types.ts";
 import type { ToolResult } from "../src/tools/types.ts";
 import { ScriptedProvider } from "./fake-provider.ts";
@@ -32,6 +32,18 @@ async function run(provider: Provider, history: ChatTurn[], opts: Partial<Parame
     events.push(event);
   return events;
 }
+
+test("answerAllCalls: a history saved mid-run gets 'not run' results for calls still waiting", () => {
+  const history: ChatTurn[] = [
+    { role: "user", text: "go" },
+    { role: "assistant", text: "", toolCalls: [call("c1", "a.ts"), call("c2", "b.ts")] },
+    { role: "tool", callId: "c1", name: "read_file", text: "a" },
+  ];
+  expect(answerAllCalls(history)).toEqual([...history, { role: "tool", callId: "c2", name: "read_file", text: expect.stringContaining("Interrupted") }]);
+  expect(history).toHaveLength(3); // the original is untouched
+  const done: ChatTurn[] = [{ role: "user", text: "hi" }, { role: "assistant", text: "hello" }];
+  expect(answerAllCalls(done)).toEqual(done);
+});
 
 describe("runAgent", () => {
   test("a plain answer is one step", async () => {

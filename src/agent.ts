@@ -26,6 +26,18 @@ export const NOT_RUN = {
   declined: "Not run: the user declined an earlier action.",
 };
 
+/**
+ * A copy of the history in which every tool call has a result: calls still waiting at the end (a run that was
+ * cut short, e.g. by quitting while it wound down) get "not run". Without one, the API rejects every request
+ * made from this history, so a session saved this way couldn't be continued.
+ */
+export function answerAllCalls(history: ChatTurn[]): ChatTurn[] {
+  const answered = new Set(history.flatMap((t) => (t.role === "tool" ? [t.callId] : [])));
+  const last = history.findLast((t) => t.role === "assistant" && t.toolCalls?.length);
+  const waiting = last?.role === "assistant" ? (last.toolCalls ?? []).filter((c) => !answered.has(c.id)) : [];
+  return [...history, ...waiting.map((c) => ({ role: "tool" as const, callId: c.id, name: c.name, text: NOT_RUN.aborted }))];
+}
+
 type Result = ToolResult & { label: string };
 type GroupEvent =
   | { type: "start"; index: number; call: ToolCall }

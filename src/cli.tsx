@@ -89,6 +89,7 @@ if (process.stdin.isTTY && process.stdout.isTTY) {
   process.on("exit", () => process.stdout.write(MOUSE_OFF));
 }
 
+let flush: () => Promise<void> = async () => {};
 const instance = render(
   <App
     store={store}
@@ -107,6 +108,7 @@ const instance = render(
     trajectories={new TrajectoryStore(join(defaultConfigDir(process.env), "trajectories"))}
     mcp={mcp}
     mcpProblems={mcpProblems}
+    onFlush={(f) => (flush = f)}
     memory={memory}
     resume={args.includes("-c") || args.includes("--continue") ? "latest" : args.includes("-r") || args.includes("--resume") ? "pick" : undefined}
   />,
@@ -116,6 +118,8 @@ const instance = render(
 selection.repaint = instance.repaint;
 
 await instance.waitUntilExit();
+// The last turn and pending trajectory records reach the disk (quitting cancels the delayed save).
+await Promise.race([flush(), Bun.sleep(2000)]);
 // Let servers shut down cleanly, but don't hang on one that won't.
 await Promise.race([mcp?.close(), Bun.sleep(2000)]);
 process.exit(0);

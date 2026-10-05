@@ -712,6 +712,33 @@ describe("App", () => {
       expect(lastFrame()).not.toContain("OLD-REPLY");
     });
 
+    test("quitting right after a turn still saves it (the save timer hasn't fired yet)", async () => {
+      let flush = async () => {};
+      const { stdin } = render(
+        <App
+          store={store}
+          initialFile={LOCAL}
+          env={{}}
+          version="9.9.9"
+          cwd="~/x"
+          root={project}
+          splashMs={0}
+          makeProvider={() => new ScriptedProvider([say("Paris.")])}
+          loadModels={async () => []}
+          sessions={sessions}
+          onFlush={(f) => (flush = f)}
+        />,
+      );
+      await type(stdin, "capital of France?");
+      await tick(60); // the reply is in, the 200 ms save timer isn't
+      stdin.write("\x03");
+      stdin.write("\x03"); // quit
+      await flush(); // what cli.tsx does before exiting
+      const [saved] = await sessions.list(project);
+      expect(saved?.title).toBe("capital of France?");
+      expect((await sessions.latest(project))!.conversation.map((t) => t.text)).toEqual(["capital of France?", "Paris."]);
+    });
+
     test("each turn is saved, with both the transcript and the conversation", async () => {
       const { stdin } = renderWithSessions(new ScriptedProvider([say("Paris.")]));
       await type(stdin, "capital of France?");
