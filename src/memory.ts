@@ -11,13 +11,15 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { projectKey } from "./paths.ts";
+import { legacyProjectKey, projectKey } from "./paths.ts";
 
 export type MemoryScope = "personal" | "project";
 
 export interface MemoryPaths {
   personal: string;
   project: string;
+  /** Where the project file was before project keys had a hash: moved to `project` on load. */
+  legacyProject?: string;
 }
 
 export interface Memories {
@@ -37,6 +39,7 @@ export function memoryPaths(configDir: string, root: string): MemoryPaths {
   return {
     personal: join(configDir, "memory", "personal.md"),
     project: join(configDir, "memory", "projects", `${projectKey(root)}.md`),
+    legacyProject: join(configDir, "memory", "projects", `${legacyProjectKey(root)}.md`),
   };
 }
 
@@ -63,6 +66,9 @@ async function writeEntries(path: string, entries: string[]) {
 }
 
 export async function loadMemory(paths: MemoryPaths): Promise<Memories> {
+  // The old key wasn't unique, so the first project to load it claims it: before this fix, colliding projects
+  // already shared that one file.
+  if (paths.legacyProject && !existsSync(paths.project) && existsSync(paths.legacyProject)) await rename(paths.legacyProject, paths.project);
   return { personal: await readEntries(paths.personal), project: await readEntries(paths.project) };
 }
 

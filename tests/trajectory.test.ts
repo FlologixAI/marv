@@ -3,6 +3,7 @@ import { statSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { projectKey } from "../src/paths.ts";
 import { AgentRecorder, TrajectoryStore, type TrajectoryRecord } from "../src/trajectory.ts";
 
 let dir: string;
@@ -25,7 +26,7 @@ describe("the trajectory file", () => {
     for (let i = 0; i < 20; i++) log.write({ type: "feedback", turn: "t1", score: 1, source: "explicit" });
     log.write({ type: "turn_start", turn: "t2", text: "hi", model: "m", provider: "ollama" });
     await log.flush();
-    expect(log.path).toBe(join(dir, "-home-me-proj", "s1.jsonl"));
+    expect(log.path).toBe(join(dir, projectKey("/home/me/proj"), "s1.jsonl"));
     const records = await lines(log.path);
     expect(records).toHaveLength(21);
     expect(records.at(-1)).toMatchObject({ v: 1, session: "s1", type: "turn_start", turn: "t2", text: "hi" });

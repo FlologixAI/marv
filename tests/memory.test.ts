@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addMemory, loadMemory, memoryPaths, memorySection, removeMemory, type MemoryPaths } from "../src/memory.ts";
+import { legacyProjectKey, projectKey } from "../src/paths.ts";
 import { runTool } from "../src/tools/index.ts";
 import type { ApprovalRequest } from "../src/tools/types.ts";
 
@@ -19,7 +21,7 @@ describe("memory store", () => {
     await addMemory(paths.personal, "Prefers short answers.");
     await addMemory(paths.project, "Tests need Ollama running.");
     expect(await loadMemory(paths)).toEqual({ personal: ["Prefers short answers."], project: ["Tests need Ollama running."] });
-    expect(paths.project).toBe(join(dir, "memory", "projects", "-home-me-proj.md"));
+    expect(paths.project).toBe(join(dir, "memory", "projects", `${projectKey("/home/me/proj")}.md`));
     expect(await readFile(paths.personal, "utf8")).toContain("- Prefers short answers.");
     expect((await stat(paths.personal)).mode & 0o777).toBe(0o600);
   });
@@ -37,6 +39,15 @@ describe("memory store", () => {
     expect(await removeMemory(paths.project, "nothing like this")).toMatchObject({ error: expect.stringContaining("No project memory matches") });
     await addMemory(paths.project, "The API version is 2.");
     expect(await removeMemory(paths.project, "The API")).toMatchObject({ error: expect.stringContaining("2 memories match") });
+  });
+
+  test("a project memory file under the old project key is moved over when loaded", async () => {
+    const legacy = join(dir, "memory", "projects", `${legacyProjectKey("/home/me/proj")}.md`);
+    await mkdir(join(dir, "memory", "projects"), { recursive: true });
+    await writeFile(legacy, "# Marv's memory: this project\n\n- Tests need Ollama running.\n");
+    expect((await loadMemory(paths)).project).toEqual(["Tests need Ollama running."]);
+    expect(existsSync(legacy)).toBe(false);
+    expect(existsSync(paths.project)).toBe(true);
   });
 
   test("no memory files yet is fine", async () => {

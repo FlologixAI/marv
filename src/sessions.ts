@@ -8,9 +8,9 @@
 // your code and prompts. Saved after every turn, atomically (write a temp
 // file, then rename), so a crash never leaves a half-written session.
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readdir, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { projectKey } from "./paths.ts";
+import { legacyProjectKey, projectKey } from "./paths.ts";
 import type { ChatTurn } from "./provider/types.ts";
 import type { Message } from "./types.ts";
 import { emptyTotals, type Totals } from "./usage.ts";
@@ -60,6 +60,11 @@ export class SessionStore {
     return join(this.dir, projectKey(root));
   }
 
+  /** Where sessions were saved before project keys had a hash. Shared by colliding projects, so each session's root is checked. */
+  private legacyFolder(root: string) {
+    return join(this.dir, legacyProjectKey(root));
+  }
+
   /** Saves (or overwrites) a session. Sessions without a user message aren't saved. */
   async save(session: Session): Promise<void> {
     if (!session.transcript.some((m) => m.role === "user")) return;
@@ -70,14 +75,20 @@ export class SessionStore {
     await writeFile(temp, JSON.stringify({ ...session, updatedAt: Date.now() }), { mode: 0o600 });
     await chmod(temp, 0o600);
     await rename(temp, file);
+    // Saved under the old key before: it lives in the new folder from now on.
+    await rm(join(this.legacyFolder(session.root), `${session.id}.json`), { force: true });
   }
 
   async load(root: string, id: string): Promise<Session | null> {
-    const file = join(this.folder(root), `${id}.json`);
+    return (await this.read(join(this.folder(root), `${id}.json`), root)) ?? (await this.read(join(this.legacyFolder(root), `${id}.json`), root));
+  }
+
+  /** A session file of this project, or null: missing, damaged, an old format, or (in a legacy folder) another project's. */
+  private async read(file: string, root: string): Promise<Session | null> {
     if (!existsSync(file)) return null;
     try {
       const session = (await Bun.file(file).json()) as Session;
-      return session.version === VERSION ? session : null;
+      return session.version === VERSION && session.root === root ? session : null;
     } catch {
       return null;
     }
@@ -85,11 +96,12 @@ export class SessionStore {
 
   /** This project's sessions, newest first. Damaged files are skipped. */
   async list(root: string): Promise<SessionSummary[]> {
-    const folder = this.folder(root);
-    if (!existsSync(folder)) return [];
+    const names = new Set<string>();
+    for (const folder of [this.folder(root), this.legacyFolder(root)]) {
+      if (existsSync(folder)) for (const name of await readdir(folder)) if (name.endsWith(".json")) names.add(name);
+    }
     const summaries: SessionSummary[] = [];
-    for (const name of await readdir(folder)) {
-      if (!name.endsWith(".json")) continue;
+    for (const name of names) {
       const session = await this.load(root, name.slice(0, -".json".length));
       if (!session) continue;
       summaries.push({
