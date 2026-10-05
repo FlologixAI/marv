@@ -329,14 +329,24 @@ export function App({
   }, [session]);
 
   const clearTranscript = useCallback(() => {
+    const failed = (err: unknown) =>
+      addMessage({ role: "system", isError: true, text: `Couldn't start a new conversation: ${(err as Error).message}` });
+    // A new conversation (and session file), with the memories saved during the last one. It throws during a turn
+    // (handleSubmit doesn't get here while busy), and then nothing is cleared.
+    let cleared: Promise<void>;
+    try {
+      cleared = session.clear();
+    } catch (err) {
+      failed(err);
+      return;
+    }
+    void cleared.then(() => setMemories(session.memory), failed);
     selection.reset();
     agentLogs.current.clear();
     setViewing(null);
-    // A new conversation (and session file), with the memories saved during the last one.
-    void session.clear().then(() => setMemories(session.memory));
     setUsage(null);
     setItems([{ kind: "welcome", id: "welcome-0" }]);
-  }, [session]);
+  }, [session, addMessage]);
 
   /** Says how a compaction went (automatic: before a message, because the context was nearly full). */
   const reportCompaction = useCallback(
@@ -408,9 +418,6 @@ export function App({
       const toolLines = new Map<string, { line: number; label: string }>();
       // Calls that got their tool_end; any other entry is closed in `finally`.
       const ended = new Set<string>();
-      // Set first thing in `finally`: a subagent still winding down after the
-      // run ended mustn't schedule a flush (it would show the run as busy again).
-      let over = false;
       // Subagents' progress, batched into the same flush as streamed text: with
       // several running, updating the transcript on every step would re-render
       // it far more often than Ink can draw.
@@ -437,8 +444,8 @@ export function App({
         }
         progress.clear();
       };
+      // The session drops events that come after turn_end, so nothing arrives here once the turn is over.
       const scheduleFlush = () => {
-        if (over) return;
         flushTimer ??= setTimeout(flush, STREAM_FLUSH_MS);
       };
 
@@ -456,7 +463,6 @@ export function App({
               compactionStopped = !event.result.compacted && event.result.reason === "stopped";
               break;
             case "subagent_progress":
-              if (over) break;
               progress.set(event.callId, event.progress);
               steps.set(event.callId, event.progress.steps);
               scheduleFlush();
@@ -465,7 +471,7 @@ export function App({
               // Subagents' requests count toward the session's tokens and cost.
               if (event.event.type === "usage") setTotals(session.usage().totals);
               const log = logs.get(event.callId);
-              if (over || !log) break;
+              if (!log) break;
               applyEvent(log, event.event);
               // Only the open view costs a render; the others just keep their log.
               if (isViewed(log)) {
@@ -554,7 +560,6 @@ export function App({
         // Drawing an event failed; leaving the loop has already stopped the turn.
         addMessage({ role: "system", text: `Error: ${(err as Error).message}`, isError: true });
       } finally {
-        over = true;
         if (flushTimer) clearTimeout(flushTimer);
         // The turn ended early: close the entries it never ended.
         for (const [callId, entry] of toolLines) {
@@ -933,7 +938,13 @@ export function App({
   const pickSession = useCallback(
     async (id: string) => {
       setPicker(null);
-      const resumed = await resumeSession(id).catch(() => null);
+      let resumed: Resumed | null | "busy";
+      try {
+        resumed = await resumeSession(id);
+      } catch (err) {
+        addMessage({ role: "system", isError: true, text: `That session couldn't be loaded: ${(err as Error).message}.` });
+        return;
+      }
       if (resumed === "busy") addMessage({ role: "system", isError: true, text: WORKING });
       else if (resumed) showResumed(resumed);
       else addMessage({ role: "system", isError: true, text: "That session couldn't be loaded." });
