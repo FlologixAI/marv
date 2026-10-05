@@ -365,3 +365,139 @@ describe("trajectories", () => {
     expect(log).toContainEqual(expect.objectContaining({ type: "agent_end", agent: start!.subagent }));
   });
 });
+
+describe("saving and resuming", () => {
+  test("a turn is saved, and another session object can resume it", async () => {
+    const sessions = new SessionStore(dir);
+    const a = makeSession(new ScriptedProvider([say("Noted.")]), { sessions });
+    await collect(a.send("remember 42"));
+    await a.flush();
+    const provider = new ScriptedProvider([say("42.")]);
+    const b = makeSession(provider, { sessions });
+    const resumed = await b.resume("latest");
+    expect(resumed).toMatchObject({
+      id: a.id,
+      model: "test-model",
+      transcript: [
+        { role: "user", text: "remember 42" },
+        { role: "assistant", text: "Noted." },
+      ],
+    });
+    expect(b.id).toBe(a.id);
+    await collect(b.send("what was it?"));
+    expect(provider.requests[0]!.history.map((t) => t.text)).toEqual(["remember 42", "Noted.", "what was it?"]);
+  });
+
+  test("the client's transcript is what's saved", async () => {
+    const sessions = new SessionStore(dir);
+    const transcript = [
+      { id: 7, role: "user" as const, text: "hi" },
+      { id: 8, role: "system" as const, text: "a notice" },
+    ];
+    const session = makeSession(new ScriptedProvider([say("Hello.")]), { sessions, transcript: () => transcript });
+    await collect(session.send("hi"));
+    await session.flush();
+    expect((await sessions.load(project, session.id))?.transcript).toEqual(transcript);
+  });
+
+  test("a session file saved by the current version loads", async () => {
+    const sessions = new SessionStore(dir);
+    const saved: SavedSession = {
+      version: 1,
+      id: "2026-10-05T10-00-00-000Z-abc123",
+      root: project,
+      createdAt: 1,
+      updatedAt: 2,
+      provider: "ollama",
+      model: "qwen3.5:9b",
+      conversation: [
+        { role: "user", text: "hi" },
+        { role: "assistant", text: "Hello." },
+      ],
+      transcript: [
+        { id: 1, role: "user", text: "hi" },
+        { id: 2, role: "tool", text: "read_file", tool: { label: "a.ts", status: "done" } },
+        { id: 3, role: "assistant", text: "Hello." },
+      ],
+      totals: { requests: 1, promptTokens: 10, cachedTokens: 0, completionTokens: 2 },
+    };
+    await sessions.save(saved);
+    const resumed = await makeSession(new ScriptedProvider([]), { sessions }).resume(saved.id);
+    expect(resumed).toMatchObject({ id: saved.id, transcript: saved.transcript, totals: saved.totals });
+  });
+
+  test("without a store, or for an unknown id, there's nothing to resume", async () => {
+    expect(await makeSession(new ScriptedProvider([])).resume("latest")).toBeNull();
+    expect(await makeSession(new ScriptedProvider([]), { sessions: new SessionStore(dir) }).resume("nope")).toBeNull();
+  });
+});
+
+describe("between turns", () => {
+  test("clear(), resume() and compact() refuse during a turn; configure() applies from the next one", async () => {
+    const hanging = new Hanging();
+    const other = new ScriptedProvider([say("From the other model.")]);
+    const session = makeSession(hanging, { sessions: new SessionStore(dir) });
+    for await (const event of session.send("go")) {
+      if (event.type !== "text_delta") continue;
+      expect(() => session.clear()).toThrow(/working/);
+      await expect(session.resume("latest")).rejects.toThrow(/working/);
+      await expect(session.compact()).rejects.toThrow(/working/);
+      session.configure({ provider: fixed(other) });
+      session.interrupt();
+    }
+    expect(hanging.requests).toBe(1);
+    await collect(session.send("again"));
+    expect(other.requests).toHaveLength(1);
+  });
+
+  test("clear() starts a new conversation, with a new id and the memories saved meanwhile", async () => {
+    const paths = memoryPaths(dir, project);
+    const provider = new ScriptedProvider([say("One."), say("Two.")]);
+    const session = makeSession(provider, { memory: { paths, initial: await loadMemory(paths) } });
+    await collect(session.send("one"));
+    const before = session.id;
+    await addMemory(paths.personal, "The user likes tabs");
+    await session.clear();
+    expect(session.id).not.toBe(before);
+    await collect(session.send("two"));
+    expect(provider.requests[1]!.history).toEqual([{ role: "user", text: "two" }]);
+    expect(provider.requests[0]!.options.system).not.toContain("The user likes tabs");
+    expect(provider.requests[1]!.options.system).toContain("The user likes tabs");
+  });
+
+  test("the model's info arrives in the background: its context window, and a provider remade for its reasoning", async () => {
+    const provider = new ScriptedProvider([]);
+    const made: unknown[] = [];
+    let changed = 0;
+    const factory: ProviderFactory = {
+      id: "openrouter",
+      model: "x/y",
+      make: (_model, info) => (made.push(info), provider),
+      lookup: async () => ({ id: "x/y", context: 200_000, reasoning: "optional" }),
+    };
+    const session = makeSession(factory, { onChange: () => changed++ });
+    await Bun.sleep(0);
+    expect(session.contextLength).toBe(200_000);
+    expect(session.modelInfo?.reasoning).toBe("optional");
+    expect(made).toEqual([undefined, { reasoning: "optional" }]);
+    expect(changed).toBe(1);
+  });
+
+  test("every request extends the previous one exactly, across turns and settings changes (prompt cache)", async () => {
+    const provider = new ScriptedProvider([useTools(read("c1")), say("One."), useTools(read("c2")), say("Two."), say("Three.")]);
+    const session = makeSession(provider);
+    await collect(session.send("one"));
+    session.configure({ yolo: false, sandbox: false });
+    await collect(session.send("two"));
+    await collect(session.send("three"));
+    expect(provider.requests).toHaveLength(5);
+    for (let i = 1; i < provider.requests.length; i++) {
+      const before = provider.requests[i - 1]!;
+      const after = provider.requests[i]!;
+      expect(after.history.slice(0, before.history.length)).toEqual(before.history); // only appended to
+      expect(after.history.length).toBeGreaterThan(before.history.length);
+      expect(after.options.system).toBe(before.options.system); // the same system prompt
+      expect(after.options.tools).toBe(before.options.tools); // the very same tool definitions
+    }
+  });
+});
