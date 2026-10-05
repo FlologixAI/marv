@@ -186,3 +186,31 @@ test("a hidden element is dropped whatever else it has; CSS comments and .0 don'
     expect(markdown).toContain("shown");
   }
 });
+
+// A code block the way bun.sh (Shiki in Tailwind wrappers) writes one. Readability weighs class names, and
+// "overflow-hidden" and "CodeBlockScroll" read to it like a hidden widget and a scroller, so it dropped the block.
+const FENCE = `<div class="DocFence group/fence relative my-5 overflow-hidden rounded-lg" data-lang="ts"><div class="relative">
+<div class="CodeBlock group/code !my-0"><div class="relative"><div class="CodeBlockScroll"><div data-h="0"><pre class="shiki"><code><span class="line"><span class="s-ff79c6">const</span><span> response = await fetch("http://example.com");</span></span>
+<span class="line"></span>
+<span class="line"><span>console.</span><span class="s-50fa7b">log</span><span>(response.status);</span></span></code></pre></div></div></div></div>
+<button>Copy</button></div></div>`;
+
+test("a code block in wrappers Readability distrusts survives, with its language", () => {
+  const html = `<html><head><title>fetch</title></head><body><nav><a href="/">Docs</a></nav><main class="content"><article>
+<h1>Fetch</h1><p>${LOREM.repeat(3)}</p><p>To send an HTTP request, use <code>fetch</code>:</p>${FENCE}<p>${LOREM.repeat(2)}</p>
+<pre class="x-scroll"><code class="language-js">plain(js)</code></pre></article></main></body></html>`;
+  const { markdown, fallback } = htmlToMarkdown(html, "https://bun.sh/docs/fetch");
+  expect(fallback).toBe(false);
+  expect(markdown).toContain('```ts\nconst response = await fetch("http://example.com");\n\nconsole.log(response.status);\n```');
+  expect(markdown).toContain("```js\nplain(js)\n```"); // a block's own language class is kept
+  expect(markdown).not.toContain("Copy");
+});
+
+test("only the wrappers around a code block lose their classes", () => {
+  // Readability drops elements classed like comments; one holding a code block is kept, the other still goes
+  const html = `<html><body><article><p>${LOREM.repeat(8)}</p><div class="comments"><p>COMMENT ${LOREM}</p></div>
+<div class="comments"><pre><code>x = 1</code></pre></div><p>${LOREM.repeat(4)}</p></article></body></html>`;
+  const { markdown } = htmlToMarkdown(html, "https://e.com/");
+  expect(markdown).toContain("```\nx = 1\n```");
+  expect(markdown).not.toContain("COMMENT");
+});

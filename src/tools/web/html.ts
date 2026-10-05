@@ -134,6 +134,7 @@ function clean(document: Doc, base: string): void {
       el.hasAttribute("hidden") || el.getAttribute("aria-hidden")?.trim().toLowerCase() === "true" || isHiddenStyle(el.getAttribute("style") ?? "");
     if (hidden) el.remove();
   }
+  keepCodeBlocks(document);
   // Titles end up in the Markdown (`[x](url "title")`) at any length, and are rarely worth reading; nor is a class
   // longer than a code block's language (`language-ts`), the only one turndown uses.
   for (const el of document.querySelectorAll("[title]")) el.removeAttribute("title");
@@ -154,6 +155,39 @@ function clean(document: Doc, base: string): void {
     else a.replaceWith(...a.childNodes);
   }
 }
+
+/** Readability judges an element partly by its class and id: "sidebar", "hidden", "scroll", "header" and the like
+ *  count against it, and an element they sink is dropped whole. Code blocks on Shiki, Docusaurus or Mintlify sites
+ *  sit in exactly such wrappers (bun.sh: `<div class="DocFence … overflow-hidden" data-lang="ts">` … `<div
+ *  class="CodeBlockScroll"><pre>`), so every one of them vanished. The wrappers around each <pre> lose the class or
+ *  id that would count against them (and only those: a class that counts for the article is kept), and the block's
+ *  `data-lang` becomes its <code>'s `language-` class, which turndown writes after the fence. Readability's own
+ *  patterns are used, so they stay in step with the library. */
+function keepCodeBlocks(document: Doc): void {
+  const stripped = new Set<El>(); // wrappers already done: shared ones are walked once, so this stays linear
+  for (const pre of document.querySelectorAll("pre")) {
+    let lang = pre.getAttribute("data-lang");
+    let up = 0;
+    for (let el = pre.parentElement as El | null; el && el.tagName !== "BODY"; el = el.parentElement as El | null) {
+      if (++up <= 10) lang ??= el.getAttribute("data-lang");
+      if (stripped.has(el)) {
+        if (up > 10) break;
+        continue;
+      }
+      stripped.add(el);
+      for (const attr of ["class", "id"]) if (DISTRUSTED.test(el.getAttribute(attr) ?? "")) el.removeAttribute(attr);
+    }
+    const code = pre.querySelector("code");
+    const classes = code?.getAttribute("class") ?? "";
+    if (code && lang && /^[\w+#.-]{1,30}$/.test(lang) && !/(?:^|\s)language-/.test(classes)) {
+      code.setAttribute("class", `language-${lang} ${classes}`.trim());
+    }
+  }
+}
+
+const { negative, unlikelyCandidates } = (Readability.prototype as unknown as { REGEXPS?: Record<string, RegExp> }).REGEXPS ?? {};
+/** What Readability holds against a class or id. If a future version renames its patterns, every class counts. */
+const DISTRUSTED = negative && unlikelyCandidates ? new RegExp(`${negative.source}|${unlikelyCandidates.source}`, "i") : /[^]/;
 
 function absolute(href: string | null, base: string): URL | undefined {
   if (href === null) return undefined;
