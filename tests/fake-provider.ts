@@ -34,3 +34,21 @@ export class ScriptedProvider implements Provider {
     }
   }
 }
+
+/**
+ * Several scripted models behind one provider, for subagents running in
+ * parallel (their requests interleave, so one script can't serve them all).
+ * Each request goes to the route whose key appears in the conversation's
+ * first user message: the parent's request, or a subagent's prompt.
+ */
+export class RoutedProvider implements Provider {
+  readonly name = "routed";
+  constructor(private routes: Record<string, Provider>) {}
+
+  stream(history: ChatTurn[], options: StreamOptions = {}) {
+    const first = history.find((turn) => turn.role === "user")?.text ?? "";
+    const key = Object.keys(this.routes).find((k) => first.includes(k));
+    if (!key) throw new Error(`No route for a conversation starting "${first.slice(0, 60)}"`);
+    return this.routes[key]!.stream(history, options);
+  }
+}

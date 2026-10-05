@@ -250,7 +250,7 @@ describe("App", () => {
     expect(frame).toContain("It says to remember the milk.");
     // The real tool ran on the project and its output went back to the model.
     expect(model.requests[1]!.history.at(-1)).toEqual({ role: "tool", callId: "c1", name: "read_file", text: "    1\tremember the milk" });
-    expect(model.requests[0]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "edit_file", "write_file", "bash", "memory"]);
+    expect(model.requests[0]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "edit_file", "write_file", "bash", "memory", "agent"]);
   });
 
   test("a failing tool shows its error, and the model gets it to recover from", async () => {

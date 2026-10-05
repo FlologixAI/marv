@@ -1,0 +1,168 @@
+// Running a subagent: the same agent loop (runAgent) started again, with a
+// fresh conversation, its own system prompt and its own tools. Only its final
+// message goes back to the agent that started it, so the files it read and the
+// steps it took never fill up the parent's context.
+//
+// Note: this module and src/tools/index.ts import each other (the registry
+// holds the agent tool; a subagent runs the registry's tools). That's fine
+// because neither uses the other's exports until a function is called.
+import { runAgent } from "./agent.ts";
+import { findAgent, SUBAGENT_TOOLS, type AgentType } from "./agents.ts";
+import { shortenHome } from "./paths.ts";
+import { subagentPrompt } from "./prompt.ts";
+import { sandboxAvailable } from "./sandbox.ts";
+import { runTool, tools, toolSpecs } from "./tools/index.ts";
+import { ToolError, type AgentHost, type Decision, type ToolContext, type ToolResult } from "./tools/types.ts";
+import { tokens } from "./usage.ts";
+import { createWorktree, finishWorktree, worktreeEnv, type Worktree } from "./worktree.ts";
+
+/** Implementing a task takes more steps than answering a question. */
+export const SUBAGENT_MAX_STEPS = 50;
+/** Finished steps kept per subagent for ctrl+o: labels and summaries only. */
+const MAX_STEPS_KEPT = 20;
+
+export interface SubagentInput {
+  type?: string;
+  description: string;
+  prompt: string;
+  isolation?: "worktree";
+}
+
+const STOPPED: Record<string, string> = {
+  aborted: "Interrupted by the user before it finished.",
+  max_steps: `It hit its ${SUBAGENT_MAX_STEPS}-step limit before finishing.`,
+  length: "Its last reply was cut off by the model's output limit.",
+  error: "It stopped on an error:",
+};
+
+export function resolveType(host: AgentHost, name = "general-purpose"): AgentType {
+  const type = findAgent(host.agents, name);
+  if (!type) throw new ToolError(`There's no agent type "${name}". Available: ${host.agents.map((a) => a.name).join(", ")}.`);
+  return type;
+}
+
+/**
+ * How a subagent's changes get approved. In a worktree with the sandbox on,
+ * they run without asking: the worktree is the boundary, and merging its
+ * branch is the review. Network access still asks (a worktree limits what a
+ * command changes, not what it sends out). Otherwise the user is asked, with
+ * the request labeled by which subagent is asking.
+ */
+export function subagentApprove(approve: ToolContext["approve"], agent: string, auto: boolean): ToolContext["approve"] {
+  if (!approve) return undefined;
+  return (request) => (auto && !request.network ? Promise.resolve<Decision>("yes") : approve({ ...request, agent }));
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promise<ToolResult> {
+  const host = ctx.agentHost;
+  if (!host) throw new ToolError("Subagents can't start subagents.");
+  const type = resolveType(host, input.type);
+  const who = `${type.name} · ${input.description}`;
+
+  let worktree: Worktree | undefined;
+  if (input.isolation === "worktree") {
+    if (!host.worktreesDir) throw new ToolError("Worktrees aren't available here. Start the agent without isolation.");
+    worktree = createWorktree({ root: ctx.root, baseDir: host.worktreesDir, description: input.description });
+  }
+
+  const where = worktree ? `worktree ${worktree.branch}` : "shared folder";
+  let toolCount = 0;
+  let used = 0;
+  let current: string | undefined;
+  const steps: string[] = [];
+  const report = () => {
+    if (ctx.callId) host.onProgress(ctx.callId, { line: `${where} · ${plural(toolCount, "tool")} · ${current ?? "thinking…"}`, steps: steps.slice(-MAX_STEPS_KEPT) });
+  };
+
+  let text = "";
+  let reason = "error";
+  let error: string | undefined;
+  let declined = false;
+  let branchLine: string | undefined;
+  // Everything after the worktree exists runs inside this try, so the
+  // worktree is finished (its changes committed, its folder removed) however
+  // the subagent ends: a reply, an error, ctrl+c, a "no", or a throw.
+  try {
+    // Only subagent tools (never agent or memory, whatever the type lists),
+    // and skill only when there are skills to load.
+    const sandboxed = (ctx.sandbox ?? true) && sandboxAvailable();
+    const hasSkills = (ctx.skills?.length ?? 0) > 0;
+    const available = tools.filter(
+      (t) => SUBAGENT_TOOLS.includes(t.name) && type.tools.includes(t.name) && (t.name !== "skill" || hasSkills),
+    );
+    const names = available.map((t) => t.name);
+    // No agentHost (so it can't start subagents) and no memory.
+    const subCtx: ToolContext = {
+      root: worktree?.dir ?? ctx.root,
+      signal: ctx.signal,
+      sandbox: ctx.sandbox,
+      skills: ctx.skills,
+      readOnly: worktree ? [worktree.gitDir] : undefined,
+      gitEnv: worktree && worktreeEnv(worktree),
+      approve: subagentApprove(ctx.approve, who, Boolean(worktree) && sandboxed),
+    };
+    const system = subagentPrompt({
+      cwd: worktree ? shortenHome(worktree.dir) : host.cwd,
+      tools: names,
+      body: type.body,
+      instructions: host.instructions,
+      skills: hasSkills && names.includes("skill") ? ctx.skills : undefined,
+      worktree: worktree && { branch: worktree.branch, base: worktree.base },
+    });
+
+    report();
+    for await (const event of runAgent({
+      provider: host.providerFor(type.model),
+      history: [{ role: "user", text: input.prompt }],
+      system,
+      tools: toolSpecs.filter((spec) => names.includes(spec.name)),
+      runTool: (call) => runTool(call, subCtx, available),
+      signal: ctx.signal ?? new AbortController().signal,
+      maxSteps: SUBAGENT_MAX_STEPS,
+    })) {
+      switch (event.type) {
+        case "usage":
+          used += event.usage.promptTokens + event.usage.completionTokens;
+          host.onUsage(event.usage);
+          break;
+        case "assistant":
+          text = event.text;
+          break;
+        case "tool_start":
+          toolCount++;
+          current = `${event.call.name} ${event.label}`;
+          report();
+          break;
+        case "tool_end":
+          steps.push(`${event.call.name} ${event.result.label} · ${event.result.isError ? "error" : event.result.summary}`);
+          declined ||= Boolean(event.result.declined);
+          current = undefined;
+          report();
+          break;
+        case "error":
+          error = event.message;
+          break;
+        case "done":
+          reason = event.reason;
+          break;
+      }
+    }
+  } catch (err) {
+    // A provider that throws instead of sending an error event: report it like
+    // one, so the parent still gets what the subagent had (and its branch).
+    reason = "error";
+    error = err instanceof Error ? err.message : String(err);
+  } finally {
+    if (worktree) branchLine = finishWorktree(worktree, { description: input.description, interrupted: reason !== "end" });
+  }
+
+  const stats = `${plural(toolCount, "tool")} · ${tokens(used)} tokens`;
+  const stopped = reason === "end" || reason === "declined" ? "" : `[${STOPPED[reason] ?? `It stopped (${reason}).`}${error ? ` ${error}` : ""}]`;
+  const output = [text.trim() || "(The subagent gave no report.)", stopped, branchLine].filter(Boolean).join("\n\n");
+  if (declined) return { output, summary: `declined · ${stats}`, declined: true };
+  if (stopped) return { output, summary: `stopped · ${stats}`, isError: true };
+  const first = text.trim().split("\n")[0]!.slice(0, 80);
+  return { output, summary: `done · ${stats}${first ? ` · "${first}"` : ""}` };
+}

@@ -2,6 +2,7 @@
 import { isAbsolute, sep } from "node:path";
 import { z } from "zod";
 import type { ToolCall, ToolSpec } from "../provider/types.ts";
+import { agent } from "./agent.ts";
 import { bash } from "./bash.ts";
 import { editFile } from "./edit-file.ts";
 import { projectPath } from "./files.ts";
@@ -13,7 +14,10 @@ import { skill } from "./skill.ts";
 import { writeFile } from "./write-file.ts";
 import { ToolError, type Tool, type ToolContext, type ToolResult } from "./types.ts";
 
-export const tools: Tool[] = [readFile, glob, grep, skill, editFile, writeFile, bash, memory] as Tool[];
+export const tools: Tool[] = [readFile, glob, grep, skill, editFile, writeFile, bash, memory, agent] as Tool[];
+
+/** Whether a call may run at the same time as its neighbours (subagents). */
+export const isParallelCall = (call: ToolCall) => tools.some((t) => t.name === call.name && t.parallel);
 
 /**
  * What the model is told about each tool. Built once, so every request sends
