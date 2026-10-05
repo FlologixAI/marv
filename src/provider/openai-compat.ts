@@ -2,7 +2,7 @@
 // else that speaks POST /chat/completions with streaming). It translates
 // their stream into Marv's AgentEvents, so nothing above this file knows
 // which vendor (or which wire format) is on the other end.
-import { errorMessage, httpError, unreachable } from "./errors.ts";
+import { describeError, errorMessage, httpError, unreachable, type ErrorObject } from "./errors.ts";
 import { parseSSE } from "./sse.ts";
 import type { AgentEvent, ChatTurn, Provider, StreamOptions, ToolCall } from "./types.ts";
 
@@ -43,7 +43,7 @@ interface Chunk {
   }[];
   // OpenRouter adds `cost` (USD, what the request actually cost) to every final usage chunk.
   usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; cost?: number };
-  error?: { message?: string };
+  error?: ErrorObject;
 }
 
 /** Marv's conversation in OpenAI's message format. Deterministic, so repeated requests share a cacheable prefix. */
@@ -128,7 +128,7 @@ export class OpenAICompatProvider implements Provider {
         const chunk = JSON.parse(data) as Chunk;
         // Errors can also arrive mid-stream, after the 200 status was already sent.
         if (chunk.error) {
-          yield { type: "error", message: `${label}: ${chunk.error.message ?? "unknown error"}` };
+          yield { type: "error", message: `${label}: ${describeError(chunk.error)}` };
           return;
         }
         if (chunk.usage) {

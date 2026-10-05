@@ -1,14 +1,39 @@
 // Turning HTTP and connection failures into messages the user can act on.
 // Shared by every adapter.
 
+/** Upstream detail kept from a wrapped error: enough to act on, not a dump. */
+const MAX_RAW = 400;
+
+/** An error object as providers send it: OpenAI-style, with OpenRouter's wrapper for upstream failures. */
+export interface ErrorObject {
+  message?: string;
+  metadata?: { provider_name?: string; raw?: unknown };
+}
+
+/**
+ * The message of an error object. OpenRouter wraps a failure upstream as "Provider returned error", with the
+ * provider's own message in metadata.raw: that's the part that says what went wrong.
+ */
+export function describeError(error: ErrorObject): string {
+  const message = error.message ?? "unknown error";
+  const raw = error.metadata?.raw;
+  if (raw === undefined || raw === null || raw === "") return message;
+  const detail = typeof raw === "string" ? raw : JSON.stringify(raw);
+  const who = error.metadata?.provider_name ? `${error.metadata.provider_name}: ` : "";
+  return `${message}: ${who}${detail.length > MAX_RAW ? `${detail.slice(0, MAX_RAW)}…` : detail}`;
+}
+
 /** Pulls the message out of an error body ({"error":{"message":…}} or Ollama's {"error":"…"}). */
 export async function errorMessage(response: Response): Promise<string> {
   const text = await response.text().catch(() => "");
+  // A gateway's or proxy's HTML error page (a 502 from Cloudflare) says nothing useful: drop it.
+  if (/text\/html/i.test(response.headers.get("content-type") ?? "") || /^\s*</.test(text)) return "";
   try {
     const body = JSON.parse(text);
-    return (typeof body.error === "string" ? body.error : body.error?.message) ?? text;
+    if (typeof body.error === "string") return body.error;
+    return body.error ? describeError(body.error) : text;
   } catch {
-    return text || response.statusText;
+    return (text.length > MAX_RAW ? `${text.slice(0, MAX_RAW)}…` : text) || response.statusText;
   }
 }
 

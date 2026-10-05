@@ -163,6 +163,30 @@ describe("OpenAICompatProvider", () => {
     ]);
   });
 
+  test("an upstream failure wrapped by OpenRouter shows the provider's own message", async () => {
+    const wrapped = { error: { message: "Provider returned error", code: 400, metadata: { provider_name: "Anthropic", raw: '{"type":"error","error":{"message":"tool_use ids must be unique"}}' } } };
+    const http = serve(() => Response.json(wrapped, { status: 400 }));
+    const [event] = await collect(provider(http).stream([{ role: "user", text: "hi" }]));
+    const message = (event as { type: string; message: string }).message;
+    expect(event?.type).toBe("error");
+    expect(message).toContain("Anthropic");
+    expect(message).toContain("tool_use ids must be unique");
+    server!.stop(true);
+    const midStream = serve(() => sse(delta("partial"), wrapped));
+    const events = await collect(provider(midStream).stream([{ role: "user", text: "hi" }]));
+    expect(events.at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("tool_use ids must be unique") });
+  });
+
+  test("an HTML error page (a gateway's 502) isn't dumped into the transcript", async () => {
+    const page = `<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body>${"x".repeat(8000)}</body></html>`;
+    const url = serve(() => new Response(page, { status: 502, statusText: "Bad Gateway", headers: { "content-type": "text/html" } }));
+    const [event] = await collect(provider(url).stream([{ role: "user", text: "hi" }]));
+    const message = (event as { message: string }).message;
+    expect(message).toStartWith("TestRouter is having trouble (502).");
+    expect(message).not.toContain("<");
+    expect(message.length).toBeLessThan(200);
+  });
+
   test("explains when the server can't be reached", async () => {
     const events = await collect(provider("http://localhost:1/v1").stream([{ role: "user", text: "hi" }]));
     expect(events).toEqual([{ type: "error", message: expect.stringContaining("Can't reach TestRouter at http://localhost:1") }]);
