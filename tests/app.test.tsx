@@ -664,6 +664,54 @@ describe("App", () => {
     }
     const say = (text: string) => [{ type: "text_delta", text }, { type: "done" }] as AgentEvent[];
 
+    /** The real store, but loading takes `ms` (a big session on a slow disk). */
+    function slowStore(ms: number): SessionStore {
+      return Object.assign(Object.create(sessions) as SessionStore, {
+        latest: async (root: string) => (await Bun.sleep(ms), sessions.latest(root)),
+        list: async (root: string) => (await Bun.sleep(ms), sessions.list(root)),
+      });
+    }
+
+    test("marv -c: a message typed while the session loads waits, then goes on top of it", async () => {
+      const first = renderWithSessions(new ScriptedProvider([say("OLD-REPLY")]));
+      await type(first.stdin, "OLD");
+      await tick(400);
+      first.unmount();
+
+      const model = new ScriptedProvider([say("NEW-REPLY")]);
+      const { lastFrame, stdin } = render(
+        <App store={store} initialFile={LOCAL} env={{}} version="9.9.9" cwd="~/x" root={project} splashMs={0} makeProvider={() => model} loadModels={async () => []} sessions={slowStore(300)} resume="latest" />,
+      );
+      await type(stdin, "NEW"); // before the session has loaded
+      await tick(400);
+      expect(model.requests).toHaveLength(0);
+      expect(lastFrame()).toContain("Resumed a session");
+      expect(lastFrame()).toContain("> NEW"); // still in the prompt
+      stdin.write(ENTER);
+      await tick(200);
+      expect(model.requests[0]!.history.map((t) => t.text)).toEqual(["OLD", "OLD-REPLY", "NEW"]);
+    });
+
+    test("a session can't be resumed into a turn that's running", async () => {
+      const first = renderWithSessions(new ScriptedProvider([say("OLD-REPLY")]));
+      await type(first.stdin, "OLD");
+      await tick(400);
+      first.unmount();
+
+      const inner = new ScriptedProvider([say("still mine")]);
+      const slow: Provider = { name: "slow", async *stream(h, o) { await Bun.sleep(500); yield* inner.stream(h, o); } };
+      const { lastFrame, stdin } = render(
+        <App store={store} initialFile={LOCAL} env={{}} version="9.9.9" cwd="~/x" root={project} splashMs={0} makeProvider={() => slow} loadModels={async () => []} sessions={slowStore(200)} />,
+      );
+      await type(stdin, "/resume");
+      await type(stdin, "go"); // the list is still loading: this starts a turn
+      await tick(300);
+      expect(lastFrame()).toContain("stop the current turn");
+      await tick(600);
+      expect(lastFrame()).toContain("still mine");
+      expect(lastFrame()).not.toContain("OLD-REPLY");
+    });
+
     test("each turn is saved, with both the transcript and the conversation", async () => {
       const { stdin } = renderWithSessions(new ScriptedProvider([say("Paris.")]));
       await type(stdin, "capital of France?");

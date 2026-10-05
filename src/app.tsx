@@ -183,6 +183,8 @@ export function App({
   const sessionLogged = useRef<string | null>(null);
   const lastTurn = useRef<{ id: string; session: string } | null>(null);
   const [picker, setPicker] = useState<SessionSummary[] | null>(null);
+  // marv -c: the last session is still loading.
+  const [loadingSession, setLoadingSession] = useState(false);
 
   // Built once per session, so they're byte-identical in every request.
   const specs = useMemo(() => toolSpecsFor({ hasSkills: skills.length > 0 }), [skills]);
@@ -773,6 +775,10 @@ export function App({
   const handleSubmit = (raw: string) => {
     const text = raw.trim();
     if (!text || busy) return;
+    if (loadingSession) {
+      setNotice("Loading your last session…");
+      return;
+    }
     setInput("");
     setFollowKey((n) => n + 1);
     if (viewing) openView(null);
@@ -1026,12 +1032,19 @@ export function App({
   /** Brings back a saved session: both histories, its cost, and it keeps saving to the same file. */
   const restore = useCallback(
     (session: Session) => {
+      // Swapping the conversation under a running turn would mix the two (its reply landing in the restored
+      // transcript, not its conversation), and that mix would be saved.
+      if (abortRef.current) {
+        addMessage({ role: "system", isError: true, text: "Marv is working: stop the current turn (Esc) before resuming another session." });
+        return;
+      }
       selection.reset();
       agentLogs.current.clear();
       setViewing(null);
       sessionRef.current = session;
       conversation.current = [...session.conversation];
-      nextId.current = Math.max(0, ...session.transcript.map((m) => m.id)) + 1;
+      // Never lower it: an update still on its way for a message of this process must not hit a restored one.
+      nextId.current = Math.max(nextId.current, Math.max(0, ...session.transcript.map((m) => m.id)) + 1);
       setTotals(session.totals);
       setUsage(null);
       const switched = session.model !== configRef.current.model ? ` (it used ${session.model}; continuing with ${configRef.current.model})` : "";
@@ -1048,7 +1061,9 @@ export function App({
   const openPicker = useCallback(async () => {
     if (!sessions) return;
     const list = (await sessions.list(root)).filter((s) => s.id !== sessionRef.current.id);
-    if (list.length === 0) addMessage({ role: "system", text: "No saved sessions for this project yet." });
+    // A turn started while the list loaded: don't put the picker over it.
+    if (abortRef.current) addMessage({ role: "system", isError: true, text: "Marv is working: stop the current turn (Esc) before resuming another session." });
+    else if (list.length === 0) addMessage({ role: "system", text: "No saved sessions for this project yet." });
     else setPicker(list);
   }, [sessions, root, addMessage]);
 
@@ -1068,10 +1083,16 @@ export function App({
     if (resumed.current || !resume || !sessions || phase !== "main") return;
     resumed.current = true;
     if (resume === "pick") void openPicker();
-    else
-      void sessions.latest(root).then((session) =>
-        session ? restore(session) : addMessage({ role: "system", text: "No saved session to continue in this project." }),
-      );
+    else {
+      // Until it's loaded, the prompt keeps what's typed but doesn't send it (handleSubmit): a message sent now would
+      // be swapped out by the restore.
+      setLoadingSession(true);
+      void sessions
+        .latest(root)
+        .then((session) => (session ? restore(session) : addMessage({ role: "system", text: "No saved session to continue in this project." })))
+        .catch((err: Error) => addMessage({ role: "system", isError: true, text: `Couldn't load the last session: ${err.message}` }))
+        .finally(() => setLoadingSession(false));
+    }
   }, [resume, sessions, phase, root, restore, openPicker, addMessage]);
 
   // Skills that couldn't be loaded are reported once, not silently skipped.
