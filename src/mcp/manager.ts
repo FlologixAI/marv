@@ -21,6 +21,8 @@ import type { McpTrust } from "./trust.ts";
 const CONNECT_TIMEOUT_MS = 60_000;
 const DEFAULT_CALL_TIMEOUT_S = 120;
 const STDERR_LINES = 20;
+/** Pages of tools/list read at most (a server listing hundreds of tools would swamp the context anyway). */
+const MAX_PAGES = 50;
 
 export type McpState = "untrusted" | "connecting" | "connected" | "failed";
 
@@ -80,7 +82,9 @@ export class McpManager {
     servers: McpServerConfig[],
     private readonly opts: { root: string; version: string; trust?: McpTrust; connectTimeoutMs?: number },
   ) {
-    this.connections = servers.map((config) => ({ config, state: "untrusted", tools: [], stderr: [] }));
+    // "connecting" until start() has checked trust: calling them "untrusted" before that would let /mcp trust
+    // start your own servers a second time.
+    this.connections = servers.map((config) => ({ config, state: "connecting", tools: [], stderr: [] }));
   }
 
   /** Starts every trusted server. Project servers the user hasn't trusted wait for /mcp trust. */
@@ -92,6 +96,10 @@ export class McpManager {
       const trusted = await Promise.all(
         this.connections.map(async (c) => (this.opts.trust ? this.opts.trust.isTrusted(this.opts.root, c.config).catch(() => false) : true)),
       );
+      this.connections.forEach((c, i) => {
+        if (!trusted[i]) c.state = "untrusted";
+      });
+      this.onChange();
       await Promise.all(this.connections.filter((_, i) => trusted[i]).map((c) => this.connect(c)));
       this.rebuild();
       this.settled = true;
@@ -106,8 +114,11 @@ export class McpManager {
 
   /** Trusts the waiting project servers (remembered for this exact config) and starts them. */
   async trustAll(): Promise<McpServerStatus[]> {
-    const waiting = this.connections.filter((c) => c.state === "untrusted");
+    // Only once startup has said which servers are untrusted; and marked as starting before anything else is
+    // awaited, so a second /mcp trust right after this one finds nothing left to start.
     await this.ready;
+    const waiting = this.connections.filter((c) => c.state === "untrusted");
+    for (const c of waiting) c.state = "connecting";
     await this.opts.trust?.trust(
       this.opts.root,
       waiting.map((c) => c.config),
@@ -158,12 +169,17 @@ export class McpManager {
       c.client = client;
       await withTimeout(client.connect(transport), this.opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS, "connecting");
       const infos: McpToolInfo[] = [];
+      // A server can keep saying there's another page (the same cursor, or an endless list): stop at a cursor
+      // seen before or after MAX_PAGES, or startup would never settle.
+      const seen = new Set<string>();
       let cursor: string | undefined;
-      do {
+      for (let pages = 0; pages < MAX_PAGES; pages++) {
         const page = await withTimeout(client.listTools(cursor ? { cursor } : undefined), this.opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS, "listing tools");
         infos.push(...(page.tools as McpToolInfo[]));
         cursor = page.nextCursor;
-      } while (cursor);
+        if (!cursor || seen.has(cursor)) break;
+        seen.add(cursor);
+      }
       const timeout = (c.config.timeout ?? DEFAULT_CALL_TIMEOUT_S) * 1000;
       const call = (name: string, args: Record<string, unknown>, signal?: AbortSignal) =>
         client.callTool({ name, arguments: args }, undefined, {
@@ -174,7 +190,9 @@ export class McpManager {
           resetTimeoutOnProgress: true,
           onprogress: () => {},
         }) as Promise<McpCallResult>;
-      c.tools = infos.map((info) => makeMcpTool(c.config, info, call));
+      // A tool listed twice (a server repeating a page) is still one tool.
+      const unique = [...new Map(infos.map((info) => [info.name, info])).values()];
+      c.tools = unique.map((info) => makeMcpTool(c.config, info, call));
       c.state = "connected";
       // A server that exits later: its tools stay listed (the specs can't change), and calls fail with a clear error.
       client.onclose = () => {

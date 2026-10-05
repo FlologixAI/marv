@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -168,7 +168,30 @@ describe("a remote (http) server", () => {
   });
 });
 
+test("a server whose tool list never ends (the same next-page cursor forever) doesn't hang startup", async () => {
+  const m = manager([stdio("paging", { transport: { type: "stdio", command: process.execPath, args: [join(import.meta.dir, "fixtures", "mcp-paging-server.ts")] } })]);
+  const started = Date.now();
+  await m.start();
+  expect(Date.now() - started).toBeLessThan(5000);
+  expect(m.status()[0]).toMatchObject({ state: "connected", tools: ["mcp__paging__only"] });
+});
+
 describe("trust", () => {
+  test("/mcp trust while servers are still starting doesn't start yours a second time", async () => {
+    const connects = spyOn(McpManager.prototype as unknown as { connect: () => Promise<void> }, "connect");
+    try {
+      const trust = new McpTrust(join(root, "trust.json"));
+      const m = manager([stdio(), stdio("proj", { source: "project" })], { trust });
+      void m.start();
+      expect(m.untrusted()).toEqual([]); // still checking: nothing is "untrusted" yet
+      const started = await m.trustAll();
+      expect(started.map((s) => s.name)).toEqual(["proj"]);
+      expect(connects).toHaveBeenCalledTimes(2); // each server once
+    } finally {
+      connects.mockRestore();
+    }
+  });
+
   test("a project's server waits until it's trusted, then starts", async () => {
     const trust = new McpTrust(join(root, "trust.json"));
     const m = manager([stdio("proj", { source: "project" })], { trust });
