@@ -28,6 +28,8 @@ interface RunOptions {
   timeoutMs: number;
   signal?: AbortSignal;
   readOnly?: string[];
+  /** The home folder the sandbox hides (default: the user's); tests pass a fake one. */
+  home?: string;
 }
 
 const hasSetsid = Bun.which("setsid") !== null;
@@ -37,9 +39,8 @@ const hasSetsid = Bun.which("setsid") !== null;
  * Sandboxed: inside bwrap (see src/sandbox.ts). Not sandboxed: still with a
  * minimal environment, so API keys don't leak into commands.
  */
-export async function runCommand({ command, root, sandbox, network, timeoutMs, signal, readOnly }: RunOptions): Promise<CommandResult> {
+export async function runCommand({ command, root, sandbox, network, timeoutMs, signal, readOnly, home = homedir() }: RunOptions): Promise<CommandResult> {
   const path = process.env.PATH ?? "/usr/bin:/bin";
-  const home = homedir();
   const script = `exec 2>&1\n${command}`; // stderr into stdout, so the output stays in order
   const argv = sandbox
     ? ["bwrap", ...sandboxArgs({ root, home, network, path, readOnly }), "--", "bash", "-c", script]
@@ -50,7 +51,9 @@ export async function runCommand({ command, root, sandbox, network, timeoutMs, s
     cwd: root,
     stdin: "ignore",
     stdout: "pipe",
-    stderr: "ignore",
+    // The command's own stderr goes to stdout (`exec 2>&1`), so only what comes before it lands here:
+    // bwrap's own errors, e.g. when it can't set the sandbox up.
+    stderr: "pipe",
     env: sandbox ? { PATH: path } : { PATH: path, HOME: home, LANG: process.env.LANG ?? "C.UTF-8", TERM: "dumb" },
   });
 
@@ -75,16 +78,28 @@ export async function runCommand({ command, root, sandbox, network, timeoutMs, s
   signal?.addEventListener("abort", onAbort, { once: true });
   if (signal?.aborted) onAbort();
 
-  let output = "";
-  const decoder = new TextDecoder();
-  for await (const chunk of proc.stdout) {
-    if (output.length < MAX_CAPTURE) output += decoder.decode(chunk, { stream: true });
-  }
+  // Both at once, so neither pipe fills up and blocks the other.
+  let [output, errors] = await Promise.all([capture(proc.stdout), capture(proc.stderr)]);
   await proc.exited;
   clearTimeout(timer);
   signal?.removeEventListener("abort", onAbort);
 
-  return { output, exitCode: timedOut || aborted ? null : proc.exitCode, timedOut, aborted, timeoutMs };
+  const exitCode = timedOut || aborted ? null : proc.exitCode;
+  // Without this, a sandbox that never started looks like a command that silently failed.
+  if (sandbox && exitCode !== 0 && exitCode !== null && output.trim() === "" && errors.trim() !== "") {
+    output = `[sandbox failed to start: ${errors.trim()}]\n`;
+  }
+  return { output, exitCode, timedOut, aborted, timeoutMs };
+}
+
+/** A stream's text, up to MAX_CAPTURE characters (the rest is read and dropped). */
+async function capture(stream: ReadableStream<Uint8Array>): Promise<string> {
+  let text = "";
+  const decoder = new TextDecoder();
+  for await (const chunk of stream) {
+    if (text.length < MAX_CAPTURE) text += decoder.decode(chunk, { stream: true });
+  }
+  return text;
 }
 
 /** The command's result as the model sees it: output (start and end if long), then how it ended. */

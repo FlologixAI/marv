@@ -6,17 +6,19 @@
 //   - the home folder is replaced by an empty one, so secrets there (~/.ssh,
 //     ~/.marv with the API key, browser profiles, …) can't be read, except a
 //     few toolchain folders (bun, cargo, git config…), mounted read-only, with
-//     the credential files inside them hidden;
+//     the credential files inside them hidden (tokens inside whole config
+//     files, like ~/.gitconfig or ~/.cargo/config.toml, can't be);
 //   - the project folder is the only writable place (plus a private /tmp); a
 //     caller may add folders that are visible read-only, e.g. a worktree's .git;
-//   - bun's download cache is a throwaway one in that private /tmp, gone when
-//     the command ends: a shared or host cache would let one sandboxed command
-//     (e.g. an install's lifecycle scripts) plant packages for another context;
+//   - bun's download cache is a throwaway one in that private /tmp (RAM-backed),
+//     gone when the command ends: a shared or host cache would let one sandboxed
+//     command (e.g. an install's lifecycle scripts) plant packages for another
+//     context;
 //   - there's no network unless the command asked for it;
 //   - the environment starts empty, so API keys can't leak into commands.
 // Approval decides *whether* a command runs; the sandbox limits *what an
 // approved command can touch*.
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 
 /** Folders from the hidden home folder a command may need, mounted read-only. */
@@ -44,7 +46,21 @@ interface SandboxOptions {
   path: string;
   /** Extra folders the command may read but not change, e.g. a worktree's shared .git (so git status/diff/log work). */
   readOnly?: string[];
+  /** The file system, injectable for tests: whether a path exists (following symlinks), */
   exists?: (path: string) => boolean;
+  /** what the path itself is (not following a final symlink), */
+  stat?: (path: string) => "file" | "symlink" | null;
+  /** and where it really leads (throws if it leads nowhere). */
+  realpath?: (path: string) => string;
+}
+
+function lstatKind(path: string): "file" | "symlink" | null {
+  try {
+    const stats = lstatSync(path);
+    return stats.isSymbolicLink() ? "symlink" : stats.isFile() ? "file" : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The real path of an extra folder, after checking that mounting it is safe. bwrap follows symlinks, so the check must too. */
@@ -86,23 +102,60 @@ function realOrSelf(path: string): string {
 /**
  * Credential files inside the toolchain folders above, replaced by an empty file: an approved (or
  * auto-approved) command could otherwise print them into the conversation, which goes to the model
- * provider. Tokens written into ~/.gitconfig itself can't be hidden this way (it's a single file the
- * sandbox needs whole).
+ * provider. Tokens written into whole config files (~/.gitconfig, ~/.config/git/config,
+ * ~/.cargo/config.toml) can't be hidden this way: the sandbox needs those files whole.
  */
 const CREDENTIALS = [".cargo/credentials", ".cargo/credentials.toml", ".config/git/credentials"];
 
+/**
+ * Where to put /dev/null so the sandbox can't read a credential file, as paths inside the sandbox.
+ * A plain file is masked where it is. bwrap can't mount on a symlink (and fails before the command
+ * starts), so for a symlink (stow, chezmoi) the file it leads to is masked instead, wherever a
+ * toolchain mount makes it visible; a link leading anywhere else already reads as missing, because
+ * the home is hidden. Anything else is left alone.
+ */
+function credentialMasks(file: string, mounts: string[], stat: SandboxOptions["stat"] & {}, realpath: SandboxOptions["realpath"] & {}): string[] {
+  const kind = stat(file);
+  if (kind === "file") return [file];
+  if (kind !== "symlink") return [];
+  let target: string;
+  try {
+    target = realpath(file);
+  } catch {
+    return []; // dangling
+  }
+  if (stat(target) !== "file") return [];
+  const masks: string[] = [];
+  for (const mount of mounts) {
+    let source: string;
+    try {
+      source = realpath(mount); // what bwrap mounted there
+    } catch {
+      continue;
+    }
+    // The real path has no symlinks below the mount point, so this is never a symlink inside the sandbox.
+    if (contains(source, target)) masks.push(join(mount, relative(source, target)));
+  }
+  return masks;
+}
+
 /** bwrap's arguments (everything before `-- command`). Order matters: later mounts sit on top of earlier ones. */
-export function sandboxArgs({ root, home, network, path, readOnly = [], exists = existsSync }: SandboxOptions): string[] {
+export function sandboxArgs({
+  root,
+  home,
+  network,
+  path,
+  readOnly = [],
+  exists = existsSync,
+  stat = lstatKind,
+  realpath = realpathSync,
+}: SandboxOptions): string[] {
   const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", home];
-  for (const dir of TOOLCHAINS) {
-    const full = join(home, dir);
-    if (exists(full)) args.push("--ro-bind", full, full);
-  }
+  const mounts = TOOLCHAINS.map((dir) => join(home, dir)).filter((full) => exists(full));
+  for (const full of mounts) args.push("--ro-bind", full, full);
   // On top of the toolchain mounts, so the empty file hides the real one.
-  for (const file of CREDENTIALS) {
-    const full = join(home, file);
-    if (exists(full)) args.push("--ro-bind", "/dev/null", full);
-  }
+  const masks = new Set(CREDENTIALS.flatMap((file) => credentialMasks(join(home, file), mounts, stat, realpath)));
+  for (const mask of masks) args.push("--ro-bind", "/dev/null", mask);
   args.push("--bind", root, root);
   // Bind the resolved path (what was checked), at the path the caller gave.
   for (const dir of readOnly) args.push("--ro-bind", resolveExtra(dir, home, root), dir);
@@ -120,7 +173,8 @@ export function sandboxArgs({ root, home, network, path, readOnly = [], exists =
     // `bun install` needs a writable cache (it stages downloads inside it and fails at once if it can't).
     // Not the user's ~/.bun/install/cache, nor any cache that outlives the command: an install runs the
     // project's scripts, which could plant packages there for the user's own projects or another
-    // sandbox. Packages land in the project's node_modules, which stays.
+    // sandbox. Packages land in the project's node_modules, which stays. (The private /tmp is a tmpfs,
+    // so the cache takes RAM while the command runs.)
     "--setenv", "BUN_INSTALL_CACHE_DIR", "/tmp/bun-cache",
     "--chdir", root,
   );

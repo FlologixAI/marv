@@ -104,7 +104,8 @@ describe("sandboxArgs", () => {
   test("credential files inside the read-only toolchain folders are hidden", () => {
     const secrets = ["/home/me/.cargo/credentials", "/home/me/.cargo/credentials.toml", "/home/me/.config/git/credentials"];
     const exists = (p: string) => [".cargo", ".config/git"].some((dir) => p.endsWith(dir)) || secrets.includes(p);
-    const args = sandboxArgs({ ...base, exists, network: false });
+    const stat = (p: string) => (secrets.includes(p) ? ("file" as const) : null);
+    const args = sandboxArgs({ ...base, exists, stat, network: false });
     const joined = args.join(" ");
     for (const secret of secrets) {
       expect(joined).toContain(`--ro-bind /dev/null ${secret}`);
@@ -112,7 +113,52 @@ describe("sandboxArgs", () => {
       expect(args.lastIndexOf(secret)).toBeGreaterThan(Math.max(args.lastIndexOf("/home/me/.cargo"), args.lastIndexOf("/home/me/.config/git")));
     }
     // Ones that don't exist aren't mounted (bwrap would have to create them).
-    expect(sandboxArgs({ ...base, exists: (p) => p.endsWith(".cargo"), network: false }).join(" ")).not.toContain("/dev/null /home/me");
+    expect(sandboxArgs({ ...base, exists: (p) => p.endsWith(".cargo"), stat: () => null, network: false }).join(" ")).not.toContain("/dev/null");
+  });
+
+  describe("symlinked credential files (stow, chezmoi)", () => {
+    // bwrap refuses to mount on a symlink, so masking the link itself would stop every command from starting.
+    const exists = (p: string) => p.endsWith(".cargo") || p.endsWith(".config/git");
+    const sandbox = (files: Record<string, "file" | "symlink">, links: Record<string, string>) =>
+      sandboxArgs({
+        ...base,
+        network: false,
+        exists,
+        stat: (p) => files[p] ?? null,
+        realpath: (p) => links[p] ?? p,
+      }).join(" ");
+
+    test("pointing inside a mounted toolchain folder: the target is masked", () => {
+      const args = sandbox(
+        { "/home/me/.cargo/credentials": "symlink", "/home/me/.cargo/credentials.toml": "file" },
+        { "/home/me/.cargo/credentials": "/home/me/.cargo/credentials.toml" },
+      );
+      expect(args).toContain("--ro-bind /dev/null /home/me/.cargo/credentials.toml");
+      expect(args).not.toContain("/dev/null /home/me/.cargo/credentials ");
+    });
+
+    test("into a toolchain folder that is itself a symlink: masked where the sandbox mounts it", () => {
+      const args = sandbox(
+        { "/home/me/.config/git/credentials": "symlink", "/home/me/dotfiles/git/secret": "file" },
+        { "/home/me/.config/git": "/home/me/dotfiles/git", "/home/me/.config/git/credentials": "/home/me/dotfiles/git/secret" },
+      );
+      expect(args).toContain("--ro-bind /dev/null /home/me/.config/git/secret");
+      expect(args).not.toContain("/dev/null /home/me/.config/git/credentials");
+    });
+
+    test("pointing outside the mounted folders: skipped (the hidden home already makes it read as missing)", () => {
+      const args = sandbox(
+        { "/home/me/.cargo/credentials.toml": "symlink", "/home/me/dotfiles/cargo/credentials.toml": "file" },
+        { "/home/me/.cargo/credentials.toml": "/home/me/dotfiles/cargo/credentials.toml" },
+      );
+      expect(args).not.toContain("/dev/null");
+    });
+
+    test("dangling, or pointing at a folder: skipped", () => {
+      expect(sandbox({ "/home/me/.cargo/credentials": "symlink" }, { "/home/me/.cargo/credentials": "/home/me/.cargo/registry" })).not.toContain("/dev/null");
+      const dangling = sandboxArgs({ ...base, network: false, exists, stat: () => "symlink", realpath: () => { throw new Error("ENOENT"); } });
+      expect(dangling.join(" ")).not.toContain("/dev/null");
+    });
   });
 
   test("the project is mounted after the home folder is hidden (so it stays visible)", () => {
@@ -179,6 +225,35 @@ describe("runCommand", () => {
       const result = await sandboxed(`ls -A ${homedir()}/.ssh ${homedir()}/.marv 2>&1; echo done`);
       expect(result.output).toContain("No such file");
       expect(result.output).not.toContain("config.json");
+    });
+
+    test("a symlinked credential file doesn't stop commands from starting, and stays hidden", async () => {
+      // A fake home with a stow-style link pointing outside ~/.cargo, next to a plain credentials file.
+      const home = join(root, "home");
+      mkdirSync(join(home, ".cargo"), { recursive: true });
+      mkdirSync(join(home, "dotfiles"));
+      await writeFile(join(home, "dotfiles", "cargo-credentials"), "token = \"SECRET\"");
+      await writeFile(join(home, ".cargo", "credentials.toml"), "token = \"SECRET\"");
+      symlinkSync(join(home, "dotfiles", "cargo-credentials"), join(home, ".cargo", "credentials"));
+      const project = join(root, "project");
+      mkdirSync(project);
+      const result = await run("cat ~/.cargo/credentials ~/.cargo/credentials.toml; echo started", { sandbox: true, root: project, home });
+      expect(result.output).toContain("started");
+      expect(result.output).not.toContain("SECRET");
+    });
+
+    test("when bwrap itself can't start the sandbox, its error is shown", async () => {
+      // A read-only extra given as a symlink inside the project: bwrap won't mount on a symlink.
+      const elsewhere = await mkdtemp(join(tmpdir(), "marv-elsewhere-"));
+      try {
+        symlinkSync(elsewhere, join(root, "link"));
+        const result = await run("echo never", { sandbox: true, readOnly: [join(root, "link")] });
+        expect(result.exitCode).not.toBe(0);
+        expect(result.output).toStartWith("[sandbox failed to start: bwrap: ");
+        expect(result.output).toContain("symlink");
+      } finally {
+        await rm(elsewhere, { recursive: true, force: true });
+      }
     });
 
     test("has no network unless asked", async () => {
