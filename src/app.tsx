@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, useApp, useInput, useWindowSize, type DOMElement } from "ink";
-import { agentArgs, answerAllCalls, DEFAULT_MAX_STEPS, runAgent } from "./agent.ts";
+import { agentArgs } from "./agent.ts";
 import { applyEvent, createAgentLog, type AgentLog } from "./agent-log.ts";
 import { GENERAL_PURPOSE, type AgentType } from "./agents.ts";
 import { copyToClipboard } from "./clipboard.ts";
@@ -16,24 +16,21 @@ import {
   type FileConfig,
   type ProviderId,
 } from "./config/config.ts";
-import { classifyReply } from "./feedback.ts";
-import { runGit } from "./git.ts";
 import { projectKey, shortenHome } from "./paths.ts";
 import { mouse, type MouseEvent } from "./mouse.ts";
+import { configFactory } from "./provider/factory.ts";
 import { createProvider } from "./provider/index.ts";
 import { listModels, type ModelInfo } from "./provider/models.ts";
-import type { ChatTurn, Provider, Usage } from "./provider/types.ts";
+import type { Provider, Usage } from "./provider/types.ts";
 import { selection } from "./selection.ts";
-import { systemPrompt } from "./prompt.ts";
-import { addUsage, costText, emptyTotals, tokens, type Prices, type Totals } from "./usage.ts";
-import { COMPACT_AT, compactedHistory, summarize } from "./compact.ts";
+import { costText, emptyTotals, tokens, type Totals } from "./usage.ts";
 import { addMemory, findMemory, loadMemory, removeMemory, type Memories, type MemoryPaths } from "./memory.ts";
-import { newSession, timeAgo, type SavedSession, type SessionStore, type SessionSummary } from "./sessions.ts";
+import { MarvSession, type CompactResult, type Resumed } from "./session.ts";
+import { timeAgo, type SessionStore, type SessionSummary } from "./sessions.ts";
 import { skillMessage, type Skill } from "./skills.ts";
-import { AgentRecorder, type Trajectory, type TrajectoryRecord, type TrajectoryStore } from "./trajectory.ts";
-import { isParallelCall, runTool, tools as builtinTools, toolSpecsFor } from "./tools/index.ts";
+import type { TrajectoryStore } from "./trajectory.ts";
 import type { McpManager, McpServerStatus } from "./mcp/manager.ts";
-import type { AgentHost, AgentProgress, ApprovalRequest, Decision } from "./tools/types.ts";
+import type { AgentProgress, ApprovalRequest, Decision } from "./tools/types.ts";
 import type { CommandAction } from "./commands/index.ts";
 import type { Message } from "./types.ts";
 import { AgentView, AgentViewHeader } from "./ui/AgentView.tsx";
@@ -66,13 +63,8 @@ function describeUntrusted(s: McpServerStatus): string {
   return `${s.name} (${s.target})${extras.length ? `, which ${extras.join(" and ")}` : ""}`;
 }
 
-/** The project's commit, so a trajectory says what code a run started from. */
-function gitHead(root: string): string | undefined {
-  const head = runGit(root, ["rev-parse", "HEAD"], { timeoutMs: 2000 });
-  return head.ok ? head.out.trim() : undefined;
-}
 // Defaults defined once, so they're the same objects on every render (the
-// system prompt and send() depend on them).
+// effects that report problems depend on them).
 const DEFAULT_AGENTS: AgentType[] = [GENERAL_PURPOSE];
 const NO_PROBLEMS: string[] = [];
 
@@ -152,72 +144,31 @@ export function App({
   const { columns, rows } = useWindowSize();
   const [phase, setPhase] = useState<"splash" | "main">(splashMs > 0 ? "splash" : "main");
 
-  // Config: the saved file + env overrides → the Config we run with → a Provider.
+  // Config: the saved file + env overrides → the Config we run with (the session makes the Provider from it).
   const [file, setFile] = useState(initialFile);
   const config = useMemo(() => resolveConfig(file, env), [file, env]);
   const [setupMode, setSetupMode] = useState<SetupMode>(() => (needsSetup(initialFile, config) ? "first-run" : null));
 
-  // What the user sees (includes help text, errors, the welcome banner)…
+  // What the user sees (includes help text, errors, the welcome banner). What the model sees is the session's
+  // conversation (src/session.ts): Marv's own notices never reach it.
   const [items, setItems] = useState<TranscriptItem[]>([{ kind: "welcome", id: "welcome-0" }]);
-  // …versus what the model sees: user and assistant turns, tool calls and results.
-  // Only ever appended to (until /clear): see the prompt cache note in agent.ts.
-  const conversation = useRef<ChatTurn[]>([]);
-  // The saved session this conversation is written to (a new one after /clear).
+  // Read when the session saves, which can be after unmounting (on the way out).
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const configRef = useRef(config);
   configRef.current = config;
-  const sessionRef = useRef<SavedSession>(newSession(root, config));
-  // The trajectory log for the current session (one file per session), the
-  // session whose "session" record this process wrote, and the latest turn
-  // (what /good, /bad, /label and the next message's implicit feedback rate).
-  const trajectoryRef = useRef<Trajectory | null>(null);
-  const sessionLogged = useRef<string | null>(null);
-  const lastTurn = useRef<{ id: string; session: string } | null>(null);
   const [picker, setPicker] = useState<SessionSummary[] | null>(null);
   // marv -c: the last session is still loading.
   const [loadingSession, setLoadingSession] = useState(false);
 
-  // Built once per session, so they're byte-identical in every request.
-  const specs = useMemo(() => toolSpecsFor({ hasSkills: skills.length > 0 }), [skills]);
-  // Memory as of the start of this conversation (reloaded by /clear), so the system prompt stays fixed within it.
+  // Memory as of the start of this conversation, for the welcome banner (the session reloads it on /clear).
   const [memories, setMemories] = useState<Memories | undefined>(memory?.initial);
-  const system = useMemo(
-    () => systemPrompt({ cwd, tools: specs.map((t) => t.name), instructions, skills, memory: memories, agents, mcp: Boolean(mcp?.status().length) }),
-    [cwd, specs, instructions, skills, memories, agents, mcp],
-  );
-  // What the model is offered: the built-in tools, then the MCP servers' (fixed once they've started, see McpManager).
-  const offered = useCallback(
-    () => (mcp ? { specs: [...specs, ...mcp.specs], tools: [...builtinTools, ...mcp.tools] } : { specs, tools: builtinTools }),
-    [specs, mcp],
-  );
   // Skills show up in the / menu next to the built-in commands.
   const menu = useMemo(() => [...commands, ...skills.map(({ name, description }) => ({ name, description }))], [skills]);
-  // Token counts from the latest request (how full the context is)…
+  // The session's numbers, for the status bar: the latest request's tokens (how full the context is), and the
+  // whole session's (they survive /clear: that's money spent).
   const [usage, setUsage] = useState<Usage | null>(null);
-  // …and for the whole session (survives /clear: that's money spent).
   const [totals, setTotals] = useState<Totals>(emptyTotals);
-  // The model's context window and prices, looked up once per model (OpenRouter's list has them).
-  const [modelInfo, setModelInfo] = useState<{ id: string; context?: number; prices: Prices; reasoning?: ModelInfo["reasoning"] } | null>(null);
-  useEffect(() => {
-    if (config.provider !== "openrouter") return;
-    let cancelled = false;
-    loadModels(config).then(
-      (models) => {
-        const m = models.find((model) => model.id === config.model);
-        if (!cancelled && m) setModelInfo({ id: m.id, context: m.context, prices: m, reasoning: m.reasoning });
-      },
-      () => {}, // offline: no context size or price estimates, that's all
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [config, loadModels]);
-  const info = modelInfo?.id === config.model ? modelInfo : null;
-  // Remade once the model list says whether this model's reasoning can be turned off (/think on OpenRouter).
-  const reasoning = info?.reasoning;
-  const provider = useMemo(() => makeProvider(config, reasoning ? { reasoning } : undefined), [makeProvider, config, reasoning]);
-  const contextLength = provider.contextLength ?? info?.context;
-  const usageRef = useRef(usage);
-  usageRef.current = usage;
   const [compacting, setCompacting] = useState(false);
   // What a turn is waiting for before its first request (MCP servers starting), shown in place of "Thinking…".
   const [waitingFor, setWaitingFor] = useState<string | null>(null);
@@ -261,17 +212,15 @@ export function App({
     const [head] = approvals.current;
     setApproval(head ? { head, waiting: approvals.current.length - 1 } : null);
   }, []);
-  // "Yes, don't ask again": scopes approved for the rest of this session.
-  const alwaysAllowed = useRef(new Set<string>());
 
+  // The session asks here for each call that needs a yes. "Don't ask again" scopes are the session's: it answers
+  // those itself, so they never reach this queue.
   const approve = useCallback(
     (request: ApprovalRequest): Promise<Decision> =>
-      alwaysAllowed.current.has(request.scope.key)
-        ? Promise.resolve("yes")
-        : new Promise((resolve) => {
-            approvals.current.push({ id: nextApprovalId.current++, request, resolve });
-            showApprovals();
-          }),
+      new Promise((resolve) => {
+        approvals.current.push({ id: nextApprovalId.current++, request, resolve });
+        showApprovals();
+      }),
     [showApprovals],
   );
   const decide = useCallback(
@@ -280,9 +229,8 @@ export function App({
       if (!head) return;
       let remaining = rest;
       if (decision === "always") {
+        // The session remembers the scope from now on; requests already waiting in it are covered too.
         const key = head.request.scope.key;
-        alwaysAllowed.current.add(key);
-        // Requests already waiting in the same scope are covered too.
         for (const pending of rest) if (pending.request.scope.key === key) pending.resolve("yes");
         remaining = rest.filter((pending) => pending.request.scope.key !== key);
       }
@@ -309,7 +257,8 @@ export function App({
   const [thinking, setThinking] = useState("");
   const [confirmExit, setConfirmExit] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  // Set while the session works (a turn, or /compact): Esc and ctrl+c stop it through this.
+  const abortRef = useRef<{ abort(): void } | null>(null);
   const nextId = useRef(1);
   // Bumped on every submit so the transcript jumps back to the newest message.
   const [followKey, setFollowKey] = useState(0);
@@ -322,169 +271,124 @@ export function App({
     return id;
   }, []);
 
-  /** This session's trajectory log, or null when logging is off. */
-  const trajectory = useCallback((): Trajectory | null => {
-    if (!trajectories || !configRef.current.trajectories) return null;
-    const id = sessionRef.current.id;
-    if (trajectoryRef.current?.session !== id) {
-      const log = trajectories.open(root, id);
-      log.onError = (text) => addMessage({ role: "system", text, isError: true });
-      trajectoryRef.current = log;
-    }
-    return trajectoryRef.current;
-  }, [trajectories, root, addMessage]);
-
   const updateMessage = useCallback((id: number, patch: Partial<Message>) => {
     setItems((prev) =>
       prev.map((item) => (item.kind === "message" && item.message.id === id ? { ...item, message: { ...item.message, ...patch } } : item)),
     );
   }, []);
 
+  // The session: the conversation, the agent loop, tools, MCP, compaction, trajectories and saving
+  // (src/session.ts). Made once from the props; changed settings reach it through configure() below.
+  const [, setSessionVersion] = useState(0);
+  const [session] = useState(
+    () =>
+      new MarvSession({
+        root,
+        cwd,
+        provider: configFactory(config, makeProvider, loadModels),
+        version,
+        instructions,
+        skills,
+        agents,
+        memory,
+        mcp,
+        approve,
+        sandbox: config.sandbox,
+        yolo: config.yolo,
+        sessions,
+        trajectories,
+        logTrajectories: config.trajectories,
+        worktreesDir,
+        transcript: () => itemsRef.current.flatMap((item) => (item.kind === "message" ? [item.message] : [])),
+        onChange: () => setSessionVersion((v) => v + 1),
+        onWarning: (text) => addMessage({ role: "system", text, isError: true }),
+      }),
+  );
+  // Settings changed (setup, /model, /think, /sandbox, /yolo, /trajectories): the session uses them from its next turn.
+  const configured = useRef(config);
+  useEffect(() => {
+    if (configured.current === config) return;
+    configured.current = config;
+    session.configure({
+      provider: configFactory(config, makeProvider, loadModels),
+      sandbox: config.sandbox,
+      yolo: config.yolo,
+      trajectories: config.trajectories,
+    });
+    setSessionVersion((v) => v + 1);
+  }, [config, session, makeProvider, loadModels]);
+  // What the model list said about the model (OpenRouter), and its context window.
+  const info = session.modelInfo;
+  const contextLength = session.contextLength;
+
+  /** The status bar's numbers, from the session. */
+  const syncUsage = useCallback(() => {
+    const { last, totals } = session.usage();
+    setUsage(last ?? null);
+    setTotals(totals);
+  }, [session]);
+
   const clearTranscript = useCallback(() => {
     selection.reset();
     agentLogs.current.clear();
     setViewing(null);
-    // A new conversation picks up memories saved during the last one.
-    if (memory) void loadMemory(memory.paths).then(setMemories);
-    sessionRef.current = newSession(root, configRef.current);
-    conversation.current = [];
+    // A new conversation (and session file), with the memories saved during the last one.
+    void session.clear().then(() => setMemories(session.memory));
     setUsage(null);
     setItems([{ kind: "welcome", id: "welcome-0" }]);
-  }, [memory]);
+  }, [session]);
 
-  // Adds a request's tokens and cost to the session's totals.
-  const countUsage = useCallback(
-    (used: Usage) => {
-      const local = configRef.current.provider === "ollama";
-      setTotals((t) => ({ ...addUsage(t, used, info?.prices), local: (t.requests === 0 || t.local) && local }));
-    },
-    [info],
-  );
-
-  /**
-   * Summarizes the conversation and continues from the summary (see
-   * src/compact.ts). The transcript is untouched; only what the model sees
-   * changes. Returns whether it compacted.
-   */
-  // How a compaction ended: send() stops the turn when the user stopped it, and goes on otherwise.
-  const compact = useCallback(
-    async (focus: string | undefined, automatic: boolean): Promise<"compacted" | "stopped" | "failed"> => {
-      if (conversation.current.length === 0) {
-        addMessage({ role: "system", text: "Nothing to compact yet." });
-        return "failed";
-      }
-      const before = usageRef.current;
-      const controller = new AbortController();
-      abortRef.current = controller;
-      setStreaming("");
-      setCompacting(true);
-      const result = await summarize({
-        provider,
-        history: conversation.current,
-        system,
-        tools: offered().specs,
-        signal: controller.signal,
-        focus,
-        onUsage: countUsage,
-      });
-      abortRef.current = null;
-      setStreaming(null);
-      setCompacting(false);
-
-      if ("error" in result) {
-        if (controller.signal.aborted) {
-          // Esc meant "stop": before a message, that's the message too (it would run on the nearly full context).
+  /** Says how a compaction went (automatic: before a message, because the context was nearly full). */
+  const reportCompaction = useCallback(
+    (result: CompactResult, automatic: boolean) => {
+      if (!result.compacted) {
+        if (result.reason === "empty") addMessage({ role: "system", text: "Nothing to compact yet." });
+        // Stopped before a message: that's the message too (it would run on the nearly full context).
+        else if (result.reason === "stopped")
           addMessage({ role: "system", text: automatic ? "Stopped: nothing was compacted, and your message wasn't sent." : "Compaction stopped; nothing changed." });
-          return "stopped";
-        }
-        addMessage({ role: "system", isError: true, text: `Couldn't compact the conversation: ${result.error}` });
-        return "failed";
+        else addMessage({ role: "system", isError: true, text: `Couldn't compact the conversation: ${result.error}` });
+        return;
       }
-      conversation.current = compactedHistory(result.summary);
-      // From here the model sees the summary, not the turns before it: the trajectory needs it to say what the model saw.
-      trajectory()?.write({ type: "compact", ...(lastTurn.current ? { turn: lastTurn.current.id } : {}), summary: result.summary });
-      setUsage(null);
-      const usedBefore = before ? before.promptTokens + before.completionTokens : undefined;
-      const why = automatic && usedBefore && contextLength ? ` (the context was ${Math.round((100 * usedBefore) / contextLength)}% full)` : "";
+      const usedBefore = result.tokensBefore;
+      const context = session.contextLength;
+      const why = automatic && usedBefore && context ? ` (the context was ${Math.round((100 * usedBefore) / context)}% full)` : "";
       const size = usedBefore ? `: ${tokens(usedBefore)} → about ${tokens(Math.round(result.summary.length / 4))} tokens` : "";
       addMessage({
         role: "system",
         text: `✻ Compacted the conversation${why}${size}. Marv continues from a summary; your transcript is unchanged.`,
       });
-      return "compacted";
     },
-    [provider, system, offered, countUsage, contextLength, addMessage, trajectory],
+    [session, addMessage],
+  );
+
+  /** /compact [focus]: summarizes the conversation now (src/compact.ts). The transcript is untouched; Esc cancels it. */
+  const compact = useCallback(
+    async (focus: string | undefined) => {
+      abortRef.current = { abort: () => session.interrupt() };
+      setStreaming("");
+      setCompacting(true);
+      let result: CompactResult;
+      try {
+        result = await session.compact(focus);
+      } catch (err) {
+        result = { compacted: false, reason: "failed", error: (err as Error).message };
+      }
+      abortRef.current = null;
+      setStreaming(null);
+      setCompacting(false);
+      syncUsage();
+      reportCompaction(result, false);
+    },
+    [session, syncUsage, reportCompaction],
   );
 
   const send = useCallback(
     // `forModel`: what the model gets, when it differs from what the user typed (a /skill).
     async (text: string, forModel = text) => {
       addMessage({ role: "user", text });
-      // MCP servers still starting: their tools must be in place before the first request (the list can't change
-      // after). The turn is busy from here, so a second message can't start a second run on the same history, and
-      // Esc or ctrl+c (they abort whatever abortRef holds) cancel the wait.
-      if (mcp && !mcp.settled) {
-        const waiting = new AbortController();
-        abortRef.current = waiting;
-        setStreaming("");
-        setWaitingFor("Waiting for MCP servers to start…");
-        const cancelled = new Promise<"cancelled">((resolve) => waiting.signal.addEventListener("abort", () => resolve("cancelled"), { once: true }));
-        // A failed start still settles: the turn goes on with whatever tools there are.
-        const outcome = await Promise.race([mcp.ready.then(() => "ready" as const, () => "ready" as const), cancelled]);
-        setWaitingFor(null);
-        if (outcome === "cancelled") {
-          abortRef.current = null;
-          setStreaming(null);
-          addMessage({ role: "system", text: "Interrupted." });
-          return;
-        }
-      }
-      const { specs: turnSpecs, tools: turnTools } = offered();
-      // Trajectory: the session's setup (once), what this message says about
-      // the last turn, and the new turn. Everything below records into it.
-      const log = trajectory();
-      const turn = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-      if (log) {
-        if (sessionLogged.current !== log.session) {
-          const { provider: providerId, model } = configRef.current;
-          log.write({ type: "session", root, marv: version, provider: providerId, model, system, tools: turnSpecs.map((t) => t.name), git: gitHead(root) });
-          sessionLogged.current = log.session;
-        }
-        const previous = lastTurn.current;
-        const signal = forModel === text ? classifyReply(text) : null; // a /skill's arguments aren't a reply
-        if (previous?.session === log.session && signal) {
-          log.write({ type: "feedback", turn: previous.id, score: signal.score, source: "implicit", phrase: signal.phrase });
-        }
-        log.write({
-          type: "turn_start",
-          turn,
-          text,
-          ...(forModel !== text ? { forModel } : {}),
-          provider: config.provider,
-          model: config.model,
-          yolo: config.yolo,
-          sandbox: config.sandbox,
-        });
-      }
-      // Only a logged turn can be rated: feedback for a turn the file never recorded would be an orphan.
-      lastTurn.current = log ? { id: turn, session: log.session } : null;
-      const record = (r: TrajectoryRecord) => log?.write(r);
-      const main = new AgentRecorder(record, { turn, agent: "main" });
-      // Subagents' recorders, by call id; ids are unique within the turn.
-      const subRecorders = new Map<string, AgentRecorder>();
-      let subagents = 0;
-      // Nearly out of context: summarize first, so this message (and what follows) fits.
-      const last = usageRef.current;
-      if (contextLength && last && last.promptTokens + last.completionTokens >= contextLength * COMPACT_AT) {
-        if ((await compact(undefined, true)) === "stopped") {
-          main.finish("aborted");
-          return;
-        }
-      }
-      conversation.current.push({ role: "user", text: forModel });
-
-      const controller = new AbortController();
-      abortRef.current = controller;
+      // Busy from here, so a second message can't start a second turn; Esc or ctrl+c (they abort whatever
+      // abortRef holds) stop this one, also while it waits for MCP servers or compacts.
+      abortRef.current = { abort: () => session.interrupt() };
       setStreaming("");
 
       // Per step: the reply streaming in, and any reasoning before it.
@@ -516,6 +420,8 @@ export function App({
       const logs = new Map<string, AgentLog>();
       let logChanged = false;
       const isViewed = (log: AgentLog) => viewingRef.current !== null && agentLogs.current.get(viewingRef.current) === log;
+      // A compaction the user stopped has already said the message wasn't sent.
+      let compactionStopped = false;
       // Tokens accumulate in `reply`/`thought` and reach React in batches.
       let flushTimer: ReturnType<typeof setTimeout> | null = null;
       const flush = () => {
@@ -535,62 +441,39 @@ export function App({
         if (over) return;
         flushTimer ??= setTimeout(flush, STREAM_FLUSH_MS);
       };
-      // What the agent tool needs to start subagents. Only the main agent gets
-      // one; what a subagent does reaches this conversation only as its tool result.
-      const agentHost: AgentHost = {
-        agents,
-        cwd,
-        instructions,
-        worktreesDir,
-        providerFor: (model) => (model ? makeProvider({ ...configRef.current, model }) : provider),
-        onUsage: countUsage,
-        onProgress: (callId, p) => {
-          if (over) return;
-          progress.set(callId, p);
-          steps.set(callId, p.steps);
-          scheduleFlush();
-        },
-        onEvent: (callId, event) => {
-          subRecorders.get(callId)?.event(event);
-          const log = logs.get(callId);
-          if (over || !log) return;
-          applyEvent(log, event);
-          // Only the open view costs a render; the others just keep their log.
-          if (isViewed(log)) {
-            logChanged = true;
-            scheduleFlush();
-          }
-        },
-      };
 
       try {
-        for await (const event of runAgent({
-          provider,
-          history: conversation.current,
-          system,
-          tools: turnSpecs,
-          runTool: (call) =>
-            runTool(
-              call,
-              { root, signal: controller.signal, approve, sandbox: config.sandbox, yolo: config.yolo, skills, memory: memory?.paths, agentHost },
-              turnTools,
-            ),
-          signal: controller.signal,
-          isParallel: isParallelCall,
-          // At the step limit, ask (in the approval queue, so Esc still stops everything) instead of stopping dead.
-          onLimit: async (steps) =>
-            (await approve({
-              tool: "continue",
-              label: `${steps} steps`,
-              preview: {
-                title: `Keep going? Marv has taken ${steps} steps on this request without finishing`,
-                note: `it asks again after another ${DEFAULT_MAX_STEPS}; no stops it here, and you can say what to do next`,
-              },
-              scope: { key: "continue", description: "the step limit" },
-            })) !== "no",
-        })) {
-          main.event(event);
+        for await (const event of session.send(text, { forModel })) {
           switch (event.type) {
+            case "status":
+              setWaitingFor(event.status === "waiting_for_mcp" ? "Waiting for MCP servers to start…" : null);
+              setCompacting(event.status === "compacting");
+              break;
+            case "compaction":
+              setCompacting(false);
+              syncUsage();
+              reportCompaction(event.result, true);
+              compactionStopped = !event.result.compacted && event.result.reason === "stopped";
+              break;
+            case "subagent_progress":
+              if (over) break;
+              progress.set(event.callId, event.progress);
+              steps.set(event.callId, event.progress.steps);
+              scheduleFlush();
+              break;
+            case "subagent": {
+              // Subagents' requests count toward the session's tokens and cost.
+              if (event.event.type === "usage") setTotals(session.usage().totals);
+              const log = logs.get(event.callId);
+              if (over || !log) break;
+              applyEvent(log, event.event);
+              // Only the open view costs a render; the others just keep their log.
+              if (isViewed(log)) {
+                logChanged = true;
+                scheduleFlush();
+              }
+              break;
+            }
             case "thinking_delta":
               thought += event.text;
               scheduleFlush();
@@ -621,11 +504,7 @@ export function App({
               toolLines.set(event.call.id, { label: event.label, line });
               logs.delete(event.call.id);
               if (event.call.name === "agent") {
-                const args = agentArgs(event.call.arguments);
-                const subagent = `${turn}.${++subagents}`;
-                record({ type: "subagent_start", turn, agent: "main", subagent, call: event.call.id, agentType: args.type, description: args.description, prompt: args.prompt, isolation: args.isolation });
-                subRecorders.set(event.call.id, new AgentRecorder(record, { turn, agent: subagent }));
-                const log = createAgentLog({ title: event.label, prompt: args.prompt });
+                const log = createAgentLog({ title: event.label, prompt: agentArgs(event.call.arguments).prompt });
                 logs.set(event.call.id, log);
                 agentLogs.current.set(`msg-${line}`, log);
               }
@@ -642,9 +521,6 @@ export function App({
               const summary = result.isError && result.summary === "error" ? result.output.split("\n")[0] : result.summary;
               const status = result.declined ? "declined" : result.isError ? "error" : "done";
               if (entry) updateMessage(entry.line, { tool: { label: result.label, status, summary, steps: callSteps } });
-              // A subagent that failed before its loop started never sent done.
-              subRecorders.get(event.call.id)?.finish(result.isError ? "error" : "end");
-              subRecorders.delete(event.call.id);
               const log = logs.get(event.call.id);
               if (log) {
                 // It may have ended before its loop started (a failed check): either way it's over now.
@@ -658,8 +534,7 @@ export function App({
               break;
             }
             case "usage":
-              setUsage(event.usage);
-              countUsage(event.usage);
+              syncUsage();
               break;
             case "error":
               addMessage({ role: "system", text: event.message, isError: true });
@@ -669,61 +544,37 @@ export function App({
               if (event.reason === "declined") addMessage({ role: "system", text: "Stopped. Tell Marv what to do instead." });
               if (event.reason === "length") addMessage({ role: "system", text: "The reply was cut off: it hit the model's output limit." });
               break;
+            case "turn_end":
+              // Stopped before the loop began: while waiting for MCP servers (or compacting, which said so itself).
+              if (event.reason === "interrupted" && !compactionStopped) addMessage({ role: "system", text: "Interrupted." });
+              break;
           }
         }
       } catch (err) {
+        // Drawing an event failed; leaving the loop has already stopped the turn.
         addMessage({ role: "system", text: `Error: ${(err as Error).message}`, isError: true });
       } finally {
         over = true;
-        for (const sub of subRecorders.values()) sub.finish("interrupted");
-        main.finish("error"); // only if the loop threw: otherwise its done already ended the turn
         if (flushTimer) clearTimeout(flushTimer);
-        // The loop stopped early (it threw): close the entries it never ended.
+        // The turn ended early: close the entries it never ended.
         for (const [callId, entry] of toolLines) {
           if (!ended.has(callId)) updateMessage(entry.line, { tool: { label: entry.label, status: "error", summary: "interrupted", steps: steps.get(callId) } });
         }
         for (const log of logs.values()) log.running = false;
         if ([...logs.values()].some(isViewed)) setLogVersion((v) => v + 1);
         noteThought();
-        // Stop anything still running (a no-op after a normal end): if the loop
-        // ended early (an exception), subagents still running in a parallel
-        // group would otherwise carry on unseen, and could still ask for
-        // approvals. Anything already queued belongs to this run, so it's declined.
-        controller.abort();
+        // Anything still queued belongs to this turn, which is over: declined.
         declineAll();
         abortRef.current = null;
         setStreaming(null);
+        setWaitingFor(null);
+        setCompacting(false);
         setToolsRunning(0);
         setAgentsRunning(0);
+        syncUsage();
       }
     },
-    [
-      provider,
-      addMessage,
-      updateMessage,
-      system,
-      offered,
-      mcp,
-      skills,
-      root,
-      approve,
-      declineAll,
-      config.sandbox,
-      config.yolo,
-      config.provider,
-      config.model,
-      trajectory,
-      version,
-      countUsage,
-      compact,
-      contextLength,
-      agents,
-      cwd,
-      instructions,
-      worktreesDir,
-      makeProvider,
-      memory,
-    ],
+    [session, addMessage, updateMessage, declineAll, syncUsage, reportCompaction],
   );
 
   // /memory, /remember, /forget: you editing Marv's memory directly (no approval needed).
@@ -826,7 +677,7 @@ export function App({
         void forgetNote(action.text);
         break;
       case "compact":
-        void compact(action.focus, false);
+        void compact(action.focus);
         break;
       case "resume":
         void openPicker();
@@ -883,14 +734,12 @@ export function App({
 
   /** /good, /bad, /label: feedback on the latest turn of this session, in its trajectory. */
   const rateLastTurn = ({ score, note, labels }: Extract<CommandAction, { type: "feedback" }>) => {
-    const log = trajectory();
-    const turn = lastTurn.current;
-    if (!log) {
+    const outcome = session.rate({ score, note, labels });
+    if (outcome === "off") {
       addMessage({ role: "system", text: "Trajectory logging is off, so there's nothing to rate (/trajectories on).", isError: true });
-    } else if (!turn || turn.session !== log.session) {
+    } else if (outcome === "nothing") {
       addMessage({ role: "system", text: "Nothing to rate yet: ratings apply to the last turn of this conversation.", isError: true });
     } else {
-      log.write({ type: "feedback", turn: turn.id, score, source: "explicit", ...(labels ? { labels } : {}), ...(note ? { note } : {}) });
       const what = labels ? `Labeled the last turn: ${labels.join(", ")}` : `Rated the last turn: ${score > 0 ? "good" : "bad"}`;
       addMessage({ role: "system", text: `${what}${note ? ` (${note})` : ""}.` });
     }
@@ -1016,87 +865,80 @@ export function App({
   // Typing anything clears the highlight, like in a terminal.
   useInput(() => selection.clear(), { isActive: phase === "main" });
 
-  // The session as it is now, saved. Reads refs, so it's also right when called on the way out, after unmounting.
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
-  const totalsRef = useRef(totals);
-  totalsRef.current = totals;
-  const saveSession = useCallback(async () => {
-    if (!sessions) return;
-    const transcript = itemsRef.current.flatMap((item) => (item.kind === "message" ? [item.message] : []));
-    const { provider: providerId, model } = configRef.current;
-    // answerAllCalls: on the way out a run may still be winding down, with tool calls not yet answered.
-    sessionRef.current = { ...sessionRef.current, provider: providerId, model, conversation: answerAllCalls(conversation.current), transcript, totals: totalsRef.current };
-    await sessions.save(sessionRef.current);
-  }, [sessions]);
-
-  // Save the session once a turn is over (not mid-run), shortly after things settle.
+  // Save once a turn is over (not mid-run), shortly after things settle. The session saves after each turn too;
+  // this also catches what Marv prints between turns (/cost, /memory…), which is part of the transcript.
   useEffect(() => {
     if (!sessions || busy) return;
-    const timer = setTimeout(() => void saveSession().catch(() => {}), 200);
+    const timer = setTimeout(() => void session.save().catch(() => {}), 200);
     return () => clearTimeout(timer);
-  }, [sessions, busy, items, totals, saveSession]);
+  }, [sessions, busy, items, totals, session]);
 
-  // On the way out (cli.tsx awaits this before exiting): quitting cancels the timer above, which could lose the
+  // On the way out (cli.tsx awaits this before exiting): quitting cancels the timers above, which could lose the
   // last turn, so save now, and let pending trajectory records reach the disk.
   useEffect(() => {
-    onFlush?.(async () => {
-      await Promise.all([saveSession().catch(() => {}), trajectoryRef.current?.flush()]);
-    });
-  }, [onFlush, saveSession]);
+    onFlush?.(() => session.flush());
+  }, [onFlush, session]);
 
-  /** Brings back a saved session: both histories, its cost, and it keeps saving to the same file. */
-  const restore = useCallback(
-    (session: SavedSession) => {
-      // Swapping the conversation under a running turn would mix the two (its reply landing in the restored
-      // transcript, not its conversation), and that mix would be saved.
-      if (abortRef.current) {
-        addMessage({ role: "system", isError: true, text: "Marv is working: stop the current turn (Esc) before resuming another session." });
-        return;
-      }
+  const WORKING = "Marv is working: stop the current turn (Esc) before resuming another session.";
+
+  /** Shows a session the session object has just resumed: its transcript, its cost, and where it left off. */
+  const showResumed = useCallback(
+    (resumed: Resumed) => {
       selection.reset();
       agentLogs.current.clear();
       setViewing(null);
-      sessionRef.current = session;
-      conversation.current = [...session.conversation];
       // Never lower it: an update still on its way for a message of this process must not hit a restored one.
-      nextId.current = Math.max(nextId.current, Math.max(0, ...session.transcript.map((m) => m.id)) + 1);
-      setTotals(session.totals);
-      setUsage(null);
-      const switched = session.model !== configRef.current.model ? ` (it used ${session.model}; continuing with ${configRef.current.model})` : "";
+      nextId.current = Math.max(nextId.current, Math.max(0, ...resumed.transcript.map((m) => m.id)) + 1);
+      syncUsage();
+      const switched = resumed.model !== configRef.current.model ? ` (it used ${resumed.model}; continuing with ${configRef.current.model})` : "";
       setItems([
         { kind: "welcome", id: "welcome-0" },
-        ...session.transcript.map((message) => ({ kind: "message" as const, id: `msg-${message.id}`, message })),
+        ...resumed.transcript.map((message) => ({ kind: "message" as const, id: `msg-${message.id}`, message })),
       ]);
-      addMessage({ role: "system", text: `Resumed a session from ${timeAgo(session.updatedAt)}${switched}.` });
+      addMessage({ role: "system", text: `Resumed a session from ${timeAgo(resumed.updatedAt)}${switched}.` });
       setFollowKey((n) => n + 1);
     },
-    [addMessage],
+    [addMessage, syncUsage],
+  );
+
+  /** Swaps in a saved session. Never into a running turn: its reply would land in the other conversation, and be saved there. */
+  const resumeSession = useCallback(
+    async (id: string | "latest"): Promise<Resumed | null | "busy"> => {
+      if (abortRef.current || session.busy) return "busy";
+      try {
+        return await session.resume(id);
+      } catch (err) {
+        if (session.busy) return "busy"; // a turn started while it loaded
+        throw err;
+      }
+    },
+    [session],
   );
 
   const openPicker = useCallback(async () => {
     if (!sessions) return;
     let list: SessionSummary[];
     try {
-      list = (await sessions.list(root)).filter((s) => s.id !== sessionRef.current.id);
+      list = (await sessions.list(root)).filter((s) => s.id !== session.id);
     } catch (err) {
       addMessage({ role: "system", isError: true, text: `Couldn't list the saved sessions: ${(err as Error).message}` });
       return;
     }
     // A turn started while the list loaded: don't put the picker over it.
-    if (abortRef.current) addMessage({ role: "system", isError: true, text: "Marv is working: stop the current turn (Esc) before resuming another session." });
+    if (abortRef.current) addMessage({ role: "system", isError: true, text: WORKING });
     else if (list.length === 0) addMessage({ role: "system", text: "No saved sessions for this project yet." });
     else setPicker(list);
-  }, [sessions, root, addMessage]);
+  }, [sessions, root, session, addMessage]);
 
   const pickSession = useCallback(
     async (id: string) => {
       setPicker(null);
-      const session = await sessions?.load(root, id);
-      if (session) restore(session);
+      const resumed = await resumeSession(id).catch(() => null);
+      if (resumed === "busy") addMessage({ role: "system", isError: true, text: WORKING });
+      else if (resumed) showResumed(resumed);
       else addMessage({ role: "system", isError: true, text: "That session couldn't be loaded." });
     },
-    [sessions, root, restore, addMessage],
+    [resumeSession, showResumed, addMessage],
   );
 
   // marv -c / marv -r
@@ -1109,13 +951,18 @@ export function App({
       // Until it's loaded, the prompt keeps what's typed but doesn't send it (handleSubmit): a message sent now would
       // be swapped out by the restore.
       setLoadingSession(true);
-      void sessions
-        .latest(root)
-        .then((session) => (session ? restore(session) : addMessage({ role: "system", text: "No saved session to continue in this project." })))
+      void resumeSession("latest")
+        .then((latest) =>
+          latest === "busy"
+            ? addMessage({ role: "system", isError: true, text: WORKING })
+            : latest
+              ? showResumed(latest)
+              : addMessage({ role: "system", text: "No saved session to continue in this project." }),
+        )
         .catch((err: Error) => addMessage({ role: "system", isError: true, text: `Couldn't load the last session: ${err.message}` }))
         .finally(() => setLoadingSession(false));
     }
-  }, [resume, sessions, phase, root, restore, openPicker, addMessage]);
+  }, [resume, sessions, phase, openPicker, resumeSession, showResumed, addMessage]);
 
   // Skills that couldn't be loaded are reported once, not silently skipped.
   useEffect(() => {
@@ -1215,7 +1062,7 @@ export function App({
               onCancel={cancelAll}
               escapeCancels={!view}
             />
-            <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy agents={agentsRunning} yolo={config.yolo} viewing={Boolean(view)} />
+            <StatusBar model={session.providerName} cwd={cwd} confirmExit={false} notice={notice} busy agents={agentsRunning} yolo={config.yolo} viewing={Boolean(view)} />
           </>
         ) : setupMode ? (
           <Setup
@@ -1237,7 +1084,7 @@ export function App({
               commands={menu}
             />
             <StatusBar
-              model={provider.name}
+              model={session.providerName}
               cwd={cwd}
               usage={[usage && formatUsage(usage, contextLength), costText(totals)].filter(Boolean).join(" · ") || undefined}
               confirmExit={confirmExit}
