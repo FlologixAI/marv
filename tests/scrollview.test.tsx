@@ -10,10 +10,10 @@ const tick = (ms = 50) => Bun.sleep(ms);
 
 afterEach(cleanup);
 
-function Lines({ count, height = 4, followKey = 0 }: { count: number; height?: number; followKey?: number }) {
+function Lines({ count, height = 4, followKey = 0, hidden = false }: { count: number; height?: number; followKey?: number; hidden?: boolean }) {
   return (
     <Box height={height} flexDirection="column">
-      <ScrollView followKey={followKey}>
+      <ScrollView followKey={followKey} hidden={hidden}>
         {Array.from({ length: count }, (_, i) => (
           <Text key={i}>line {i + 1}</Text>
         ))}
@@ -103,5 +103,27 @@ describe("ScrollView", () => {
     rerender(<Lines count={10} followKey={1} />);
     await tick();
     expect(visible(lastFrame()).at(-1)).toBe("line 10");
+  });
+
+  test("hidden and shown again (a subagent's view closing), it's where it was: no flash of the top, no jump", async () => {
+    const { lastFrame, frames, stdin, rerender } = render(<Lines count={30} />);
+    await tick();
+    stdin.write(PAGE_UP);
+    stdin.write(PAGE_UP);
+    stdin.write(PAGE_UP);
+    stdin.write(PAGE_UP);
+    stdin.write(PAGE_UP);
+    await tick();
+    const before = visible(lastFrame());
+    expect(before[0]).toBe("line 12");
+    mouse.emit("event", { type: "scroll", step: -1 }); // a wheel glide still going when the view opens
+    rerender(<Lines count={30} hidden />);
+    await tick(150);
+    const shownFrom = frames.length;
+    rerender(<Lines count={30} />);
+    await tick(100);
+    const after = frames.slice(shownFrom).map((f) => visible(f)[0]);
+    expect(after.every((first) => first !== "line 1")).toBe(true); // never the top
+    expect(visible(lastFrame())[0]).not.toBe("line 27"); // not snapped to the bottom
   });
 });

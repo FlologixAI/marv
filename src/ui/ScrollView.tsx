@@ -33,8 +33,15 @@ export function ScrollView({ children, followKey = 0, isActive: active = true, o
   const isActive = active && !hidden;
   const viewportRef = useRef(null);
   const contentRef = useRef(null);
-  const viewport = useBoxMetrics(viewportRef);
-  const content = useBoxMetrics(contentRef);
+  const measuredViewport = useBoxMetrics(viewportRef);
+  const measuredContent = useBoxMetrics(contentRef);
+  // A hidden box measures zero, and so does the first frame after it's shown again (the metrics catch up after
+  // it's drawn): clamping to those would draw it scrolled to the top, and a scroll then would lose the position.
+  // So while hidden, and until it's measured again, keep the last real measurements.
+  const lastMeasured = useRef({ viewport: measuredViewport, content: measuredContent });
+  const measuredNow = !hidden && measuredViewport.clientHeight > 0;
+  if (measuredNow) lastMeasured.current = { viewport: measuredViewport, content: measuredContent };
+  const { viewport, content } = measuredNow ? { viewport: measuredViewport, content: measuredContent } : lastMeasured.current;
 
   // null = following the bottom; otherwise the row pinned to the top.
   const [top, setTop] = useState<number | null>(null);
@@ -85,6 +92,14 @@ export function ScrollView({ children, followKey = 0, isActive: active = true, o
     g.remaining += rows;
     if (!g.timer) glideStep(); // the first row moves right away
   };
+  // Unmounting, or being hidden (a subagent's view opening), stops a glide still on its way.
+  useEffect(() => {
+    if (!hidden) return;
+    const g = glide.current;
+    if (g.timer) clearTimeout(g.timer);
+    g.timer = null;
+    g.remaining = 0;
+  }, [hidden]);
   useEffect(
     () => () => {
       if (glide.current.timer) clearTimeout(glide.current.timer);
