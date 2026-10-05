@@ -30,6 +30,7 @@ export function makeServer(): McpServer {
   server.registerTool("env", { description: "Shows whether a secret reached the server." }, async () => ({
     content: [{ type: "text", text: `key=${process.env.OPENROUTER_API_KEY ?? ""} custom=${process.env.CUSTOM ?? ""}` }],
   }));
+  server.registerTool("cwd", { description: "Shows the folder the server runs in." }, async () => ({ content: [{ type: "text", text: process.cwd() }] }));
   return server;
 }
 

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { McpServerConfig } from "../src/mcp/config.ts";
@@ -51,7 +52,7 @@ describe("a local (stdio) server", () => {
     const m = manager([stdio()]);
     await m.start();
     expect(m.status()).toEqual([
-      expect.objectContaining({ name: "test", state: "connected", tools: ["mcp__test__echo", "mcp__test__lookup", "mcp__test__fail", "mcp__test__picture", "mcp__test__slow", "mcp__test__env"] }),
+      expect.objectContaining({ name: "test", state: "connected", tools: ["mcp__test__echo", "mcp__test__lookup", "mcp__test__fail", "mcp__test__picture", "mcp__test__slow", "mcp__test__env", "mcp__test__cwd"] }),
     ]);
     const echo = m.specs.find((s) => s.name === "mcp__test__echo")!;
     expect(echo.description).toBe('(MCP server "test") Echo the text back.');
@@ -100,6 +101,14 @@ describe("a local (stdio) server", () => {
     const { result } = await call(m, "mcp__test__slow", {}, { signal: controller.signal });
     expect(Date.now() - started).toBeLessThan(2000);
     expect(result.isError).toBe(true);
+  });
+
+  test("your own servers start in your home folder, never the project (npx would run a package planted in its node_modules)", async () => {
+    const mine = manager([stdio()]);
+    const theirs = manager([stdio("proj", { source: "project" })]);
+    await Promise.all([mine.start(), theirs.start()]);
+    expect((await call(mine, "mcp__test__cwd", {})).result.output).toBe(realpathSync(homedir()));
+    expect((await call(theirs, "mcp__proj__cwd", {})).result.output).toBe(realpathSync(root));
   });
 
   test("its stderr is kept off the screen, for /mcp", async () => {

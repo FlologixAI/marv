@@ -10,6 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { homedir } from "node:os";
 import type { ToolSpec } from "../provider/types.ts";
 import type { Tool } from "../tools/types.ts";
 import type { McpServerConfig } from "./config.ts";
@@ -134,7 +135,7 @@ export class McpManager {
         t.type === "stdio"
           ? // stderr piped, never inherited: it would scribble over the TUI. The SDK passes only a safe base
             // environment (PATH, HOME, …) plus `env`, so API keys don't reach the server.
-            new StdioClientTransport({ command: t.command, args: t.args, env: t.env, cwd: this.opts.root, stderr: "pipe" })
+            new StdioClientTransport({ command: t.command, args: t.args, env: t.env, cwd: this.cwdFor(c.config), stderr: "pipe" })
           : new StreamableHTTPClientTransport(new URL(t.url), { requestInit: { headers: t.headers } });
       if (transport instanceof StdioClientTransport) {
         transport.stderr?.on("data", (chunk: Buffer) => {
@@ -180,6 +181,16 @@ export class McpManager {
     const all = this.connections.flatMap((c) => c.tools).filter(({ tool }) => !seen.has(tool.name) && seen.add(tool.name));
     this.tools = all.map((t) => t.tool);
     this.specs = all.map((t) => t.spec);
+  }
+
+  /**
+   * Where a local server starts. Yours start in your home folder, never the project: they skip the trust check,
+   * and `npx -y <pkg>` would run a <pkg> planted in the project's node_modules (by a command that ran without
+   * asking, or a cloned repository) with your permissions. A project's servers were trusted for that project and
+   * usually run its files, so they start there. Yours can still get the project as ${MARV_PROJECT_DIR}.
+   */
+  private cwdFor(config: McpServerConfig): string {
+    return config.source === "project" ? this.opts.root : homedir();
   }
 
   /** Stops every server (on exit). */

@@ -123,8 +123,10 @@ async function readFile(path: string, source: McpServerConfig["source"], env: En
 }
 
 /** The servers to connect to (yours first, then the project's), and what couldn't be read, and why. */
-export async function loadMcpConfig({ root, configDir, env }: { root: string; configDir: string; env: Env }) {
+export async function loadMcpConfig({ root, configDir, env: outer }: { root: string; configDir: string; env: Env }) {
   const problems: string[] = [];
+  // Servers of yours start in your home folder (see McpManager.cwdFor); one that works on the project gets it this way.
+  const env = { ...outer, MARV_PROJECT_DIR: root };
   const projectPath = join(root, PROJECT_FILE);
   const project = await readFile(projectPath, "project", env, problems);
   const personal = await readFile(join(configDir, PERSONAL_FILE), "personal", env, problems);

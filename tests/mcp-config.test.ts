@@ -40,6 +40,12 @@ describe("loadMcpConfig", () => {
     expect(servers[0]!.transport).toEqual({ type: "http", url: "https://api.example.com/mcp", headers: { Authorization: "Bearer secret" } });
   });
 
+  test("${MARV_PROJECT_DIR} is the project, for servers of yours that work on it", async () => {
+    await personal({ files: { command: "files-server", args: ["${MARV_PROJECT_DIR}"] } });
+    const { servers } = await loadMcpConfig({ root, configDir, env: {} });
+    expect(servers[0]!.transport).toMatchObject({ args: [root] });
+  });
+
   test("a missing variable, a bad entry or a broken file is a problem, not a crash", async () => {
     await personal({ gh: { type: "http", url: "https://x/${NOPE}" }, bad: { args: ["no command"] }, old: { type: "sse", url: "https://x/sse" } });
     await writeFile(join(root, ".mcp.json"), "{ not json");
