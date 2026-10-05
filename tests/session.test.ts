@@ -154,3 +154,63 @@ describe("a turn", () => {
     expect(appended.requests[0]!.options.system).toEndWith("Answer briefly.");
   });
 });
+
+describe("approvals", () => {
+  test("without an approver, a yolo-safe edit runs, anything else is refused, and the turn goes on", async () => {
+    const provider = new ScriptedProvider([
+      useTools(call("c1", "write_file", { path: "a.txt", content: "hi\n" }), call("c2", "bash", { command: "curl example.com", network: true })),
+      say("Done."),
+    ]);
+    const events = await collect(makeSession(provider).send("go"));
+    expect(await readFile(join(project, "a.txt"), "utf8")).toBe("hi\n");
+    const refused = events.find((e) => e.type === "tool_end" && e.call.id === "c2");
+    expect(refused).toMatchObject({ result: { isError: true, output: expect.stringContaining("no one to ask") } });
+    expect(events).toContainEqual({ type: "done", reason: "end" });
+  });
+
+  test("'always' covers that scope for the rest of the session, later turns included", async () => {
+    const asked: string[] = [];
+    const provider = new ScriptedProvider([
+      useTools(call("c1", "write_file", { path: "a.txt", content: "1" })),
+      say("One."),
+      useTools(call("c2", "write_file", { path: "b.txt", content: "2" })),
+      say("Two."),
+    ]);
+    const session = makeSession(provider, { yolo: false, approve: async (r) => (asked.push(r.label), "always") });
+    await collect(session.send("one"));
+    await collect(session.send("two"));
+    expect(asked).toEqual(["a.txt"]);
+    expect(existsSync(join(project, "b.txt"))).toBe(true);
+  });
+
+  test("stopping the turn answers a pending approval with no", async () => {
+    const provider = new ScriptedProvider([useTools(call("c1", "write_file", { path: "a.txt", content: "1" }))]);
+    let session: MarvSession | undefined;
+    session = makeSession(provider, {
+      yolo: false,
+      approve: () => {
+        session!.interrupt();
+        return new Promise<Decision>(() => {}); // never answers: only the stop can
+      },
+    });
+    const events = await collect(session.send("go"));
+    expect(events).toContainEqual(expect.objectContaining({ type: "tool_end", result: expect.objectContaining({ declined: true, summary: "interrupted" }) }));
+    expect(existsSync(join(project, "a.txt"))).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "turn_end", reason: "aborted" });
+  });
+
+  test("without an approver it stops at the step limit", async () => {
+    const provider = new ScriptedProvider(Array.from({ length: 30 }, (_, i) => useTools(read(`c${i}`))));
+    const events = await collect(makeSession(provider).send("loop"));
+    expect(provider.requests).toHaveLength(25);
+    expect(events).toContainEqual({ type: "done", reason: "max_steps" });
+  });
+
+  test("with an approver it asks at the step limit, in the continue scope", async () => {
+    const provider = new ScriptedProvider(Array.from({ length: 30 }, (_, i) => useTools(read(`c${i}`))));
+    const asked: ApprovalRequest[] = [];
+    const events = await collect(makeSession(provider, { approve: async (r) => (asked.push(r), "no") }).send("loop"));
+    expect(asked.map((r) => r.scope.key)).toEqual(["continue"]);
+    expect(events).toContainEqual({ type: "step_limit", steps: 25, continued: false });
+  });
+});
