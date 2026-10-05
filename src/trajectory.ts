@@ -89,6 +89,10 @@ export class Trajectory {
           await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
           await appendFile(this.path, "", { mode: 0o600 });
           await chmod(this.path, 0o600); // `mode` only applies when the file is created
+          // A crash (disk full, power loss) can leave a half-written last line: start on a fresh line, or the next
+          // record would be glued onto it and both would be unreadable.
+          const file = Bun.file(this.path);
+          if (file.size > 0 && (await file.slice(file.size - 1).text()) !== "\n") await appendFile(this.path, "\n");
           this.ready = true;
         }
         await appendFile(this.path, line);

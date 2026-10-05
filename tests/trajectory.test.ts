@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { statSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { projectKey } from "../src/paths.ts";
 import { AgentRecorder, TrajectoryStore, type TrajectoryRecord } from "../src/trajectory.ts";
 
@@ -43,6 +43,18 @@ describe("the trajectory file", () => {
     again.write({ type: "feedback", turn: "b", score: -1, source: "explicit" });
     await again.flush();
     expect((await lines(again.path)).map((r) => r.turn)).toEqual(["a", "b"]);
+  });
+
+  test("a half-written last line (a crash) isn't glued to the next record", async () => {
+    const store = new TrajectoryStore(dir);
+    const log = store.open("/p", "s1");
+    await mkdir(dirname(log.path), { recursive: true });
+    await writeFile(log.path, '{"v":1,"type":"turn_start","turn":"a"}\n{"v":1,"type":"agent_end","tur');
+    log.write({ type: "feedback", turn: "b", score: 1, source: "explicit" });
+    await log.flush();
+    const lines = (await readFile(log.path, "utf8")).trim().split("\n");
+    expect(lines).toHaveLength(3);
+    expect(JSON.parse(lines[2]!)).toMatchObject({ type: "feedback", turn: "b" });
   });
 
   test("a failing write never throws into the agent; it's reported once", async () => {
