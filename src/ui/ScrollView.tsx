@@ -18,6 +18,8 @@ interface Props {
   isActive?: boolean;
   /** Told where the viewport is and how far it's scrolled on every render, plus how to scroll it (used by mouse selection). */
   onViewport?: (viewport: Viewport, scrollBy: (rows: number) => void) => void;
+  /** Kept mounted but not shown (and not scrolled by keys or the wheel): it keeps its scroll position for when it's back. */
+  hidden?: boolean;
 }
 
 // The alternate screen has no terminal scrollback, so Marv scrolls its own
@@ -27,7 +29,8 @@ interface Props {
 // It follows the bottom (like a chat) until you press PgUp or scroll up. Then
 // it stays where you scrolled, even while a reply streams in, until you scroll
 // back down or `followKey` changes.
-export function ScrollView({ children, followKey = 0, isActive = true, onViewport }: Props) {
+export function ScrollView({ children, followKey = 0, isActive: active = true, onViewport, hidden = false }: Props) {
+  const isActive = active && !hidden;
   const viewportRef = useRef(null);
   const contentRef = useRef(null);
   const viewport = useBoxMetrics(viewportRef);
@@ -53,7 +56,7 @@ export function ScrollView({ children, followKey = 0, isActive = true, onViewpor
     });
 
   // The frame Ink draws after this render uses exactly this scrollTop.
-  onViewport?.(
+  if (!hidden) onViewport?.(
     { top: viewport.top, height: viewport.clientHeight, scrollTop, contentHeight: content.height, width: viewport.width },
     scrollBy,
   );
@@ -111,7 +114,7 @@ export function ScrollView({ children, followKey = 0, isActive = true, onViewpor
   });
 
   return (
-    <Box ref={viewportRef} flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden" contentOffsetY={scrollTop}>
+    <Box ref={viewportRef} display={hidden ? "none" : "flex"} flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden" contentOffsetY={scrollTop}>
       {/* flexShrink={0} keeps the content at its natural height, so it can overflow the viewport. */}
       <Box ref={contentRef} flexDirection="column" flexShrink={0}>
         {children}

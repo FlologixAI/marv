@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { LoopEvent } from "../agent.ts";
 import type { AgentType } from "../agents.ts";
 import type { MemoryPaths } from "../memory.ts";
 import type { Provider, Usage } from "../provider/types.ts";
@@ -139,4 +140,6 @@ export interface AgentHost {
   /** A subagent's request, for the session's tokens and cost. */
   onUsage(usage: Usage): void;
   onProgress(callId: string, progress: AgentProgress): void;
+  /** Everything the subagent's loop does (its text, thinking and tool calls), for its own view. */
+  onEvent?(callId: string, event: LoopEvent): void;
 }

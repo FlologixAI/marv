@@ -849,6 +849,119 @@ describe("subagents", () => {
     expect(lastFrame()).not.toContain("agent running");
   });
 
+  /** Clicks the first screen row containing `text` (the real app also feeds each frame to the selection store). */
+  function clickOn(frame: string, text: string) {
+    selection.transformOutput(frame);
+    const lines = frame.split("\n");
+    const y = lines.findIndex((line) => line.includes(text));
+    if (y < 0) throw new Error(`"${text}" isn't on screen`);
+    const x = lines[y]!.indexOf(text);
+    mouse.emit("event", { type: "press", x, y });
+    mouse.emit("event", { type: "release", x, y });
+  }
+
+  describe("clicking a subagent opens its own view", () => {
+    test("live while it runs; Esc goes back without stopping it", async () => {
+      const inner = new ScriptedProvider([
+        calls({ id: "a1", name: "agent", args: { description: "Read notes", prompt: "What's in notes.txt?" } }),
+        calls({ id: "r1", name: "read_file", args: { path: "notes.txt" } }),
+        reply("It says remember the milk."), // asked for after a pause
+        reply("Done."),
+      ]);
+      const { lastFrame, stdin } = renderAgents(slowAt(inner, { 2: 400 }));
+      await type(stdin, "check the notes");
+      await tick(200);
+      clickOn(lastFrame()!, "shared folder · 1 tool"); // its second line counts too
+      await tick();
+      let frame = lastFrame()!;
+      expect(frame).toContain("● agent general-purpose · Read notes · running");
+      expect(frame).toContain("esc to go back");
+      expect(frame).toContain("> What's in notes.txt?"); // its task
+      expect(frame).toContain("read_file notes.txt");
+      expect(frame).toContain("⎿ 1 line");
+      expect(frame).not.toContain("check the notes"); // the main transcript is hidden
+
+      await tick(400);
+      frame = lastFrame()!;
+      expect(frame).toContain("It says remember the milk."); // its reply arrives live
+      expect(frame).toContain("Read notes · finished");
+
+      stdin.write(ESC);
+      await tick();
+      frame = lastFrame()!;
+      expect(frame).not.toContain("esc to go back");
+      expect(frame).toContain("> check the notes");
+      expect(frame).toContain("Done.");
+      expect(frame).not.toContain("Interrupted");
+    });
+
+    test("Esc while it runs only closes the view", async () => {
+      const inner = new ScriptedProvider([
+        calls({ id: "a1", name: "agent", args: { description: "Read notes", prompt: "p" } }),
+        calls({ id: "r1", name: "read_file", args: { path: "notes.txt" } }),
+        reply("Milk."),
+        reply("Done."),
+      ]);
+      const { lastFrame, stdin } = renderAgents(slowAt(inner, { 2: 300 }));
+      await type(stdin, "check the notes");
+      await tick(150);
+      clickOn(lastFrame()!, "agent general-purpose · Read notes");
+      await tick();
+      expect(lastFrame()).toContain("esc to go back");
+      stdin.write(ESC);
+      await tick(400);
+      expect(lastFrame()).not.toContain("Interrupted");
+      expect(lastFrame()).toContain("Done.");
+    });
+
+    test("an approval it asks for shows below its view; Esc there doesn't decline it", async () => {
+      const inner = new ScriptedProvider([
+        calls({ id: "a1", name: "agent", args: { description: "Make file", prompt: "Create made.txt" } }),
+        calls({ id: "w1", name: "write_file", args: { path: "made.txt", content: "hi\n" } }),
+        reply("Made it."),
+        reply("Done."),
+      ]);
+      const { lastFrame, stdin } = renderAgents(inner);
+      await type(stdin, "make a file");
+      await tick(150);
+      expect(lastFrame()).toContain("Do you want to proceed?");
+      clickOn(lastFrame()!, "agent general-purpose · Make file");
+      await tick();
+      expect(lastFrame()).toContain("> Create made.txt");
+      expect(lastFrame()).toContain("Do you want to proceed?");
+      stdin.write(ESC);
+      await tick();
+      expect(lastFrame()).not.toContain("esc to go back");
+      expect(lastFrame()).toContain("Do you want to proceed?"); // still asking
+      stdin.write(ENTER); // yes
+      await tick(200);
+      expect(existsSync(join(project, "made.txt"))).toBe(true);
+      expect(lastFrame()).toContain("Done.");
+    });
+
+    test("sending a message closes the view; a click elsewhere opens nothing", async () => {
+      const model = new ScriptedProvider([
+        calls({ id: "a1", name: "agent", args: { description: "Read notes", prompt: "p" } }),
+        reply("Milk."),
+        reply("Done."),
+        reply("Hi again."),
+      ]);
+      const { lastFrame, stdin } = renderAgents(model);
+      await type(stdin, "check the notes");
+      await tick(200);
+      clickOn(lastFrame()!, "check the notes");
+      await tick();
+      expect(lastFrame()).not.toContain("esc to go back");
+      clickOn(lastFrame()!, "agent general-purpose · Read notes");
+      await tick();
+      expect(lastFrame()).toContain("● Milk.");
+      await type(stdin, "hello");
+      await tick(150);
+      expect(lastFrame()).not.toContain("esc to go back");
+      expect(lastFrame()).toContain("Hi again.");
+    });
+  });
+
   test("a call id reused in a later step doesn't inherit a subagent's steps", async () => {
     // Providers number calls per reply (Ollama's call_0, call_1…), so ids repeat.
     const model = new ScriptedProvider([

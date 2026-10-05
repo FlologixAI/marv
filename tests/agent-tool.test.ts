@@ -104,6 +104,15 @@ describe("the agent tool", () => {
     expect(seen.progress.at(-1)!.steps).toEqual(["read_file notes.txt · 1 line"]);
   });
 
+  test("everything its loop does reaches the host, for its own view", async () => {
+    const provider = new ScriptedProvider([useTool("r1", "read_file", { path: "notes.txt" }), say("It says milk.")]);
+    const events: [string, string][] = [];
+    const { host } = makeHost(provider, { onEvent: (id, e) => events.push([id, e.type]) });
+    await runTool(agentCall({ description: "read notes", prompt: "p" }, "a7"), ctxWith(host).ctx);
+    expect(events.every(([id]) => id === "a7")).toBe(true);
+    expect(events.map(([, type]) => type)).toEqual(["tool_start", "tool_end", "text_delta", "assistant", "done"]);
+  });
+
   test("an error returns what it had, marked as an error", async () => {
     const provider = new ScriptedProvider([[{ type: "text_delta", text: "Partial findings." }, { type: "error", message: "Rate limited" }]]);
     const { host } = makeHost(provider);

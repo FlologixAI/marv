@@ -124,6 +124,11 @@ export class SelectionStore {
       .join("\n");
   };
 
+  /** The transcript row under a screen point, or null outside the transcript (for clicks). */
+  rowAt(point: Point): number | null {
+    return this.toTranscript(point, false)?.y ?? null;
+  }
+
   /** Mouse down: start a selection if it's on the transcript. */
   press(point: Point) {
     this.stopAutoScroll();

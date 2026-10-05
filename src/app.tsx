@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, useApp, useInput, useWindowSize } from "ink";
+import { Box, useApp, useInput, useWindowSize, type DOMElement } from "ink";
 import { runAgent } from "./agent.ts";
+import { applyEvent, createAgentLog, type AgentLog } from "./agent-log.ts";
 import { GENERAL_PURPOSE, type AgentType } from "./agents.ts";
 import { copyToClipboard } from "./clipboard.ts";
 import { commands, isCommand, runCommand, yoloStatus } from "./commands/index.ts";
@@ -29,6 +30,7 @@ import { skillMessage, type Skill } from "./skills.ts";
 import { isParallelCall, runTool, toolSpecsFor } from "./tools/index.ts";
 import type { AgentHost, AgentProgress, ApprovalRequest, Decision } from "./tools/types.ts";
 import type { Message } from "./types.ts";
+import { AgentView, AgentViewHeader } from "./ui/AgentView.tsx";
 import { Approval } from "./ui/Approval.tsx";
 import { SessionPicker } from "./ui/SessionPicker.tsx";
 import { MessageView } from "./ui/MessageView.tsx";
@@ -38,7 +40,7 @@ import { Setup } from "./ui/Setup.tsx";
 import { Splash } from "./ui/Splash.tsx";
 import { formatUsage, StatusBar } from "./ui/StatusBar.tsx";
 import { ThinkingView } from "./ui/ThinkingView.tsx";
-import { Transcript, type TranscriptItem } from "./ui/Transcript.tsx";
+import { agentEntryAt, Transcript, type TranscriptItem } from "./ui/Transcript.tsx";
 
 const EXIT_CONFIRM_MS = 1500;
 const NOTICE_MS = 2000;
@@ -48,6 +50,16 @@ const NOTICE_MS = 2000;
  * for frames nobody would see.
  */
 const STREAM_FLUSH_MS = 33;
+
+/** The task an agent call hands its subagent (the first entry in its view). */
+function agentPrompt(args: string): string {
+  try {
+    const { prompt } = JSON.parse(args) as { prompt?: unknown };
+    return typeof prompt === "string" ? prompt : "";
+  } catch {
+    return "";
+  }
+}
 // Defaults defined once, so they're the same objects on every render (the
 // system prompt and send() depend on them).
 const DEFAULT_AGENTS: AgentType[] = [GENERAL_PURPOSE];
@@ -180,6 +192,25 @@ export function App({
   const [agentsRunning, setAgentsRunning] = useState(0);
   // ctrl+o: show subagents' steps under their entries.
   const [showSteps, setShowSteps] = useState(false);
+  // Each subagent's own transcript, by its entry's id (`msg-12`), for the view
+  // a click on the entry opens. Only this session's runs: sessions don't save them.
+  const agentLogs = useRef(new Map<string, AgentLog>());
+  // The subagent whose view is open, if any; `logVersion` moves when its log changed.
+  const [viewing, setViewing] = useState<string | null>(null);
+  const viewingRef = useRef(viewing);
+  viewingRef.current = viewing;
+  const [logVersion, setLogVersion] = useState(0);
+  // Where each subagent entry is drawn, for hit-testing clicks (see Transcript).
+  const agentEntries = useRef(new Map<string, DOMElement>());
+  const onAgentRef = useCallback((id: string, element: DOMElement | null) => {
+    if (element) agentEntries.current.set(id, element);
+    else agentEntries.current.delete(id);
+  }, []);
+  const openView = useCallback((id: string | null) => {
+    // The two transcripts have different rows: a selection or remembered row of one means nothing in the other.
+    selection.reset();
+    setViewing(id);
+  }, []);
   // Tools waiting for the user's yes/no, oldest first (parallel subagents can
   // ask at the same time). The first one is shown in place of the prompt.
   type Pending = { id: number; request: ApprovalRequest; resolve: (d: Decision) => void };
@@ -259,6 +290,8 @@ export function App({
 
   const clearTranscript = useCallback(() => {
     selection.reset();
+    agentLogs.current.clear();
+    setViewing(null);
     // A new conversation picks up memories saved during the last one.
     if (memory) void loadMemory(memory.paths).then(setMemories);
     sessionRef.current = newSession(root, configRef.current);
@@ -367,6 +400,10 @@ export function App({
       // it far more often than Ink can draw.
       const progress = new Map<string, AgentProgress>();
       const steps = new Map<string, string[]>();
+      // Subagents' logs, by call id (the view finds them by entry id); the open one re-renders in the flush.
+      const logs = new Map<string, AgentLog>();
+      let logChanged = false;
+      const isViewed = (log: AgentLog) => viewingRef.current !== null && agentLogs.current.get(viewingRef.current) === log;
       // Tokens accumulate in `reply`/`thought` and reach React in batches.
       let flushTimer: ReturnType<typeof setTimeout> | null = null;
       const flush = () => {
@@ -374,6 +411,8 @@ export function App({
         flushTimer = null;
         setStreaming(reply);
         setThinking(thought);
+        if (logChanged) setLogVersion((v) => v + 1);
+        logChanged = false;
         for (const [callId, p] of progress) {
           const entry = toolLines.get(callId);
           if (entry) updateMessage(entry.line, { tool: { label: entry.label, status: "running", summary: p.line, steps: p.steps } });
@@ -398,6 +437,16 @@ export function App({
           progress.set(callId, p);
           steps.set(callId, p.steps);
           scheduleFlush();
+        },
+        onEvent: (callId, event) => {
+          const log = logs.get(callId);
+          if (over || !log) return;
+          applyEvent(log, event);
+          // Only the open view costs a render; the others just keep their log.
+          if (isViewed(log)) {
+            logChanged = true;
+            scheduleFlush();
+          }
         },
       };
 
@@ -429,7 +478,7 @@ export function App({
               reply = "";
               setStreaming("");
               break;
-            case "tool_start":
+            case "tool_start": {
               flush();
               noteThought();
               setToolsRunning((n) => n + 1);
@@ -439,11 +488,16 @@ export function App({
               steps.delete(event.call.id);
               progress.delete(event.call.id);
               ended.delete(event.call.id);
-              toolLines.set(event.call.id, {
-                label: event.label,
-                line: addMessage({ role: "tool", text: event.call.name, tool: { label: event.label, status: "running" } }),
-              });
+              const line = addMessage({ role: "tool", text: event.call.name, tool: { label: event.label, status: "running" } });
+              toolLines.set(event.call.id, { label: event.label, line });
+              logs.delete(event.call.id);
+              if (event.call.name === "agent") {
+                const log = createAgentLog({ title: event.label, prompt: agentPrompt(event.call.arguments) });
+                logs.set(event.call.id, log);
+                agentLogs.current.set(`msg-${line}`, log);
+              }
               break;
+            }
             case "tool_end": {
               const { result } = event;
               const entry = toolLines.get(event.call.id);
@@ -455,6 +509,13 @@ export function App({
               const summary = result.isError && result.summary === "error" ? result.output.split("\n")[0] : result.summary;
               const status = result.declined ? "declined" : result.isError ? "error" : "done";
               if (entry) updateMessage(entry.line, { tool: { label: result.label, status, summary, steps: callSteps } });
+              const log = logs.get(event.call.id);
+              if (log) {
+                // It may have ended before its loop started (a failed check): either way it's over now.
+                log.running = false;
+                logs.delete(event.call.id);
+                if (isViewed(log)) setLogVersion((v) => v + 1);
+              }
               setToolsRunning((n) => Math.max(0, n - 1));
               if (event.call.name === "agent") setAgentsRunning((n) => Math.max(0, n - 1));
               stepStarted = Date.now();
@@ -483,6 +544,8 @@ export function App({
         for (const [callId, entry] of toolLines) {
           if (!ended.has(callId)) updateMessage(entry.line, { tool: { label: entry.label, status: "error", summary: "interrupted", steps: steps.get(callId) } });
         }
+        for (const log of logs.values()) log.running = false;
+        if ([...logs.values()].some(isViewed)) setLogVersion((v) => v + 1);
         noteThought();
         // Stop anything still running (a no-op after a normal end): if the loop
         // ended early (an exception), subagents still running in a parallel
@@ -570,6 +633,7 @@ export function App({
     if (!text || busy) return;
     setInput("");
     setFollowKey((n) => n + 1);
+    if (viewing) openView(null);
     setHistory((prev) => (prev.at(-1) === text ? prev : [...prev, text]));
 
     if (!isCommand(text)) {
@@ -672,9 +736,12 @@ export function App({
   // queued: one can join the queue just before its prompt is drawn, and must
   // not be left waiting on a stopped run. (At an approval prompt the Approval's
   // own Esc handler runs cancelAll too; doing it twice is harmless.)
+  // With a subagent's view open, Esc only closes it (the run carries on).
   useInput(
     (_char, key) => {
-      if (key.escape && abortRef.current) cancelAll();
+      if (!key.escape) return;
+      if (viewing) openView(null);
+      else if (abortRef.current) cancelAll();
     },
     { isActive: phase === "main" && setupMode === null },
   );
@@ -732,7 +799,15 @@ export function App({
           break;
         case "release": {
           const text = selection.release();
-          if (!text) break; // just a click
+          if (!text) {
+            // A click: on a subagent's entry, open its view.
+            const row = viewingRef.current ? null : selection.rowAt({ x: event.x, y: event.y });
+            const id = row === null ? null : agentEntryAt(row, agentEntries.current);
+            if (!id) break;
+            if (agentLogs.current.has(id)) openView(id);
+            else setNotice("Only this session's subagents can be opened (ctrl+o shows the steps)");
+            break;
+          }
           void copy(text).then((how) =>
             setNotice(how === "osc52" ? `Sent ${text.length} chars to the terminal clipboard` : `Copied ${text.length} chars`),
           );
@@ -746,7 +821,7 @@ export function App({
     return () => {
       mouse.off("event", onMouse);
     };
-  }, [copy]);
+  }, [copy, openView]);
 
   // Typing anything clears the highlight, like in a terminal.
   useInput(() => selection.clear(), { isActive: phase === "main" });
@@ -767,6 +842,8 @@ export function App({
   const restore = useCallback(
     (session: Session) => {
       selection.reset();
+      agentLogs.current.clear();
+      setViewing(null);
       sessionRef.current = session;
       conversation.current = [...session.conversation];
       nextId.current = Math.max(0, ...session.transcript.map((m) => m.id)) + 1;
@@ -839,9 +916,11 @@ export function App({
     );
   }
 
+  const view = viewing ? agentLogs.current.get(viewing) : undefined;
+
   return (
     <Box flexDirection="column" height={rows} width={columns}>
-      <ScrollView followKey={followKey} isActive={setupMode === null} onViewport={selection.setViewport}>
+      <ScrollView followKey={followKey} isActive={setupMode === null} onViewport={selection.setViewport} hidden={view !== undefined}>
         <Transcript
           items={items}
           version={version}
@@ -850,6 +929,7 @@ export function App({
           skills={skills.length}
           memories={memories ? memories.personal.length + memories.project.length : 0}
           showSteps={showSteps}
+          onAgentRef={onAgentRef}
         />
 
         {streaming !== null &&
@@ -860,12 +940,26 @@ export function App({
           ))}
       </ScrollView>
 
+      {view && <AgentViewHeader log={view} />}
+      {view && (
+        <ScrollView key={viewing} isActive={setupMode === null} onViewport={selection.setViewport}>
+          <AgentView log={view} version={logVersion} />
+        </ScrollView>
+      )}
+
       <Box flexDirection="column" flexShrink={0}>
         {picker && !setupMode && !approval ? (
           <SessionPicker sessions={picker} onPick={(id) => void pickSession(id)} onCancel={() => setPicker(null)} />
         ) : approval && !setupMode ? (
           <>
-            <Approval key={approval.head.id} request={approval.head.request} waiting={approval.waiting} onDecide={decide} onCancel={cancelAll} />
+            <Approval
+              key={approval.head.id}
+              request={approval.head.request}
+              waiting={approval.waiting}
+              onDecide={decide}
+              onCancel={cancelAll}
+              escapeCancels={!view}
+            />
             <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy agents={agentsRunning} yolo={config.yolo} />
           </>
         ) : setupMode ? (

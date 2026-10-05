@@ -144,6 +144,7 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
       signal: ctx.signal ?? new AbortController().signal,
       maxSteps: SUBAGENT_MAX_STEPS,
     })) {
+      if (ctx.callId) host.onEvent?.(ctx.callId, event);
       switch (event.type) {
         case "usage":
           used += event.usage.promptTokens + event.usage.completionTokens;

@@ -19,6 +19,7 @@ export function Approval({
   onDecide,
   onCancel,
   waiting = 0,
+  escapeCancels = true,
 }: {
   request: ApprovalRequest;
   onDecide: (decision: Decision) => void;
@@ -26,11 +27,13 @@ export function Approval({
   onCancel?: () => void;
   /** Other requests queued behind this one (parallel subagents). */
   waiting?: number;
+  /** Off while a subagent's view is open: Esc then only closes the view, it doesn't stop the run. */
+  escapeCancels?: boolean;
 }) {
   const { preview, scope } = request;
 
   useInput((_input, key) => {
-    if (key.escape) (onCancel ?? (() => onDecide("no")))();
+    if (key.escape && escapeCancels) (onCancel ?? (() => onDecide("no")))();
   });
 
   const diff = preview.diff ?? [];

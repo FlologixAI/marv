@@ -8,6 +8,8 @@ import { render as renderForTest } from "ink-testing-library";
 import { App } from "../src/app.tsx";
 import { ConfigStore } from "../src/config/config.ts";
 import { GENERAL_PURPOSE } from "../src/agents.ts";
+import { mouse } from "../src/mouse.ts";
+import { selection } from "../src/selection.ts";
 import { RoutedProvider, ScriptedProvider } from "./fake-provider.ts";
 import type { AgentEvent, Provider } from "../src/provider/types.ts";
 import { Box, render, Text } from "ink";
@@ -174,4 +176,57 @@ test("4 subagents reporting progress still reach React in batches", async () => 
   const SLACK = 10;
   const bound = Math.ceil(elapsed / 33) + SLACK;
   if (renders > bound) throw new Error(`${renders} renders in ${elapsed} ms; bound is ${bound} (ceil(elapsed/33) + ${SLACK})`);
+}, 30000);
+
+test("4 subagents streaming text, one of them open in its view, still reach React in batches", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "marv-agents-view-perf-"));
+  const TOKENS = 150;
+  const streamer = (n: number): Provider => ({
+    name: `agent ${n}`,
+    async *stream() {
+      for (let i = 0; i < TOKENS; i++) {
+        await Bun.sleep(1);
+        yield { type: "text_delta", text: `w${n} ` } as AgentEvent;
+      }
+      yield { type: "done" } as AgentEvent;
+    },
+  });
+  const parent = new ScriptedProvider([
+    [
+      ...[0, 1, 2, 3].map((n) => ({ type: "tool_call", call: { id: `a${n}`, name: "agent", arguments: JSON.stringify({ description: `job ${n}`, prompt: `job number ${n}` }) } })),
+      { type: "done" },
+    ] as AgentEvent[],
+    [{ type: "text_delta", text: "all four finished" }, { type: "done" }] as AgentEvent[],
+  ]);
+  const model = new RoutedProvider({ "go now": parent, "job number 0": streamer(0), "job number 1": streamer(1), "job number 2": streamer(2), "job number 3": streamer(3) });
+  let renders = 0;
+  const { stdin, lastFrame, unmount } = renderForTest(
+    <Profiler id="app" onRender={() => renders++}>
+      <App store={new ConfigStore(dir)} initialFile={{ provider: "ollama", model: "m" }} env={{}} version="0" cwd="~" root={dir} splashMs={0} makeProvider={() => model} loadModels={async () => []} agents={[GENERAL_PURPOSE]} />
+    </Profiler>,
+  );
+  await Bun.sleep(50);
+  stdin.write("go now");
+  await Bun.sleep(20);
+  stdin.write("\r");
+  while (!lastFrame()!.includes("job 0")) await Bun.sleep(5);
+  // Open job 0's view.
+  selection.transformOutput(lastFrame()!);
+  const lines = lastFrame()!.split("\n");
+  const y = lines.findIndex((line) => line.includes("job 0"));
+  mouse.emit("event", { type: "press", x: lines[y]!.indexOf("job 0"), y });
+  mouse.emit("event", { type: "release", x: lines[y]!.indexOf("job 0"), y });
+  renders = 0;
+  const started = Date.now();
+  while (!lastFrame()!.includes(`w0 w0 w0`)) await Bun.sleep(5);
+  stdin.write("\x1b"); // back, to see the end
+  while (!lastFrame()!.includes("all four finished")) await Bun.sleep(10);
+  const elapsed = Date.now() - started;
+  unmount();
+  await rm(dir, { recursive: true, force: true });
+  // 4 x 150 tokens: unbatched, the open view alone would render ~150 times. As above, one render per flush window.
+  const SLACK = 10;
+  const bound = Math.ceil(elapsed / 33) + SLACK;
+  if (renders > bound) throw new Error(`${renders} renders in ${elapsed} ms; bound is ${bound} (ceil(elapsed/33) + ${SLACK})`);
+  expect(renders).toBeGreaterThan(0);
 }, 30000);
