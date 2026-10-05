@@ -34,7 +34,10 @@ export const webScope = (url: string) => `web:${domainOf(url)}`;
 export function pastedScopes(text: string): string[] {
   // Code isn't a link the user means to visit (a pasted script or log may name any host): drop fenced blocks
   // (closed or not, ``` and ~~~) and inline code spans before looking.
-  const prose = text.replace(/^[ \t]*(```|~~~)[^\n]*\n[\s\S]*?(?:^[ \t]*\1[^\n]*$|(?![\s\S]))/gm, "").replace(/(```|~~~)[\s\S]*?(?:\1|(?![\s\S]))/g, "").replace(/`[^`\n]*`/g, "");
+  // Fences follow CommonMark: a block opens on a line starting with 3+ backticks or tildes and closes on a line of
+  // at least as many of the same character with nothing after (an unclosed one runs to the end). An unclosed run
+  // mid-line is literal text, so only a closed inline run hides anything.
+  const prose = text.replace(/^[ \t]*(([`~])\2{2,})[^\n]*\n[\s\S]*?(?:^[ \t]*\1\2*[ \t]*$|(?![\s\S]))/gm, "").replace(/(```|~~~)[\s\S]*?\1/g, "").replace(/`[^`\n]*`/g, "");
   const links = (prose.match(/https?:\/\/[^\s<>"'`\[\]]+/gi) ?? []).map((link) => link.replace(/[.,;:!?)\]]+$/, ""));
   return [...new Set(links.map(webScope))];
 }

