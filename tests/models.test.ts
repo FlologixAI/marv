@@ -35,6 +35,24 @@ describe("listModels", () => {
     ]);
   });
 
+  test("OpenRouter: whether a model's reasoning can be turned off", async () => {
+    const fetch = fakeFetch({
+      "https://openrouter.ai/api/v1/models": {
+        data: [
+          { id: "a/optional", supported_parameters: ["tools", "reasoning"], reasoning: { mandatory: false, default_enabled: true } },
+          { id: "b/mandatory", supported_parameters: ["tools", "reasoning"], reasoning: { mandatory: true, default_enabled: true } },
+          { id: "c/none", supported_parameters: ["tools"] },
+        ],
+      },
+    });
+    const models = await listModels({ provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" }, fetch);
+    expect(models.map((m) => [m.id, m.reasoning])).toEqual([
+      ["a/optional", "optional"],
+      ["b/mandatory", "mandatory"],
+      ["c/none", undefined],
+    ]);
+  });
+
   test("Ollama: local models, with tool support read from /api/show", async () => {
     const fetch = fakeFetch({
       "http://localhost:11434/api/tags": { models: [{ name: "qwen3.5:9b" }, { name: "tiny:1b" }] },

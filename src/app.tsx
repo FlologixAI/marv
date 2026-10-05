@@ -106,7 +106,7 @@ interface Props {
   /** 0 skips the splash entirely (used by tests). */
   splashMs?: number;
   /** Swappable so tests can inject an instant provider. */
-  makeProvider?: (config: Config) => Provider;
+  makeProvider?: (config: Config, model?: Pick<ModelInfo, "reasoning">) => Provider;
   /** Swappable so tests don't touch the real clipboard. Returns how it copied. */
   copy?: (text: string) => Promise<string>;
   /** Swappable so tests don't hit OpenRouter or Ollama for the model picker. */
@@ -167,7 +167,6 @@ export function App({
   // Config: the saved file + env overrides → the Config we run with → a Provider.
   const [file, setFile] = useState(initialFile);
   const config = useMemo(() => resolveConfig(file, env), [file, env]);
-  const provider = useMemo(() => makeProvider(config), [makeProvider, config]);
   const [setupMode, setSetupMode] = useState<SetupMode>(() => (needsSetup(initialFile, config) ? "first-run" : null));
 
   // What the user sees (includes help text, errors, the welcome banner)…
@@ -209,14 +208,14 @@ export function App({
   // …and for the whole session (survives /clear: that's money spent).
   const [totals, setTotals] = useState<Totals>(emptyTotals);
   // The model's context window and prices, looked up once per model (OpenRouter's list has them).
-  const [modelInfo, setModelInfo] = useState<{ id: string; context?: number; prices: Prices } | null>(null);
+  const [modelInfo, setModelInfo] = useState<{ id: string; context?: number; prices: Prices; reasoning?: ModelInfo["reasoning"] } | null>(null);
   useEffect(() => {
     if (config.provider !== "openrouter") return;
     let cancelled = false;
     loadModels(config).then(
       (models) => {
         const m = models.find((model) => model.id === config.model);
-        if (!cancelled && m) setModelInfo({ id: m.id, context: m.context, prices: m });
+        if (!cancelled && m) setModelInfo({ id: m.id, context: m.context, prices: m, reasoning: m.reasoning });
       },
       () => {}, // offline: no context size or price estimates, that's all
     );
@@ -225,6 +224,9 @@ export function App({
     };
   }, [config, loadModels]);
   const info = modelInfo?.id === config.model ? modelInfo : null;
+  // Remade once the model list says whether this model's reasoning can be turned off (/think on OpenRouter).
+  const reasoning = info?.reasoning;
+  const provider = useMemo(() => makeProvider(config, reasoning ? { reasoning } : undefined), [makeProvider, config, reasoning]);
   const contextLength = provider.contextLength ?? info?.context;
   const usageRef = useRef(usage);
   usageRef.current = usage;
@@ -823,7 +825,7 @@ export function App({
           { ...(file ?? { provider: config.provider }), thinking: action.on },
           action.on
             ? "Thinking on: models may reason before answering (slower, often better)."
-            : "Thinking off: models answer directly.",
+            : `Thinking off: models answer directly${info?.reasoning === "mandatory" ? ` (except ${config.model}, which always reasons)` : ""}.`,
         );
         break;
       case "memory":

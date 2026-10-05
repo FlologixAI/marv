@@ -13,6 +13,8 @@ export interface ModelInfo {
   context?: number;
   /** Runs on this machine (Ollama). */
   local?: boolean;
+  /** It can reason before answering: "optional" can be turned off, "mandatory" can't (OpenRouter rejects trying). */
+  reasoning?: "optional" | "mandatory";
 }
 
 interface OpenRouterModel {
@@ -20,6 +22,7 @@ interface OpenRouterModel {
   context_length?: number;
   pricing?: { prompt?: string; completion?: string; input_cache_read?: string };
   supported_parameters?: string[];
+  reasoning?: { mandatory?: boolean };
 }
 
 export async function listModels(
@@ -40,6 +43,7 @@ export async function listModels(
           priceOut: perMillion(m.pricing?.completion),
           ...(m.pricing?.input_cache_read !== undefined ? { priceCacheRead: perMillion(m.pricing.input_cache_read) } : {}),
           context: m.context_length,
+          ...(m.reasoning ? { reasoning: m.reasoning.mandatory ? ("mandatory" as const) : ("optional" as const) } : {}),
         }));
     }
 
