@@ -4,10 +4,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { render } from "ink";
 import pkg from "../package.json";
+import { loadAgents } from "./agents.ts";
 import { App } from "./app.tsx";
 import { ConfigError, ConfigStore, defaultConfigDir, migrateLegacyConfig } from "./config/config.ts";
 import { filterMouseInput, MOUSE_OFF, MOUSE_ON } from "./mouse.ts";
-import { shortenHome } from "./paths.ts";
+import { projectKey, shortenHome } from "./paths.ts";
 import { loadInstructions } from "./prompt.ts";
 import { loadSkills } from "./skills.ts";
 import { SessionStore } from "./sessions.ts";
@@ -27,6 +28,8 @@ Usage:
 Config:
   ~/.marv/config.json   created by the setup screen (/setup to change it)
   ~/.marv/sessions/     saved conversations, one folder per project
+  ~/.marv/agents/       your subagent types (a project's go in .marv/agents/)
+  ~/.marv/worktrees/    subagents' worktrees while they run
   OPENROUTER_API_KEY    overrides the saved OpenRouter key
   OLLAMA_HOST           where Ollama runs (default localhost:11434)
   MARV_MODEL            overrides the saved model
@@ -47,6 +50,7 @@ if (args.includes("--help") || args.includes("-h")) {
 const root = process.cwd();
 const instructions = await loadInstructions(root);
 const { skills, problems: skillProblems } = await loadSkills({ root, home: homedir() });
+const { agents, problems: agentProblems } = await loadAgents({ root, home: homedir() });
 const memoryAt = memoryPaths(defaultConfigDir(process.env), root);
 const memory = { paths: memoryAt, initial: await loadMemory(memoryAt) };
 
@@ -82,6 +86,9 @@ const instance = render(
     instructions={instructions}
     skills={skills}
     skillProblems={skillProblems}
+    agents={agents}
+    agentProblems={agentProblems}
+    worktreesDir={join(defaultConfigDir(process.env), "worktrees", projectKey(root))}
     sessions={new SessionStore(join(defaultConfigDir(process.env), "sessions"))}
     memory={memory}
     resume={args.includes("-c") || args.includes("--continue") ? "latest" : args.includes("-r") || args.includes("--resume") ? "pick" : undefined}

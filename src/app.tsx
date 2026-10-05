@@ -580,6 +580,8 @@ export function App({
       configPath: shortenHome(store.path),
       skills,
       skillProblems,
+      agents,
+      agentProblems,
       usage: { totals, last: usage, contextLength },
     });
     switch (action.type) {

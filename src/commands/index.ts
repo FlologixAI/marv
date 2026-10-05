@@ -1,3 +1,4 @@
+import { SUBAGENT_TOOLS, type AgentType } from "../agents.ts";
 import { maskKey, PRESETS, type Config } from "../config/config.ts";
 import { sandboxAvailable } from "../sandbox.ts";
 import type { Skill } from "../skills.ts";
@@ -31,6 +32,9 @@ export interface CommandContext {
   config: Config;
   configPath: string;
   skills?: Skill[];
+  agents?: AgentType[];
+  /** Agent files that couldn't be loaded, and why. */
+  agentProblems?: string[];
   /** Skills that couldn't be loaded, and why. */
   skillProblems?: string[];
   /** Tokens and cost so far, for /cost. */
@@ -112,6 +116,11 @@ export const commands: Command[] = [
     }),
   },
   {
+    name: "agents",
+    description: "List the subagent types Marv can start",
+    run: (_args, { agents = [], agentProblems = [] }) => ({ type: "print", text: agentsText(agents, agentProblems), markdown: true }),
+  },
+  {
     name: "skills",
     description: "List the skills Marv can use",
     run: (_args, { skills = [], skillProblems = [] }) => ({ type: "print", text: skillsText(skills, skillProblems), markdown: true }),
@@ -157,7 +166,7 @@ export function runCommand(input: string, ctx: CommandContext): CommandAction {
 function helpText(): string {
   const width = Math.max(...commands.map((c) => c.name.length)) + 2;
   const lines = commands.map((c) => `  /${c.name.padEnd(width)}${c.description}`);
-  return ["Commands:", ...lines, "", "Shortcuts:", "  ↑/↓       input history", "  esc       stop a reply or tool", "  ctrl+c    clear input · press twice to exit"].join("\n");
+  return ["Commands:", ...lines, "", "Shortcuts:", "  ↑/↓       input history", "  esc       stop a reply or tool", "  ctrl+o    show what subagents did", "  ctrl+c    clear input · press twice to exit"].join("\n");
 }
 
 function configText({ config, configPath }: CommandContext): string {
@@ -197,6 +206,21 @@ function skillsText(skills: Skill[], problems: string[]): string {
         "**No skills yet.** Add one as `.marv/skills/<name>/SKILL.md` in the project, or in `~/.marv/skills/` for all projects:",
         "```markdown\n---\nname: <name>\ndescription: <what it does, and when to use it>\n---\n\n<instructions>\n```",
       ];
+  if (problems.length) parts.push("**Couldn't load:**", problems.map((p) => `- ${p}`).join("\n"));
+  return parts.join("\n\n");
+}
+
+/** Markdown, like /skills. Descriptions are cut at their first line (Claude Code ones carry long examples). */
+function agentsText(agents: AgentType[], problems: string[]): string {
+  const parts = [
+    "**Agents**: Marv can hand a task to one of these. Add your own as `.marv/agents/<name>.md` (project) or `~/.marv/agents/<name>.md`.",
+    agents
+      .map((a) => {
+        const details = [a.tools.length === SUBAGENT_TOOLS.length ? "" : `tools: ${a.tools.join(", ")}`, a.model ? `model: ${a.model}` : ""].filter(Boolean).join(" · ");
+        return `- \`${a.name}\` *(${a.source})*: ${a.description.split("\n")[0]}${details ? `\n  ${details}` : ""}`;
+      })
+      .join("\n"),
+  ];
   if (problems.length) parts.push("**Couldn't load:**", problems.map((p) => `- ${p}`).join("\n"));
   return parts.join("\n\n");
 }

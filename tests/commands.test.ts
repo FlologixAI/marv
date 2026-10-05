@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { GENERAL_PURPOSE } from "../src/agents.ts";
 import { isCommand, runCommand as run, type CommandContext } from "../src/commands/index.ts";
 
 const ctx: CommandContext = {
@@ -101,5 +102,15 @@ describe("slash commands", () => {
   test("unknown commands return an error", () => {
     const action = runCommand("/nope");
     expect(action).toMatchObject({ type: "print", isError: true });
+  });
+  test("/agents lists agent types and files that couldn't be loaded", () => {
+    const reviewer = { ...GENERAL_PURPOSE, name: "code-reviewer", description: "Review a step.", tools: ["read_file", "grep"], model: "small", source: "personal" as const };
+    const action = run("/agents", { ...ctx, agents: [GENERAL_PURPOSE, reviewer], agentProblems: ["~/.marv/agents/bad.md needs a description"] });
+    expect(action).toMatchObject({ type: "print", markdown: true });
+    const text = (action as { text: string }).text;
+    expect(text).toContain("`general-purpose` *(built-in)*");
+    expect(text).toContain("`code-reviewer` *(personal)*: Review a step.");
+    expect(text).toContain("tools: read_file, grep · model: small");
+    expect(text).toContain("bad.md needs a description");
   });
 });
