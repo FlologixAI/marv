@@ -298,3 +298,70 @@ describe("compaction", () => {
     expect(provider.requests[2]!.history[0]!.text).toContain("THE SUMMARY");
   });
 });
+
+/** A parent that starts one subagent ("look around"), and the subagent, which finds the notes. */
+const withSubagent = () =>
+  new RoutedProvider({
+    "parent-task": new ScriptedProvider([useTools(call("a1", "agent", { description: "look around", prompt: "sub-task: find the notes" })), say("Parent done.")]),
+    "sub-task": new ScriptedProvider([say("Found them.")]),
+  });
+
+describe("subagents", () => {
+  test("their events arrive in the same stream, tagged with the call that started them", async () => {
+    const events = await collect(makeSession(withSubagent()).send("parent-task: go"));
+    const start = events.findIndex((e) => e.type === "tool_start" && e.call.id === "a1");
+    const end = events.findIndex((e) => e.type === "tool_end" && e.call.id === "a1");
+    const sub = events.flatMap((e, i) => (e.type === "subagent" ? [{ i, e }] : []));
+    expect(sub.length).toBeGreaterThan(0);
+    expect(sub.every(({ e }) => e.callId === "a1")).toBe(true);
+    expect(sub.some(({ e }) => e.event.type === "assistant" && e.event.text === "Found them.")).toBe(true);
+    expect(sub.every(({ i }) => i > start && i < end)).toBe(true);
+    expect(events).toContainEqual(expect.objectContaining({ type: "subagent_progress", callId: "a1" }));
+    expect(events.at(-1)).toMatchObject({ type: "turn_end", reason: "end" });
+  });
+});
+
+describe("trajectories", () => {
+  async function records(store: TrajectoryStore, session: MarvSession) {
+    await session.flush();
+    const text = await readFile(store.open(project, session.id).path, "utf8");
+    return text
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; [key: string]: unknown });
+  }
+
+  test("a turn is recorded, and the next message's tone rates it", async () => {
+    const store = new TrajectoryStore(dir);
+    const session = makeSession(new ScriptedProvider([say("Done."), say("Glad to help.")]), { trajectories: store, version: "9.9.9" });
+    await collect(session.send("fix it"));
+    await collect(session.send("thanks, perfect"));
+    const log = await records(store, session);
+    expect(log.map((r) => r.type)).toEqual(["session", "turn_start", "assistant", "agent_end", "feedback", "turn_start", "assistant", "agent_end"]);
+    expect(log[0]).toMatchObject({ marv: "9.9.9", provider: "test", model: "test-model" });
+    expect(log[4]).toMatchObject({ source: "implicit", score: 1, turn: log[1]!.turn });
+  });
+
+  test("rate() rates the last turn, and says why when it can't", async () => {
+    const store = new TrajectoryStore(dir);
+    const session = makeSession(new ScriptedProvider([say("Done.")]), { trajectories: store });
+    expect(session.rate({ score: 1 })).toBe("nothing");
+    await collect(session.send("fix it"));
+    expect(session.rate({ score: -1, note: "wrong file" })).toBe("rated");
+    expect((await records(store, session)).at(-1)).toMatchObject({ type: "feedback", source: "explicit", score: -1, note: "wrong file" });
+    session.configure({ trajectories: false });
+    expect(session.rate({ score: 1 })).toBe("off");
+    expect(makeSession(new ScriptedProvider([])).rate({ score: 1 })).toBe("off");
+  });
+
+  test("a subagent's steps are recorded under its own agent id", async () => {
+    const store = new TrajectoryStore(dir);
+    const session = makeSession(withSubagent(), { trajectories: store });
+    await collect(session.send("parent-task: go"));
+    const log = await records(store, session);
+    const start = log.find((r) => r.type === "subagent_start");
+    expect(start).toMatchObject({ agent: "main", call: "a1", description: "look around" });
+    expect(log).toContainEqual(expect.objectContaining({ type: "assistant", agent: start!.subagent, text: "Found them." }));
+    expect(log).toContainEqual(expect.objectContaining({ type: "agent_end", agent: start!.subagent }));
+  });
+});
