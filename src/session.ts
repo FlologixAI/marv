@@ -149,7 +149,7 @@ export interface Session {
   /** Memory as of the start of this conversation. */
   readonly memory: Memories | undefined;
   /** Files and servers that couldn't be read, and why. */
-  readonly problems: string[];
+  readonly problems: readonly string[];
   /** The last request's tokens (how full the context is), and the whole session's (survives clear()). */
   usage(): { last?: Usage; totals: Totals; contextLength?: number };
   /** Runs one turn and yields what happens; leaving the loop early interrupts it. Throws if a turn is running. */
@@ -158,7 +158,7 @@ export interface Session {
   interrupt(): void;
   /** Summarizes the conversation now and continues from the summary. Rejects during a turn. */
   compact(focus?: string): Promise<CompactResult>;
-  /** A new conversation (and session file); totals stay. */
+  /** A new conversation (and session file); totals stay. Saves the previous one first, reloads memory for the new system prompt, and throws at once during a turn. */
   clear(): Promise<void>;
   /** Brings back a saved session (its id, or "latest"); null if there is none. Rejects during a turn. */
   resume(id: string | "latest"): Promise<Resumed | null>;
@@ -175,7 +175,7 @@ export interface Session {
 }
 
 export class MarvSession implements Session {
-  readonly problems: string[];
+  readonly problems: readonly string[];
   private option: ProviderFactory | ProviderOption;
   private thinking: boolean;
   private factory: ProviderFactory;

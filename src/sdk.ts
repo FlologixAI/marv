@@ -4,11 +4,9 @@
 // sessions and trajectories, driven by your code. createSession() reads nothing from disk unless asked
 // (`sources`), and without an `approve` callback only what yolo mode vouches for runs (edits outside .git,
 // sandboxed commands without network); anything else goes back to the model as refused. Bun only, for now.
+import "./bun-guard.ts"; // first: see the file
 import { statSync } from "node:fs";
 import { join, resolve } from "node:path";
-// Marv uses Bun's APIs (Bun.spawn, Bun.YAML, ...): fail with a clear message under Node instead of a stray ReferenceError.
-if (typeof Bun === "undefined") throw new Error("marv/sdk runs on Bun (>= 1.3).");
-
 import pkg from "../package.json";
 import { defaultConfigDir } from "./config/config.ts";
 import { parseMcpServers, type McpServerConfig } from "./mcp/config.ts";
@@ -25,7 +23,7 @@ import type { Message } from "./types.ts";
 
 /** One MCP server in .mcp.json's format (validated when the session is created; a bad entry is reported in `problems`). */
 export type McpServerEntry =
-  | { command: string; args?: string[]; env?: Record<string, string>; timeout?: number }
+  | { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string>; timeout?: number }
   | { type: "http" | "streamable-http"; url: string; headers?: Record<string, string>; timeout?: number };
 
 export interface SessionOptions {

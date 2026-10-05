@@ -226,6 +226,9 @@ await session.close();
   waits for it, saves, and stops the MCP servers the session started.
 - **Bun only** (1.3 or newer). `marv/sdk` is TypeScript source, so your `tsconfig.json` needs
   `"moduleResolution": "bundler"` and `"allowImportingTsExtensions": true` (`bun init`'s defaults have both).
+- **Installing from a path or tarball** (`bun add`) currently fails on Bun 1.3.11: it reads this package's
+  `patchedDependencies` (the CLI's patches) and looks for the patch files in *your* project. Shipping
+  `patches/` doesn't help; only removing that key from the packed `package.json` makes it install.
 
 `examples/sdk.ts` is a complete script.
 

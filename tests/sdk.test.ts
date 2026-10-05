@@ -125,7 +125,7 @@ test("a session that fails to be created leaves no MCP server running (bad provi
   const marker = `leak-kind-${crypto.randomUUID()}`;
   const mcpServers = { fx: { command: process.execPath, args: [FIXTURE, marker] } };
   await expect(createSession({ cwd: root, provider: { kind: "nope" } as unknown as sdk.ProviderOption, configDir, mcpServers })).rejects.toThrow();
-  await Bun.sleep(1500);
+  await Bun.sleep(500);
   expect(running(marker)).toEqual([]);
 });
 
@@ -141,4 +141,10 @@ test("resume without persist, and a cwd that isn't a folder, fail before anythin
   const file = join(root, "AGENTS.md");
   await expect(createSession({ cwd: file, provider: new ScriptedProvider([]), configDir })).rejects.toThrow(`cwd ${file} isn't a folder`);
   await expect(createSession({ cwd: join(root, "missing"), provider: new ScriptedProvider([]), configDir })).rejects.toThrow(/isn't a folder/);
+});
+
+test("a stdio entry may say type: 'stdio' (many .mcp.json files do)", async () => {
+  const session = await createSession({ cwd: root, provider: new ScriptedProvider([]), configDir, mcpServers: { fs: { type: "stdio", command: "true" } } });
+  expect(session.problems).toEqual([]);
+  await session.close();
 });
