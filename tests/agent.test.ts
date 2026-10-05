@@ -137,6 +137,17 @@ describe("runAgent", () => {
     expect(events.some((e) => e.type === "error")).toBe(false);
   });
 
+  test("if its consumer stops mid-tools (it threw), every call still gets a result, so the next request is valid", async () => {
+    const provider = new ScriptedProvider([useTools(call("c1", "a.ts"), call("c2", "b.ts"))]);
+    const history: ChatTurn[] = [{ role: "user", text: "go" }];
+    const loop = runAgent({ provider, history, system: "S", tools: SPECS, runTool: fakeTool, signal: new AbortController().signal });
+    for await (const event of loop) if (event.type === "tool_start") break; // like the App throwing while handling it
+    expect(history.slice(-2)).toEqual([
+      { role: "tool", callId: "c1", name: "read_file", text: expect.stringContaining("Interrupted") },
+      { role: "tool", callId: "c2", name: "read_file", text: expect.stringContaining("Interrupted") },
+    ]);
+  });
+
   test("an interrupt mid-tools still answers every call, so the next request is valid", async () => {
     const controller = new AbortController();
     const provider = new ScriptedProvider([useTools(call("c1", "a.ts"), call("c2", "b.ts"))]);

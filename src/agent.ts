@@ -250,29 +250,41 @@ export async function* runAgent({
     // Every call must get a result, even after an interrupt or a "no": a
     // request with an unanswered tool call is rejected by the API.
     let declined = false;
-    for (let i = 0; i < calls.length; ) {
-      // A run of consecutive parallel calls goes together; anything else, one at a time.
-      let end = i + 1;
-      if (isParallel(calls[i]!)) while (end < calls.length && isParallel(calls[end]!)) end++;
-      const group = calls.slice(i, end);
-      i = end;
-      if (signal.aborted || declined) {
-        // The abort first, as in runGroup: after Esc the model reads "Interrupted", not "the user declined".
-        for (const call of group) history.push({ role: "tool", callId: call.id, name: call.name, text: signal.aborted ? NOT_RUN.aborted : NOT_RUN.declined });
-        continue;
-      }
-      const results: Result[] = [];
-      for await (const event of runGroup(group, runTool, maxParallel, signal)) {
-        if (event.type === "start") {
-          yield { type: "tool_start", call: event.call, label: labelOf(event.call) };
-        } else {
-          results[event.index] = event.result;
-          if (event.type === "end") yield { type: "tool_end", call: event.call, result: event.result };
+    // How many calls have their result in the history: they're appended in call order, so the rest are a suffix.
+    let answered = 0;
+    const answer = (call: ToolCall, text: string) => {
+      history.push({ role: "tool", callId: call.id, name: call.name, text });
+      answered++;
+    };
+    try {
+      for (let i = 0; i < calls.length; ) {
+        // A run of consecutive parallel calls goes together; anything else, one at a time.
+        let end = i + 1;
+        if (isParallel(calls[i]!)) while (end < calls.length && isParallel(calls[end]!)) end++;
+        const group = calls.slice(i, end);
+        i = end;
+        if (signal.aborted || declined) {
+          // The abort first, as in runGroup: after Esc the model reads "Interrupted", not "the user declined".
+          for (const call of group) answer(call, signal.aborted ? NOT_RUN.aborted : NOT_RUN.declined);
+          continue;
         }
+        const results: Result[] = [];
+        for await (const event of runGroup(group, runTool, maxParallel, signal)) {
+          if (event.type === "start") {
+            yield { type: "tool_start", call: event.call, label: labelOf(event.call) };
+          } else {
+            results[event.index] = event.result;
+            if (event.type === "end") yield { type: "tool_end", call: event.call, result: event.result };
+          }
+        }
+        // In call order, whatever order they finished in (prompt cache).
+        group.forEach((call, k) => answer(call, results[k]!.output));
+        declined = results.some((r) => r.declined);
       }
-      // In call order, whatever order they finished in (prompt cache).
-      group.forEach((call, k) => history.push({ role: "tool", callId: call.id, name: call.name, text: results[k]!.output }));
-      declined = results.some((r) => r.declined);
+    } finally {
+      // The consumer stopped mid-tools (it threw while handling an event, or broke out of its loop): the calls
+      // without a result would leave the history invalid, and the API would reject every request from now on.
+      for (const call of calls.slice(answered)) history.push({ role: "tool", callId: call.id, name: call.name, text: NOT_RUN.aborted });
     }
     if (signal.aborted) {
       yield { type: "done", reason: "aborted" };

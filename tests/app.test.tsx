@@ -1195,6 +1195,25 @@ describe("subagents", () => {
     });
   });
 
+  test("an agent call with arguments that aren't an object doesn't break the session", async () => {
+    const model = new ScriptedProvider([
+      [{ type: "tool_call", call: { id: "x1", name: "agent", arguments: "null" } }, { type: "done" }] as AgentEvent[],
+      reply("Sorry, let me try again."),
+      reply("Hi again."),
+    ]);
+    const { lastFrame, stdin } = renderAgents(model);
+    await type(stdin, "go");
+    await tick(300);
+    expect(lastFrame()).not.toContain("null is not an object");
+    await type(stdin, "again");
+    await tick(200);
+    // Every tool call in the history has its result before the next user turn.
+    const history = model.requests.at(-1)!.history;
+    const callAt = history.findIndex((t) => t.role === "assistant" && t.toolCalls?.length);
+    expect(history[callAt + 1]).toMatchObject({ role: "tool", callId: "x1" });
+    expect(lastFrame()).toContain("Hi again.");
+  });
+
   test("a call id reused in a later step doesn't inherit a subagent's steps", async () => {
     // Providers number calls per reply (Ollama's call_0, call_1…), so ids repeat.
     const model = new ScriptedProvider([
