@@ -137,11 +137,18 @@ describe("the agent tool", () => {
   });
 
   test("a no inside the subagent stops it and the parent", async () => {
-    const provider = new ScriptedProvider([useTool("w1", "write_file", { path: "made.txt", content: "hi\n" }), say("never")]);
+    const provider = new ScriptedProvider([
+      [{ type: "text_delta", text: "I'll write made.txt now." }, ...useTool("w1", "write_file", { path: "made.txt", content: "hi\n" })],
+      say("never"),
+    ]);
     const { host } = makeHost(provider);
     const result = await runTool(agentCall({ description: "x", prompt: "p" }), ctxWith(host, () => "no").ctx);
     expect(result.declined).toBe(true);
     expect(provider.requests).toHaveLength(1);
+    // The parent must learn the write didn't happen, not just read "I'll write made.txt now."
+    expect(result.output).toBe(
+      "I'll write made.txt now.\n\n[Marv: The user declined its write_file made.txt, so it stopped there. Don't retry: wait for the user to say how to proceed.]",
+    );
   });
 
   test("stopped by the user (Esc declines what's waiting and aborts), it's reported as interrupted, not declined", async () => {

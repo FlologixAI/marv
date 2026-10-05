@@ -131,8 +131,12 @@ agent({
    `done · 6 tools · 41.2k tokens · "<first line>"`. If the subagent ended
    with `error`, `max_steps`, `aborted` or `length`, return whatever text it
    had plus a note saying why, with `isError: true`. If it ended `declined`,
-   set `declined: true` (section 4), unless the run was also aborted (Esc
-   declines what's waiting, then stops): that's reported as the interrupt.
+   add a note naming the step the user declined (`[Marv: The user declined its
+   write_file a.txt, so it stopped there. Don't retry: wait for the user to say
+   how to proceed.]`, so the parent doesn't take the subagent's "I'll update
+   a.txt now." as done) and set `declined: true` (section 4), unless the run
+   was also aborted (Esc declines what's waiting, then stops): that's reported
+   as the interrupt.
 
 New `ToolContext` fields: `callId` (set by `runTool`), `readOnly` (extra
 folders bash may read, e.g. a worktree's `.git`), and `agentHost?: AgentHost` (agent types,

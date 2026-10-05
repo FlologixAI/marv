@@ -106,7 +106,8 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
   let text = "";
   let reason = "error";
   let error: string | undefined;
-  let declined = false;
+  /** The step the user said no to ("write_file a.txt"), if any. */
+  let declinedStep: string | undefined;
   let branchLine: string | undefined;
   // Everything after the worktree exists runs inside this try, so the
   // worktree is finished (its changes committed, its folder removed) however
@@ -154,7 +155,7 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
           break;
         case "tool_end":
           steps.push(`${event.call.name} ${event.result.label} · ${event.result.isError ? "error" : event.result.summary}`);
-          declined ||= Boolean(event.result.declined);
+          if (event.result.declined) declinedStep ??= `${event.call.name} ${event.result.label}`;
           current = undefined;
           report();
           break;
@@ -183,11 +184,17 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
 
   const stats = `${plural(toolCount, "tool")} · ${tokens(used)} tokens`;
   const stopped = reason === "end" || reason === "declined" ? "" : `[${fromMarv(STOPPED[reason] ?? `It stopped (${reason}).`)}${error ? ` ${error}` : ""}]`;
-  // The subagent's own text first, then Marv's lines.
-  const output = [text.trim() || "(The subagent gave no report.)", stopped, branchLine].filter(Boolean).join("\n\n");
   // A "no" that came with an interrupt (Esc declines what's waiting, then
   // stops the run) is reported as the interrupt it was.
-  if (declined && reason !== "aborted") return { output, summary: `declined · ${stats}`, declined: true };
+  const declined = declinedStep !== undefined && reason !== "aborted";
+  // Without this line the parent reads only the subagent's last words ("I'll
+  // update a.txt now.") and may later assume the change was made.
+  const declinedLine = declined
+    ? `[${fromMarv(`The user declined its ${declinedStep}, so it stopped there. Don't retry: wait for the user to say how to proceed.`)}]`
+    : "";
+  // The subagent's own text first, then Marv's lines.
+  const output = [text.trim() || "(The subagent gave no report.)", stopped, declinedLine, branchLine].filter(Boolean).join("\n\n");
+  if (declined) return { output, summary: `declined · ${stats}`, declined: true };
   if (stopped) return { output, summary: `stopped · ${stats}`, isError: true };
   const first = text.trim().split("\n")[0]!.slice(0, 80);
   return { output, summary: `done · ${stats}${first ? ` · "${first}"` : ""}` };
