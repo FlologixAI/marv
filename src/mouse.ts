@@ -42,21 +42,42 @@ export function extractMouse(chunk: string): { rest: string; events: MouseEvent[
   return { rest, events };
 }
 
+/** The start of a mouse code whose end hasn't arrived: only mouse codes begin with ESC [ <, so this can wait. */
+const PARTIAL_MOUSE = /\x1b\[<[\d;]*$/;
+
 /**
  * Wraps `stdin.read()` (which Ink calls in a loop) so mouse codes are removed
  * from every chunk and emitted on `mouse` instead.
  * Assumes stdin is in utf8 mode, which Ink sets up.
+ *
+ * A code can arrive split across reads (over SSH, or a busy terminal). The
+ * start of one is held until the rest comes, or Ink would drop it (a lost
+ * click) or type it into the prompt. A chunk ending in a bare ESC or ESC [
+ * can't be held (that's also the Esc key, or an arrow key's start), so the
+ * rest is joined on only if it's already waiting.
  */
 export function filterMouseInput(stdin: { read: (size?: number) => unknown }) {
   const read = stdin.read.bind(stdin);
+  let held = "";
   stdin.read = (size?: number) => {
     for (;;) {
-      const chunk = read(size);
-      if (typeof chunk !== "string") return chunk;
+      const next = read(size);
+      if (typeof next !== "string") return next; // nothing more for now: `held` waits for the next chunk
+      let chunk = held + next;
+      held = "";
+      if (/\x1b\[?$/.test(chunk)) {
+        const more = read(size);
+        if (typeof more === "string") chunk += more;
+      }
+      const partial = PARTIAL_MOUSE.exec(chunk);
+      if (partial) {
+        held = partial[0];
+        chunk = chunk.slice(0, partial.index);
+      }
       const { rest, events } = extractMouse(chunk);
       for (const event of events) mouse.emit("event", event);
       // A chunk that was only mouse codes: keep reading rather than hand Ink "".
-      if (rest || !chunk) return rest;
+      if (rest || !next) return rest;
     }
   };
 }
