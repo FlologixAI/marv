@@ -3,8 +3,8 @@
 //
 // The tool list is fixed once the servers have settled (connected or failed):
 // every request must send the same tool definitions, or the provider's prompt
-// cache starts over. `ready` resolves when they have; the App waits for it
-// before the first request. Only trusting a project's servers (/mcp trust)
+// cache starts over. `ready` resolves when they have; the session's turn
+// waits for it before the first request. Only trusting a project's servers (/mcp trust)
 // adds tools later, which the user asked for.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -76,7 +76,7 @@ export class McpManager {
   specs: ToolSpec[] = [];
   /** Resolves once every server Marv was allowed to start has connected or failed. */
   ready: Promise<void> = Promise.resolve();
-  /** Whether `ready` has resolved (so the App knows whether to say it's waiting). */
+  /** Whether `ready` has resolved (so the session's turn knows whether to say it's waiting). */
   settled = true;
   /** Told when a server's state changes (for the UI). */
   onChange: () => void = () => {};

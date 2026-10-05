@@ -207,9 +207,17 @@ await session.close();
   runs to the end. One turn at a time: `send()` and `clear()` throw during one, `resume()` and `compact()`
   reject; the session is free again just before `turn_end`, so you can send the next message from there.
 - **Approvals.** Pass `approve: async (request) => "yes" | "always" | "no"` to decide what runs. Without it,
-  only what Marv's yolo mode vouches for runs (edits outside `.git`, sandboxed commands without network);
-  anything else goes back to the model as refused, and it carries on. With no one to ask, the 25-step limit
-  is a hard stop too.
+  only what needs no yes runs: read-only tools, what Marv's yolo mode vouches for (edits outside `.git`,
+  sandboxed commands without network), subagents (shared-folder ones under these same rules; worktree ones
+  when sandboxed), and MCP tools whose server says they're read-only. Anything else goes back to the model as
+  refused, and it carries on. The sandbox is bubblewrap, on Linux: without it (macOS, say) every `bash`
+  command needs an approver. With no one to ask, the 25-step limit is a hard stop too, and `cwd` can't be
+  your home folder, a folder above it, or `/` (`createSession` throws): edits would run there unasked,
+  dotfiles included.
+- **Review before you run.** What the agent writes can plant something you'll later run outside the
+  sandbox. Edits that run unasked are kept out of `.git` (hooks, config), but a `package.json` script, a
+  `Makefile` or an `.envrc` is an ordinary file. In a repository you don't trust, read the changes
+  (`git diff`) before running anything in it.
 - **Nothing from disk unless asked.** `sources: ["project"]` reads the repository's `AGENTS.md`, `.marv/` and
   `.mcp.json` (whose servers still need trusting); `"user"` reads your `~/.marv` (skills, agents, memory, MCP
   servers). Environment variables like `OPENROUTER_API_KEY` and `MARV_MODEL` are ignored: the session uses what
@@ -219,11 +227,18 @@ await session.close();
   your own: no trust prompt, started in your home folder (use an absolute path, or `${MARV_PROJECT_DIR}` for
   the project). So never pass config read from a repository you don't control; `sources: ["project"]` is the
   way to use a repository's servers, and those still need trusting.
-- **Your own tools:** `tools: [{ name, description, input: z.object({...}), label, run }]`. A Provider of
-  your own is used for everything, subagents included.
-- **Settings between turns.** `configure({ provider, thinking, sandbox, yolo })` never throws: a turn reads
-  its settings when it starts, so a change during one applies from the next. `close()` stops what's running,
-  waits for it, saves, and stops the MCP servers the session started.
+- **Your own tools:** `tools: [{ name, description, input: z.object({...}), label, run }]`, offered to the
+  main agent (not to subagents). `input` must be a zod 4 schema (it's described to the model with
+  `z.toJSONSchema`). A name of a built-in tool, one used twice, or one starting with `mcp__` (MCP servers'
+  tools) makes `createSession` throw. A Provider of your own is used for everything, subagents included.
+- **Settings between turns.** `configure({ provider, thinking, sandbox, yolo })`: a turn reads its settings
+  when it starts, so a change during one applies from the next. It throws only for an invalid provider (an
+  unknown `kind`), and then nothing changed. `close()` stops what's running, waits for it, saves, and stops
+  the MCP servers the session started; `send()` throws after it.
+- **Files.** `configDir` (default `~/.marv`) moves config, memory, `mcp.json`, sessions, trajectories,
+  worktrees and MCP trust; personal skills and agents are still read from `~/.marv` in your home folder, as
+  the CLI does. A repository's MCP servers can only be trusted with the CLI's `/mcp trust`. `onWarning`
+  hears what doesn't fit a turn's events (a trajectory that can't be written).
 - **Bun only** (1.3 or newer). `marv/sdk` is TypeScript source, so your `tsconfig.json` needs
   `"moduleResolution": "bundler"` and `"allowImportingTsExtensions": true` (`bun init`'s defaults have both).
 - **Installing from a path or tarball** (`bun add`) currently fails on Bun 1.3.11: it reads this package's
