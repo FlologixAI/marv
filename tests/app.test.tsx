@@ -26,6 +26,11 @@ const DOWN = "\x1b[B";
 
 // Let React and the async provider stream settle.
 const tick = (ms = 50) => Bun.sleep(ms);
+/** Waits until `ready()` (up to 5 s), then a moment more: a component's key handler attaches just after it's drawn. */
+async function until(ready: () => boolean) {
+  for (let i = 0; i < 100 && !ready(); i++) await tick();
+  await tick();
+}
 
 async function type(stdin: { write: (data: string) => void }, text: string) {
   stdin.write(text);
@@ -407,7 +412,7 @@ describe("App", () => {
         const model = new ScriptedProvider([...reads(25), reply("Finally done.")]);
         const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
         await type(stdin, "read it a lot");
-        await tick(400);
+        await until(() => lastFrame()!.includes("Keep going?"));
         expect(lastFrame()).toContain("Keep going? Marv has taken 25 steps on this request without finishing");
         expect(model.requests).toHaveLength(25); // waiting: nothing more is sent until the answer
         stdin.write(ENTER);
@@ -420,7 +425,7 @@ describe("App", () => {
         const model = new ScriptedProvider([...reads(25), reply("never")]);
         const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
         await type(stdin, "read it a lot");
-        await tick(400);
+        await until(() => lastFrame()!.includes("Keep going?"));
         stdin.write(DOWN);
         stdin.write(DOWN);
         await tick();
@@ -973,7 +978,7 @@ describe("MCP servers", () => {
     const model = new ScriptedProvider([useTool("e1", "mcp__test__echo", { text: "hi" }), reply("The server said hi.")]);
     const { lastFrame, stdin } = renderWithMcp(model, new McpManager([server()], { root: project, version: "9.9.9" }));
     await type(stdin, "use the echo tool"); // sent before the server is up
-    for (let i = 0; i < 100 && !lastFrame()!.includes("Do you want to proceed?"); i++) await tick();
+    await until(() => lastFrame()!.includes("Do you want to proceed?"));
     expect(lastFrame()).toContain("test: echo");
     expect(lastFrame()).toContain("runs outside the sandbox");
     const first = model.requests[0]!;
@@ -984,6 +989,53 @@ describe("MCP servers", () => {
     expect(lastFrame()).toContain("mcp__test__echo hi");
     expect(lastFrame()).toContain("The server said hi.");
     expect(model.requests[1]!.history.at(-1)).toMatchObject({ role: "tool", text: "echo: hi" });
+  });
+
+  /** An McpManager stand-in that stays "starting" until the test says it's ready. */
+  function slowMcp() {
+    let finish: () => void = () => {};
+    const fake = {
+      settled: false,
+      ready: new Promise<void>((resolve) => (finish = resolve)),
+      tools: [],
+      specs: [],
+      status: () => [],
+      untrusted: () => [],
+    };
+    return { mcp: fake as unknown as McpManager, finish: () => ((fake.settled = true), finish()) };
+  }
+
+  test("while servers start, a message waits (with a spinner), and a second one can't start a second run", async () => {
+    const model = new ScriptedProvider([reply("one done"), reply("never")]);
+    const { mcp, finish } = slowMcp();
+    const { lastFrame, stdin } = render(
+      <App store={store} initialFile={LOCAL} env={{}} version="9.9.9" cwd="~/x" root={project} splashMs={0} makeProvider={() => model} loadModels={async () => []} mcp={mcp} />,
+    );
+    await type(stdin, "one");
+    await tick(100);
+    expect(lastFrame()).toContain("Waiting for MCP servers to start…");
+    await type(stdin, "two"); // busy: not sent
+    await tick(100);
+    finish();
+    await tick(200);
+    expect(model.requests.map((r) => r.history.filter((t) => t.role === "user").map((t) => t.text))).toEqual([["one"]]);
+    expect(lastFrame()).toContain("one done");
+  });
+
+  test("Esc cancels a message that's waiting for servers to start", async () => {
+    const model = new ScriptedProvider([reply("never")]);
+    const { mcp, finish } = slowMcp();
+    const { lastFrame, stdin } = render(
+      <App store={store} initialFile={LOCAL} env={{}} version="9.9.9" cwd="~/x" root={project} splashMs={0} makeProvider={() => model} loadModels={async () => []} mcp={mcp} />,
+    );
+    await type(stdin, "one");
+    await tick(100);
+    stdin.write("\x1b");
+    await tick(100);
+    expect(lastFrame()).toContain("Interrupted.");
+    finish();
+    await tick(200);
+    expect(model.requests).toHaveLength(0);
   });
 
   test("a project's server waits for /mcp trust, and says so", async () => {

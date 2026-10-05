@@ -224,6 +224,8 @@ export function App({
   const usageRef = useRef(usage);
   usageRef.current = usage;
   const [compacting, setCompacting] = useState(false);
+  // What a turn is waiting for before its first request (MCP servers starting), shown in place of "Thinking…".
+  const [waitingFor, setWaitingFor] = useState<string | null>(null);
 
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<string[]>([]);
@@ -421,11 +423,24 @@ export function App({
     // `forModel`: what the model gets, when it differs from what the user typed (a /skill).
     async (text: string, forModel = text) => {
       addMessage({ role: "user", text });
-      // MCP servers still starting: their tools must be in place before the first request (the list can't change after).
+      // MCP servers still starting: their tools must be in place before the first request (the list can't change
+      // after). The turn is busy from here, so a second message can't start a second run on the same history, and
+      // Esc or ctrl+c (they abort whatever abortRef holds) cancel the wait.
       if (mcp && !mcp.settled) {
-        setNotice("Waiting for MCP servers to start…");
-        await mcp.ready;
-        setNotice(null);
+        const waiting = new AbortController();
+        abortRef.current = waiting;
+        setStreaming("");
+        setWaitingFor("Waiting for MCP servers to start…");
+        const cancelled = new Promise<"cancelled">((resolve) => waiting.signal.addEventListener("abort", () => resolve("cancelled"), { once: true }));
+        // A failed start still settles: the turn goes on with whatever tools there are.
+        const outcome = await Promise.race([mcp.ready.then(() => "ready" as const, () => "ready" as const), cancelled]);
+        setWaitingFor(null);
+        if (outcome === "cancelled") {
+          abortRef.current = null;
+          setStreaming(null);
+          addMessage({ role: "system", text: "Interrupted." });
+          return;
+        }
       }
       const { specs: turnSpecs, tools: turnTools } = offered();
       // Trajectory: the session's setup (once), what this message says about
@@ -1131,7 +1146,7 @@ export function App({
 
         {streaming !== null &&
           (streaming === "" ? (
-            toolsRunning === 0 && <ThinkingView thought={thinking} label={compacting ? "Compacting the conversation…" : undefined} />
+            toolsRunning === 0 && <ThinkingView thought={thinking} label={compacting ? "Compacting the conversation…" : (waitingFor ?? undefined)} />
           ) : (
             <MessageView message={{ role: "assistant", text: streaming }} streaming />
           ))}
