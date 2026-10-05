@@ -364,6 +364,35 @@ describe("App", () => {
       await tick(250);
       expect(lastFrame()).toContain("Compaction stopped; nothing changed.");
     });
+
+    test("Esc during an automatic compaction stops the turn too", async () => {
+      const requests: string[] = [];
+      const model: Provider = {
+        name: "slow-summary",
+        contextLength: 1000,
+        async *stream(history, options) {
+          const last = (history.at(-1) as { text: string }).text;
+          requests.push(last.slice(0, 20));
+          if (last.includes("Summarize")) {
+            while (!options?.signal?.aborted) await Bun.sleep(10);
+            return;
+          }
+          yield { type: "text_delta", text: "answer" };
+          yield { type: "usage", usage: { promptTokens: 950, completionTokens: 10 } };
+          yield { type: "done" };
+        },
+      };
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "one");
+      await tick(150);
+      await type(stdin, "two"); // 96% full: compacts first
+      await until(() => lastFrame()!.includes("Compacting the conversation…"));
+      stdin.write("\x1b");
+      await tick(300);
+      expect(lastFrame()).toContain("your message wasn't sent");
+      expect(requests).toEqual(["one", "Summarize our conver"]); // "two" never went out
+      expect(lastFrame()).toContain("Type a message"); // not busy
+    });
   });
 
   test("puts AGENTS.md in the system prompt and says it's loaded", async () => {

@@ -376,11 +376,12 @@ export function App({
    * src/compact.ts). The transcript is untouched; only what the model sees
    * changes. Returns whether it compacted.
    */
+  // How a compaction ended: send() stops the turn when the user stopped it, and goes on otherwise.
   const compact = useCallback(
-    async (focus: string | undefined, automatic: boolean) => {
+    async (focus: string | undefined, automatic: boolean): Promise<"compacted" | "stopped" | "failed"> => {
       if (conversation.current.length === 0) {
         addMessage({ role: "system", text: "Nothing to compact yet." });
-        return false;
+        return "failed";
       }
       const before = usageRef.current;
       const controller = new AbortController();
@@ -401,12 +402,13 @@ export function App({
       setCompacting(false);
 
       if ("error" in result) {
-        addMessage(
-          controller.signal.aborted
-            ? { role: "system", text: "Compaction stopped; nothing changed." }
-            : { role: "system", isError: true, text: `Couldn't compact the conversation: ${result.error}` },
-        );
-        return false;
+        if (controller.signal.aborted) {
+          // Esc meant "stop": before a message, that's the message too (it would run on the nearly full context).
+          addMessage({ role: "system", text: automatic ? "Stopped: nothing was compacted, and your message wasn't sent." : "Compaction stopped; nothing changed." });
+          return "stopped";
+        }
+        addMessage({ role: "system", isError: true, text: `Couldn't compact the conversation: ${result.error}` });
+        return "failed";
       }
       conversation.current = compactedHistory(result.summary);
       // From here the model sees the summary, not the turns before it: the trajectory needs it to say what the model saw.
@@ -419,7 +421,7 @@ export function App({
         role: "system",
         text: `✻ Compacted the conversation${why}${size}. Marv continues from a summary; your transcript is unchanged.`,
       });
-      return true;
+      return "compacted";
     },
     [provider, system, offered, countUsage, contextLength, addMessage, trajectory],
   );
@@ -483,7 +485,10 @@ export function App({
       // Nearly out of context: summarize first, so this message (and what follows) fits.
       const last = usageRef.current;
       if (contextLength && last && last.promptTokens + last.completionTokens >= contextLength * COMPACT_AT) {
-        await compact(undefined, true);
+        if ((await compact(undefined, true)) === "stopped") {
+          main.finish("aborted");
+          return;
+        }
       }
       conversation.current.push({ role: "user", text: forModel });
 
