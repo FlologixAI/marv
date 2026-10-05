@@ -16,6 +16,8 @@ interface Props {
   skills?: number;
   /** How many memories were loaded. */
   memories?: number;
+  /** How many MCP servers are configured. */
+  mcpServers?: number;
   /** ctrl+o: show subagents' steps under their entries. */
   showSteps?: boolean;
   /** Told where each subagent's entry is drawn (null when it goes), so a click can find it. Keep it stable (memo). */
@@ -44,10 +46,10 @@ export function agentEntryAt(row: number, entries: Map<string, DOMElement>): str
 // In the alternate screen every frame is redrawn from the React tree, so the
 // whole transcript stays mounted (inside a ScrollView) instead of being printed
 // once with <Static>. memo() skips re-rendering it on every keystroke.
-export const Transcript = memo(function Transcript({ items, version, cwd, instructions, skills, memories, showSteps, onAgentRef }: Props) {
+export const Transcript = memo(function Transcript({ items, version, cwd, instructions, skills, memories, mcpServers, showSteps, onAgentRef }: Props) {
   return items.map((item) => {
     if (item.kind === "welcome") {
-      return <Welcome key={item.id} version={version} cwd={cwd} instructions={instructions} skills={skills} memories={memories} />;
+      return <Welcome key={item.id} version={version} cwd={cwd} instructions={instructions} skills={skills} memories={memories} mcpServers={mcpServers} />;
     }
     // Only entries with steps get the flag, so ctrl+o re-renders just those.
     const view = <MessageView key={item.id} message={item.message} showSteps={item.message.tool?.steps ? showSteps : false} />;

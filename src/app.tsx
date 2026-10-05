@@ -31,7 +31,8 @@ import { addMemory, findMemory, loadMemory, removeMemory, type Memories, type Me
 import { newSession, timeAgo, type Session, type SessionStore, type SessionSummary } from "./sessions.ts";
 import { skillMessage, type Skill } from "./skills.ts";
 import { AgentRecorder, type Trajectory, type TrajectoryRecord, type TrajectoryStore } from "./trajectory.ts";
-import { isParallelCall, runTool, toolSpecsFor } from "./tools/index.ts";
+import { isParallelCall, runTool, tools as builtinTools, toolSpecsFor } from "./tools/index.ts";
+import type { McpManager } from "./mcp/manager.ts";
 import type { AgentHost, AgentProgress, ApprovalRequest, Decision } from "./tools/types.ts";
 import type { CommandAction } from "./commands/index.ts";
 import type { Message } from "./types.ts";
@@ -103,6 +104,10 @@ interface Props {
   sessions?: SessionStore;
   /** Where every turn is logged (trajectories); without it, nothing is logged. */
   trajectories?: TrajectoryStore;
+  /** The session's MCP servers (already starting); their tools join the built-in ones. */
+  mcp?: McpManager;
+  /** MCP config files that couldn't be read, and why. */
+  mcpProblems?: string[];
   /** Start by resuming: the latest session here (marv -c), or a picker (marv -r). */
   resume?: "latest" | "pick";
   /** Where memory lives, and what it held at startup. */
@@ -133,6 +138,8 @@ export function App({
   loadModels = listModels,
   sessions,
   trajectories,
+  mcp,
+  mcpProblems = NO_PROBLEMS,
   resume,
   memory,
   agents = DEFAULT_AGENTS,
@@ -171,8 +178,13 @@ export function App({
   // Memory as of the start of this conversation (reloaded by /clear), so the system prompt stays fixed within it.
   const [memories, setMemories] = useState<Memories | undefined>(memory?.initial);
   const system = useMemo(
-    () => systemPrompt({ cwd, tools: specs.map((t) => t.name), instructions, skills, memory: memories, agents }),
-    [cwd, specs, instructions, skills, memories, agents],
+    () => systemPrompt({ cwd, tools: specs.map((t) => t.name), instructions, skills, memory: memories, agents, mcp: Boolean(mcp?.status().length) }),
+    [cwd, specs, instructions, skills, memories, agents, mcp],
+  );
+  // What the model is offered: the built-in tools, then the MCP servers' (fixed once they've started, see McpManager).
+  const offered = useCallback(
+    () => (mcp ? { specs: [...specs, ...mcp.specs], tools: [...builtinTools, ...mcp.tools] } : { specs, tools: builtinTools }),
+    [specs, mcp],
   );
   // Skills show up in the / menu next to the built-in commands.
   const menu = useMemo(() => [...commands, ...skills.map(({ name, description }) => ({ name, description }))], [skills]);
@@ -361,7 +373,7 @@ export function App({
         provider,
         history: conversation.current,
         system,
-        tools: specs,
+        tools: offered().specs,
         signal: controller.signal,
         focus,
         onUsage: countUsage,
@@ -391,13 +403,20 @@ export function App({
       });
       return true;
     },
-    [provider, system, specs, countUsage, contextLength, addMessage, trajectory],
+    [provider, system, offered, countUsage, contextLength, addMessage, trajectory],
   );
 
   const send = useCallback(
     // `forModel`: what the model gets, when it differs from what the user typed (a /skill).
     async (text: string, forModel = text) => {
       addMessage({ role: "user", text });
+      // MCP servers still starting: their tools must be in place before the first request (the list can't change after).
+      if (mcp && !mcp.settled) {
+        setNotice("Waiting for MCP servers to start…");
+        await mcp.ready;
+        setNotice(null);
+      }
+      const { specs: turnSpecs, tools: turnTools } = offered();
       // Trajectory: the session's setup (once), what this message says about
       // the last turn, and the new turn. Everything below records into it.
       const log = trajectory();
@@ -405,7 +424,7 @@ export function App({
       if (log) {
         if (sessionLogged.current !== log.session) {
           const { provider: providerId, model } = configRef.current;
-          log.write({ type: "session", root, marv: version, provider: providerId, model, system, tools: specs.map((t) => t.name), git: gitHead(root) });
+          log.write({ type: "session", root, marv: version, provider: providerId, model, system, tools: turnSpecs.map((t) => t.name), git: gitHead(root) });
           sessionLogged.current = log.session;
         }
         const previous = lastTurn.current;
@@ -522,9 +541,13 @@ export function App({
           provider,
           history: conversation.current,
           system,
-          tools: specs,
+          tools: turnSpecs,
           runTool: (call) =>
-            runTool(call, { root, signal: controller.signal, approve, sandbox: config.sandbox, yolo: config.yolo, skills, memory: memory?.paths, agentHost }),
+            runTool(
+              call,
+              { root, signal: controller.signal, approve, sandbox: config.sandbox, yolo: config.yolo, skills, memory: memory?.paths, agentHost },
+              turnTools,
+            ),
           signal: controller.signal,
           isParallel: isParallelCall,
           // At the step limit, ask (in the approval queue, so Esc still stops everything) instead of stopping dead.
@@ -652,7 +675,8 @@ export function App({
       addMessage,
       updateMessage,
       system,
-      specs,
+      offered,
+      mcp,
       skills,
       root,
       approve,
@@ -741,6 +765,7 @@ export function App({
       agentProblems,
       usage: { totals, last: usage, contextLength },
       trajectoriesPath: trajectories && shortenHome(join(trajectories.dir, projectKey(root))),
+      mcp: { servers: mcp?.status() ?? [], problems: mcpProblems },
     });
     switch (action.type) {
       case "print":
@@ -792,6 +817,9 @@ export function App({
       case "feedback":
         rateLastTurn(action);
         break;
+      case "mcp-trust":
+        void trustMcp();
+        break;
       case "yolo":
         void saveConfig({ ...(file ?? { provider: config.provider }), yolo: action.on }, yoloStatus({ ...config, yolo: action.on }));
         break;
@@ -802,6 +830,23 @@ export function App({
       case "exit":
         exit();
         break;
+    }
+  };
+
+  /** /mcp trust: the project's servers the user hasn't trusted yet, trusted (for this exact config) and started. */
+  const trustMcp = async () => {
+    const waiting = mcp?.untrusted() ?? [];
+    if (!mcp || waiting.length === 0) {
+      addMessage({ role: "system", text: "No MCP servers are waiting to be trusted (/mcp lists them)." });
+      return;
+    }
+    addMessage({ role: "system", text: `Starting ${waiting.map((s) => s.name).join(", ")}…` });
+    try {
+      const started = await mcp.trustAll();
+      const lines = started.map((s) => (s.state === "connected" ? `${s.name}: connected · ${s.tools.length} tools` : `${s.name}: failed: ${s.error}`));
+      addMessage({ role: "system", text: lines.join("\n"), isError: started.some((s) => s.state !== "connected") });
+    } catch (err) {
+      addMessage({ role: "system", text: `Couldn't trust the servers: ${(err as Error).message}`, isError: true });
     }
   };
 
@@ -1010,6 +1055,32 @@ export function App({
     addMessage({ role: "system", isError: true, text: `${count} skill${count === 1 ? "" : "s"} couldn't be loaded (see /skills):\n${skillProblems.join("\n")}` });
   }, [skillProblems, addMessage]);
 
+  // MCP: config problems right away; once the servers have started, any that failed, and a project's servers
+  // waiting to be trusted (they don't start until then).
+  useEffect(() => {
+    if (mcpProblems.length) addMessage({ role: "system", isError: true, text: `MCP config problems (see /mcp):\n${mcpProblems.join("\n")}` });
+    if (!mcp) return;
+    let cancelled = false;
+    void mcp.ready.then(() => {
+      if (cancelled) return;
+      const status = mcp.status();
+      const failed = status.filter((s) => s.state === "failed");
+      if (failed.length) {
+        addMessage({ role: "system", isError: true, text: `Couldn't start ${failed.map((s) => `MCP server ${s.name}: ${s.error}`).join("; ")} (see /mcp).` });
+      }
+      const waiting = status.filter((s) => s.state === "untrusted");
+      if (waiting.length) {
+        addMessage({
+          role: "system",
+          text: `This project's .mcp.json lists MCP servers you haven't trusted yet: ${waiting.map((s) => `${s.name} (${s.target})`).join(", ")}. They'd run with your permissions, outside the sandbox. /mcp trust starts them.`,
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mcp, mcpProblems, addMessage]);
+
   // Agent files that couldn't be loaded, likewise.
   useEffect(() => {
     if (agentProblems.length === 0) return;
@@ -1042,6 +1113,7 @@ export function App({
           instructions={Boolean(instructions)}
           skills={skills.length}
           memories={memories ? memories.personal.length + memories.project.length : 0}
+          mcpServers={mcp?.status().length ?? 0}
           showSteps={showSteps}
           onAgentRef={onAgentRef}
         />

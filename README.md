@@ -10,6 +10,7 @@ Marv is written in TypeScript on [Bun](https://bun.sh), with an [Ink](https://gi
 - **Safe yolo mode (on by default).** Sandboxed commands and edits inside the project run without asking; anything the sandbox can't contain (network access, git commits and other repository changes, `.git` itself, memory) still shows you a colored diff or the exact command first: yes, yes for the rest of the session, or no (which stops Marv so you can redirect it). `/yolo off` asks for every change.
 - **Sandboxed commands.** On Linux, commands run in [bubblewrap](https://github.com/containers/bubblewrap): only the project folder is writable, your home folder (keys, SSH, Marv's own config) is hidden, there's no network unless a command asks for it, and API keys never reach the command.
 - **Any model.** OpenRouter or a local Ollama model, with a searchable model picker showing prices. Switch with `/model`.
+- **MCP servers.** Connect any [Model Context Protocol](https://modelcontextprotocol.io) server, local or remote, in `.mcp.json` or `~/.marv/mcp.json` (Claude Code's format). Its tools join Marv's; calls ask first unless the server marks a tool read-only, since servers run outside the sandbox. A project's servers only start once you trust them (`/mcp trust`).
 - **Skills.** Drop a `SKILL.md` into `.marv/skills/` (or `~/.marv/skills/`) and Marv loads it when a task matches, or run it yourself with `/<skill-name>`.
 - **Subagents.** Marv can hand a task to a fresh agent with its own context, which reports back when it's done, so the files it read don't fill up the conversation. Several can run in parallel, each in its own git worktree if they change files. Click one to watch its own transcript live. Agent types are Markdown files, compatible with Claude Code's.
 - **Memory.** Marv remembers your preferences and project facts across sessions. Every change it makes to its memory needs your approval.
@@ -77,6 +78,7 @@ Type what you want in plain language, for example:
 | `/yolo` | Run what the sandbox contains without asking (`/yolo on`, `/yolo off`) |
 | `/good`, `/bad` | Rate the last turn, with an optional note (`/bad edited the wrong file`) |
 | `/label` | Tag the last turn (`/label refactor, tests`) |
+| `/mcp` | Show MCP servers and their tools; `/mcp trust` starts the project's |
 | `/trajectories` | Show or set run logging (`/trajectories on`, `/trajectories off`) |
 | `/clear` | Start a fresh conversation (the old one stays saved) |
 | `/exit` | Quit |
@@ -114,7 +116,8 @@ Marv is built so that you stay in control of what changes on your machine:
 3. **Paths are confined to the project.** Tools refuse anything outside the folder Marv was started in, including through symlinks.
 4. **Commands run in a sandbox.** The system is read-only and the home folder is hidden (toolchains like `~/.bun` and your git config are mounted read-only). The project folder is the only writable place, and there's no network unless the command asks for it, which the approval prompt shows. The environment starts empty, so API keys can't leak into commands.
 5. **Memory changes are approved too.** Memory comes back in every future session, so an instruction planted by a malicious file and saved there would be a persistent prompt injection. You see every memory before it's saved.
-6. **Subagents ask like Marv does, or work in a worktree.** A subagent in the project folder asks before each change, and the prompt says which one is asking. One in its own git worktree is approved once when it starts; inside its sandboxed worktree its edits and commands then run without asking, except commands that want the network (and with the sandbox off, everything asks). It can't touch the repository's `.git` (it's read-only in the sandbox, so no commits, branch moves, hooks or config), and when it's done, Marv commits its changes to its branch, without running any of the repository's hooks. Its work comes back as a branch you (or Marv, with your approval) review and merge. Esc at an approval prompt declines everything waiting and stops the run.
+6. **MCP servers are trusted explicitly, and their calls ask.** A server is a program running with your permissions, outside the sandbox, so a project's `.mcp.json` servers start only after `/mcp trust` (for that exact config: if the file changes, it asks again), and every call asks unless the server marks the tool read-only. Yolo mode never skips these. Local servers get no API keys from Marv's environment, only what their config gives them. What a server returns is treated as data, not instructions.
+7. **Subagents ask like Marv does, or work in a worktree.** A subagent in the project folder asks before each change, and the prompt says which one is asking. One in its own git worktree is approved once when it starts; inside its sandboxed worktree its edits and commands then run without asking, except commands that want the network (and with the sandbox off, everything asks). It can't touch the repository's `.git` (it's read-only in the sandbox, so no commits, branch moves, hooks or config), and when it's done, Marv commits its changes to its branch, without running any of the repository's hooks. Its work comes back as a branch you (or Marv, with your approval) review and merge. Esc at an approval prompt declines everything waiting and stops the run.
 
 ## Skills
 
@@ -161,6 +164,8 @@ Put it in `.marv/agents/<name>.md` (this project) or `~/.marv/agents/<name>.md` 
 | `~/.marv/skills/` | Your personal skills |
 | `.marv/skills/` | The project's skills |
 | `~/.marv/agents/` | Your personal agent types |
+| `~/.marv/mcp.json`, `.mcp.json` | MCP servers: yours, and the project's (`{"mcpServers": {"name": {"command": …} or {"type": "http", "url": …}}}`) |
+| `~/.marv/mcp-trust.json` | Which project MCP servers you've trusted |
 | `.marv/agents/` | The project's agent types |
 | `~/.marv/worktrees/<project>/` | Subagents' worktrees while they run (removed when each finishes; its branch stays) |
 | `AGENTS.md` | Project instructions, read into the system prompt at startup |

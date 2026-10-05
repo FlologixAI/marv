@@ -13,6 +13,9 @@ import { loadInstructions } from "./prompt.ts";
 import { loadSkills } from "./skills.ts";
 import { SessionStore } from "./sessions.ts";
 import { TrajectoryStore } from "./trajectory.ts";
+import { loadMcpConfig } from "./mcp/config.ts";
+import { McpManager } from "./mcp/manager.ts";
+import { McpTrust } from "./mcp/trust.ts";
 import { loadMemory, memoryPaths } from "./memory.ts";
 import { renderOptions } from "./render-options.ts";
 import { selection } from "./selection.ts";
@@ -31,6 +34,7 @@ Config:
   ~/.marv/sessions/     saved conversations, one folder per project
   ~/.marv/trajectories/ every turn, step by step, with your ratings (/trajectories)
   ~/.marv/agents/       your subagent types (a project's go in .marv/agents/)
+  ~/.marv/mcp.json      your MCP servers (a project's go in .mcp.json; /mcp)
   ~/.marv/worktrees/    subagents' worktrees while they run
   OPENROUTER_API_KEY    overrides the saved OpenRouter key
   OLLAMA_HOST           where Ollama runs (default localhost:11434)
@@ -53,6 +57,14 @@ const root = process.cwd();
 const instructions = await loadInstructions(root);
 const { skills, problems: skillProblems } = await loadSkills({ root, home: homedir() });
 const { agents, problems: agentProblems } = await loadAgents({ root, home: homedir() });
+// MCP servers start now, in the background; the first request waits for them (see McpManager).
+const { servers: mcpServers, problems: mcpProblems } = await loadMcpConfig({ root, configDir: defaultConfigDir(process.env), env: process.env });
+const mcp = mcpServers.length
+  ? new McpManager(mcpServers, { root, version: pkg.version, trust: new McpTrust(join(defaultConfigDir(process.env), "mcp-trust.json")) })
+  : undefined;
+void mcp?.start();
+// Local servers must not outlive Marv, however it exits.
+process.on("exit", () => mcp?.kill());
 const memoryAt = memoryPaths(defaultConfigDir(process.env), root);
 const memory = { paths: memoryAt, initial: await loadMemory(memoryAt) };
 
@@ -93,6 +105,8 @@ const instance = render(
     worktreesDir={join(defaultConfigDir(process.env), "worktrees", projectKey(root))}
     sessions={new SessionStore(join(defaultConfigDir(process.env), "sessions"))}
     trajectories={new TrajectoryStore(join(defaultConfigDir(process.env), "trajectories"))}
+    mcp={mcp}
+    mcpProblems={mcpProblems}
     memory={memory}
     resume={args.includes("-c") || args.includes("--continue") ? "latest" : args.includes("-r") || args.includes("--resume") ? "pick" : undefined}
   />,
@@ -102,4 +116,6 @@ const instance = render(
 selection.repaint = instance.repaint;
 
 await instance.waitUntilExit();
+// Let servers shut down cleanly, but don't hang on one that won't.
+await Promise.race([mcp?.close(), Bun.sleep(2000)]);
 process.exit(0);

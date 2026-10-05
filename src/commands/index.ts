@@ -1,6 +1,7 @@
 import { SUBAGENT_TOOLS, type AgentType } from "../agents.ts";
 import { maskKey, PRESETS, type Config } from "../config/config.ts";
 import { sandboxAvailable } from "../sandbox.ts";
+import type { McpServerStatus } from "../mcp/manager.ts";
 import type { Skill } from "../skills.ts";
 import { usageReport, type Totals } from "../usage.ts";
 import type { Usage } from "../provider/types.ts";
@@ -19,6 +20,8 @@ export type CommandAction =
   | { type: "sandbox"; on: boolean }
   | { type: "yolo"; on: boolean }
   | { type: "trajectories"; on: boolean }
+  /** Trust and start the project's MCP servers. */
+  | { type: "mcp-trust" }
   /** Rate or tag the last turn: 1 good, -1 bad, 0 labels only. */
   | { type: "feedback"; score: 1 | -1 | 0; note?: string; labels?: string[] }
   | { type: "resume" }
@@ -41,6 +44,8 @@ export interface CommandContext {
   agentProblems?: string[];
   /** Skills that couldn't be loaded, and why. */
   skillProblems?: string[];
+  /** MCP servers as they are now, and config problems, for /mcp. */
+  mcp?: { servers: McpServerStatus[]; problems: string[] };
   /** Where this project's trajectories are logged, for /trajectories. */
   trajectoriesPath?: string;
   /** Tokens and cost so far, for /cost. */
@@ -151,6 +156,16 @@ export const commands: Command[] = [
     },
   },
   {
+    name: "mcp",
+    description: "Show MCP servers and their tools (/mcp trust starts the project's)",
+    run: (args, { mcp }) => {
+      const arg = args.trim().toLowerCase();
+      if (arg === "trust") return { type: "mcp-trust" };
+      if (arg) return { type: "print", text: "Usage: /mcp, or /mcp trust", isError: true };
+      return { type: "print", text: mcpText(mcp), markdown: true };
+    },
+  },
+  {
     name: "good",
     description: "Rate the last turn as good (/good <optional note>)",
     run: (args) => ({ type: "feedback", score: 1, ...(args.trim() ? { note: args.trim() } : {}) }),
@@ -253,6 +268,36 @@ function sandboxStatus(config: Config): string {
   return sandboxAvailable()
     ? "on: bash runs in bubblewrap (project writable, home hidden, no network unless asked)"
     : "on, but bubblewrap isn't available here, so bash runs WITHOUT a sandbox";
+}
+
+const MCP_HELP = `No MCP servers yet. Add them to \`.mcp.json\` in the project, or \`~/.marv/mcp.json\` for every project (the same format as Claude Code's), then restart Marv:
+
+\`\`\`json
+{ "mcpServers": {
+    "files": { "command": "npx", "args": ["-y", "some-mcp-server"] },
+    "docs": { "type": "http", "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer \${DOCS_TOKEN}" } } } }
+\`\`\``;
+
+/** Markdown: one bullet per server, with its state and tools. */
+function mcpText(mcp: CommandContext["mcp"]): string {
+  if (!mcp || (mcp.servers.length === 0 && mcp.problems.length === 0)) return MCP_HELP;
+  const lines = mcp.servers.map((s) => {
+    const who = `- **${s.name}** (${s.source === "project" ? "this project" : "yours"}): `;
+    switch (s.state) {
+      case "connected": {
+        const tools = s.tools.map((t) => `\`${t.replace(`mcp__${s.name}__`, "")}\``).join(", ");
+        return `${who}connected · ${s.tools.length} tool${s.tools.length === 1 ? "" : "s"}${tools ? `: ${tools}` : ""}`;
+      }
+      case "untrusted":
+        return `${who}not trusted yet: \`${s.target}\` (\`/mcp trust\` to start it)`;
+      case "connecting":
+        return `${who}starting…`;
+      case "failed":
+        return `${who}failed: ${s.error ?? "unknown error"}${s.stderr ? `\n\n  \`\`\`\n  ${s.stderr.split("\n").slice(-5).join("\n  ")}\n  \`\`\`` : ""}`;
+    }
+  });
+  const problems = mcp.problems.length ? ["", "Couldn't load:", ...mcp.problems.map((p) => `- ${p}`)] : [];
+  return [...lines, ...problems].join("\n");
 }
 
 /** Markdown, so long descriptions wrap with a hanging indent under each skill. */

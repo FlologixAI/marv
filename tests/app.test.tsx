@@ -17,6 +17,8 @@ import { loadMemory, memoryPaths, type MemoryPaths } from "../src/memory.ts";
 import { GENERAL_PURPOSE } from "../src/agents.ts";
 import { projectKey } from "../src/paths.ts";
 import { TrajectoryStore } from "../src/trajectory.ts";
+import { McpManager } from "../src/mcp/manager.ts";
+import { McpTrust } from "../src/mcp/trust.ts";
 import { FakeProvider, RoutedProvider, ScriptedProvider } from "./fake-provider.ts";
 
 const ENTER = "\r";
@@ -939,6 +941,61 @@ describe("trajectories", () => {
     await tick();
     expect(lastFrame()).toContain("Trajectory logging is off");
     expect(await records()).toEqual([]);
+  });
+});
+
+describe("MCP servers", () => {
+  const FIXTURE = join(import.meta.dir, "fixtures", "mcp-server.ts");
+  const server = (source: "personal" | "project" = "personal") => ({
+    name: "test",
+    source,
+    key: "k",
+    transport: { type: "stdio" as const, command: process.execPath, args: [FIXTURE] },
+  });
+  const reply = (text: string) => [{ type: "text_delta", text }, { type: "done" }] as AgentEvent[];
+  const useTool = (id: string, name: string, args: unknown) =>
+    [{ type: "tool_call", call: { id, name, arguments: JSON.stringify(args) } }, { type: "done" }] as AgentEvent[];
+  let managers: McpManager[] = [];
+  afterEach(async () => {
+    await Promise.all(managers.map((m) => m.close()));
+    managers = [];
+  });
+
+  function renderWithMcp(model: Provider, mcp: McpManager) {
+    managers.push(mcp);
+    void mcp.start(); // as cli.tsx does: not awaited
+    return render(
+      <App store={store} initialFile={LOCAL} env={{}} version="9.9.9" cwd="~/x" root={project} splashMs={0} makeProvider={() => model} loadModels={async () => []} mcp={mcp} />,
+    );
+  }
+
+  test("the first request waits for the servers; their tools are offered and called, after asking", async () => {
+    const model = new ScriptedProvider([useTool("e1", "mcp__test__echo", { text: "hi" }), reply("The server said hi.")]);
+    const { lastFrame, stdin } = renderWithMcp(model, new McpManager([server()], { root: project, version: "9.9.9" }));
+    await type(stdin, "use the echo tool"); // sent before the server is up
+    for (let i = 0; i < 100 && !lastFrame()!.includes("Do you want to proceed?"); i++) await tick();
+    expect(lastFrame()).toContain("test: echo");
+    expect(lastFrame()).toContain("runs outside the sandbox");
+    const first = model.requests[0]!;
+    expect(first.options.tools!.map((t) => t.name)).toContain("mcp__test__echo");
+    expect(first.options.system).toContain("# MCP tools");
+    stdin.write(ENTER);
+    await tick(300);
+    expect(lastFrame()).toContain("mcp__test__echo hi");
+    expect(lastFrame()).toContain("The server said hi.");
+    expect(model.requests[1]!.history.at(-1)).toMatchObject({ role: "tool", text: "echo: hi" });
+  });
+
+  test("a project's server waits for /mcp trust, and says so", async () => {
+    const trust = new McpTrust(join(dir, "trust.json"));
+    const { lastFrame, stdin } = renderWithMcp(new ScriptedProvider([]), new McpManager([server("project")], { root: project, version: "9.9.9", trust }));
+    await tick(300);
+    expect(lastFrame()).toContain("1 MCP server (/mcp)");
+    expect(lastFrame()).toContain("This project's .mcp.json lists MCP servers you haven't trusted yet: test");
+    await type(stdin, "/mcp trust");
+    for (let i = 0; i < 100 && !lastFrame()!.includes("test: connected"); i++) await tick();
+    expect(lastFrame()).toContain("test: connected · 6 tools");
+    expect(await trust.isTrusted(project, server("project"))).toBe(true);
   });
 });
 

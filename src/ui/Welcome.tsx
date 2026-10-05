@@ -11,6 +11,7 @@ export function Welcome({
   instructions,
   skills = 0,
   memories = 0,
+  mcpServers = 0,
   animate = true,
 }: {
   version: string;
@@ -21,6 +22,8 @@ export function Welcome({
   skills?: number;
   /** How many memories were loaded. */
   memories?: number;
+  /** How many MCP servers are configured. */
+  mcpServers?: number;
   animate?: boolean;
 }) {
   return (
@@ -33,12 +36,13 @@ export function Welcome({
         </Text>
         <Text color={theme.dim}>/help for commands</Text>
         <Text color={theme.dim}>cwd: {printable(cwd)}</Text>
-        {(instructions || skills > 0 || memories > 0) && (
+        {(instructions || skills > 0 || memories > 0 || mcpServers > 0) && (
           <Text color={theme.dim}>
             {[
               instructions && "AGENTS.md loaded",
               skills > 0 && `${skills} skill${skills === 1 ? "" : "s"} (/skills)`,
               memories > 0 && `${memories} memor${memories === 1 ? "y" : "ies"} (/memory)`,
+              mcpServers > 0 && `${mcpServers} MCP server${mcpServers === 1 ? "" : "s"} (/mcp)`,
             ]
               .filter(Boolean)
               .join(" · ")}

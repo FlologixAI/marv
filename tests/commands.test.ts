@@ -91,6 +91,29 @@ describe("slash commands", () => {
     expect(runCommand("/config")).toMatchObject({ type: "print", text: expect.stringContaining("Trajectories: on") });
   });
 
+  test("/mcp lists servers, their state and tools, or explains how to add one; /mcp trust starts the project's", () => {
+    expect(runCommand("/mcp")).toMatchObject({ type: "print", text: expect.stringContaining(".mcp.json") });
+    const listed = run("/mcp", {
+      ...ctx,
+      mcp: {
+        servers: [
+          { name: "gh", source: "personal", target: "https://api.example.com/mcp", state: "connected", tools: ["mcp__gh__search", "mcp__gh__create_issue"] },
+          { name: "files", source: "project", target: "npx files-server", state: "untrusted", tools: [] },
+          { name: "db", source: "personal", target: "db-mcp", state: "failed", tools: [], error: "spawn db-mcp ENOENT", stderr: "boom" },
+        ],
+        problems: ["\"old\" in ~/.marv/mcp.json: the old sse transport isn't supported"],
+      },
+    });
+    if (listed.type !== "print") throw new Error("expected print");
+    expect(listed.markdown).toBe(true);
+    expect(listed.text).toContain("- **gh** (yours): connected · 2 tools: `search`, `create_issue`");
+    expect(listed.text).toContain("- **files** (this project): not trusted yet: `npx files-server` (`/mcp trust` to start it)");
+    expect(listed.text).toContain("- **db** (yours): failed: spawn db-mcp ENOENT");
+    expect(listed.text).toContain("sse transport");
+    expect(runCommand("/mcp trust")).toEqual({ type: "mcp-trust" });
+    expect(runCommand("/mcp nope")).toMatchObject({ type: "print", isError: true });
+  });
+
   test("/skills lists skills, or explains how to add one", () => {
     const review = { name: "review", description: "Review code.", body: "b", dir: "/x", files: [], source: "project" as const };
     const listed = run("/skills", { ...ctx, skills: [review], skillProblems: ["bad/SKILL.md needs a description"] });
