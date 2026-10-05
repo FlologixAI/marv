@@ -10,10 +10,13 @@ export const PAGE_CHARS = 30_000;
 /** Pages kept for reading on with offset: a few, briefly (a page changes, and they can be 300k characters each). */
 const CACHE_PAGES = 8;
 const CACHE_MS = 10 * 60_000;
+/** Bigger pages (plain text and GitHub files can reach 5 MB) aren't kept: eight of them would be a lot of memory. */
+const CACHE_MAX_CHARS = 1_000_000;
 /** GitHub's other hosts count as github.com: one "don't ask again" covers them all. */
 const GITHUB_HOSTS = new Set(["api.github.com", "raw.githubusercontent.com", "gist.github.com", "gist.githubusercontent.com"]);
 
-/** The site an approval covers: the host, lowercased, without www. */
+/** The site an approval covers: the host, lowercased, without www. Ports and http/https share a domain's scope,
+ * like Claude Code's per-domain rule. */
 export function domainOf(url: string): string {
   let host: string;
   try {
@@ -29,7 +32,10 @@ export const webScope = (url: string) => `web:${domainOf(url)}`;
 
 /** The scopes of the links in what the user typed: sites they pasted are theirs to fetch, without asking. */
 export function pastedScopes(text: string): string[] {
-  const links = (text.match(/https?:\/\/[^\s<>"'`]+/gi) ?? []).map((link) => link.replace(/[.,;:!?)\]]+$/, ""));
+  // Code isn't a link the user means to visit (a pasted script or log may name any host): drop fenced blocks
+  // (closed or not, ``` and ~~~) and inline code spans before looking.
+  const prose = text.replace(/^[ \t]*(```|~~~)[^\n]*\n[\s\S]*?(?:^[ \t]*\1[^\n]*$|(?![\s\S]))/gm, "").replace(/(```|~~~)[\s\S]*?(?:\1|(?![\s\S]))/g, "").replace(/`[^`\n]*`/g, "");
+  const links = (prose.match(/https?:\/\/[^\s<>"'`\[\]]+/gi) ?? []).map((link) => link.replace(/[.,;:!?)\]]+$/, ""));
   return [...new Set(links.map(webScope))];
 }
 
@@ -60,6 +66,8 @@ export interface WebOptions {
   allowPrivate?: boolean;
   apiBase?: string;
   rawBase?: string;
+  /** Tests only: send the token over plain http too. */
+  allowHttp?: boolean;
   /** Default: GITHUB_TOKEN, else GH_TOKEN, from the environment. */
   token?: string;
 }
@@ -67,6 +75,10 @@ export interface WebOptions {
 /** The tool with its network settings (tests point it at a local server). */
 export function makeWebFetch(web: WebOptions = {}): Tool<typeof input> {
   const recent = new Map<string, { page: Page; at: number }>();
+  const cachedPage = (url: string) => {
+    const hit = recent.get(parseUrl(url).href);
+    return hit && Date.now() - hit.at < CACHE_MS ? hit.page : undefined;
+  };
   return {
     name: "web_fetch",
     description:
@@ -79,7 +91,14 @@ export function makeWebFetch(web: WebOptions = {}): Tool<typeof input> {
     label: ({ url }) => url.replace(/^https?:\/\//, ""),
     // Asks once per site (the scope), and sites the user pasted are already allowed (the App adds their
     // scopes). No autoSafe, so yolo never skips it: the URL itself can carry data out (?k=<a secret>).
-    needsApproval: () => true,
+    // A read from the cache sends nothing out, so it doesn't ask again.
+    needsApproval: ({ url, offset }) => {
+      try {
+        return !(offset && cachedPage(url));
+      } catch {
+        return true;
+      }
+    },
     usesNetwork: () => true,
     scope: ({ url }) => ({ key: webScope(url), description: `fetching from ${domainOf(url)}` }),
     async preview({ url }, { signal }) {
@@ -91,11 +110,15 @@ export function makeWebFetch(web: WebOptions = {}): Tool<typeof input> {
       const parsed = parseUrl(url);
       // Reading on (offset > 0) reuses the page fetched a moment ago instead of downloading and converting it
       // again; offset 0 always fetches fresh.
-      const cached = offset > 0 ? recent.get(parsed.href) : undefined;
-      if (cached && Date.now() - cached.at < CACHE_MS) return paged(cached.page, offset);
-      const options: GithubOptions = { ...web, signal, token: web.token ?? (process.env.GITHUB_TOKEN || process.env.GH_TOKEN || undefined) };
+      const cached = offset > 0 ? cachedPage(url) : undefined;
+      if (cached) return paged(cached, offset);
+      // A redirect to another site isn't followed: the URL (and its query) could carry data to a site the user
+      // never approved. The model gets the target and calls again, which asks if that site is new.
+      const followRedirect = (_from: URL, to: URL) => domainOf(to.href) === domainOf(parsed.href);
+      const options: GithubOptions = { ...web, signal, followRedirect, token: web.token ?? (process.env.GITHUB_TOKEN || process.env.GH_TOKEN || undefined) };
       const link = parseGithub(parsed);
       const page = link ? await fetchGithub(link, options) : await fetchPage(parsed.href, options);
+      if (page.text.length > CACHE_MAX_CHARS) return paged(page, offset);
       recent.delete(parsed.href); // re-inserted last: a Map keeps insertion order, so the oldest is first
       recent.set(parsed.href, { page, at: Date.now() });
       if (recent.size > CACHE_PAGES) recent.delete(recent.keys().next().value!);

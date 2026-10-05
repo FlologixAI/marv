@@ -68,6 +68,8 @@ per-domain approval, and output marked as untrusted data.
 - **Pasted links are pre-approved:** `send()` extracts `http(s)://` URLs from the user's own message and adds
   their scopes to `alwaysAllowed` (`src/app.tsx`), so `approve()`'s existing short-circuit answers "yes". Text
   from files, tools or the model never pre-approves anything.
+- A redirect to another site isn't followed: the model gets the target and must call web_fetch with it (which
+  asks if that site isn't approved), so an open redirect on an approved site can't carry data elsewhere.
 - "Yes, don't ask again" covers the domain for the session, shared with subagents like every other scope.
 - Trajectories record the approval as today (`ToolResult.approval`).
 

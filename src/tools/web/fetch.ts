@@ -27,6 +27,8 @@ export interface GetOptions {
   headers?: Record<string, string>;
   timeoutMs?: number;
   maxBytes?: number;
+  /** Asked before each redirect; false returns the 3xx as it is (with `location`) instead of following it. Default: follow. */
+  followRedirect?: (from: URL, to: URL) => boolean;
 }
 
 export interface Got {
@@ -99,7 +101,12 @@ export async function get(url: string, options: GetOptions = {}): Promise<Got> {
         const location = response.headers.get("location");
         if (response.status >= 300 && response.status < 400 && location) {
           if (redirects === MAX_REDIRECTS) throw new ToolError(`Too many redirects (more than ${MAX_REDIRECTS}) from ${url}.`);
-          current = new URL(location, current);
+          const target = new URL(location, current);
+          if (options.followRedirect && !options.followRedirect(current, target)) {
+            // Not followed: the caller gets the 3xx. The body is cut by `ours.abort()` below, unread.
+            return { url: current.href, status: response.status, statusText: response.statusText, headers: response.headers, body: "" };
+          }
+          current = target;
           continue;
         }
         const type = (response.headers.get("content-type") ?? "").toLowerCase();
@@ -123,6 +130,12 @@ export async function get(url: string, options: GetOptions = {}): Promise<Got> {
 /** A page as text: HTML converted to Markdown, other text as it is. */
 export async function fetchPage(url: string, options: GetOptions = {}): Promise<Page> {
   const got = await get(url, options);
+  const location = got.headers.get("location");
+  if (got.status >= 300 && got.status < 400 && location) {
+    // Only reachable when followRedirect said no. Not an error: the model can follow it with a new call.
+    const target = new URL(location, got.url).href;
+    return { url: got.url, text: `${got.url} redirects to ${target}, on another site: call web_fetch with that URL to follow it (the user may be asked).` };
+  }
   if (got.status < 200 || got.status >= 300) throw httpError(got);
   const type = (got.headers.get("content-type") ?? "").toLowerCase();
   if (type.includes("html") || (!type && /^\s*<(!doctype html|html)/i.test(got.body))) {
