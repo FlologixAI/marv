@@ -1,10 +1,29 @@
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
+import { resolve, sep } from "node:path";
 
 /** /home/me/projects/x → ~/projects/x, for display only. */
 export function shortenHome(path: string): string {
   const home = homedir();
   return path === home || path.startsWith(home + "/") ? "~" + path.slice(home.length) : path;
+}
+
+/**
+ * Whether `folder` is the home folder or a folder above it (`/home`, `/`): a project there would put every dotfile
+ * within the tools' reach. Both are compared as real paths, so a symlink to either is caught too.
+ */
+export function homeOrAbove(folder: string, home = homedir()): boolean {
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p); // doesn't exist (a home folder that was never made): compare the path as given
+    }
+  };
+  const target = real(folder);
+  const h = real(home);
+  return target === h || target === sep || h.startsWith(target + sep);
 }
 
 /**

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { AgentType } from "../src/agents.ts";
 import type { McpManager } from "../src/mcp/manager.ts";
 import { addMemory, loadMemory, memoryPaths } from "../src/memory.ts";
-import type { ProviderFactory } from "../src/provider/factory.ts";
+import type { ProviderFactory, ProviderOption } from "../src/provider/factory.ts";
 import type { ModelInfo } from "../src/provider/models.ts";
 import type { AgentEvent, ChatTurn, Provider, StreamOptions, ToolCall, ToolSpec } from "../src/provider/types.ts";
 import { MarvSession, type SessionEvent, type SessionInit } from "../src/session.ts";
@@ -14,6 +14,7 @@ import { SessionStore, type SavedSession } from "../src/sessions.ts";
 import { TrajectoryStore } from "../src/trajectory.ts";
 import type { ApprovalRequest, Decision } from "../src/tools/types.ts";
 import { RoutedProvider, ScriptedProvider } from "./fake-provider.ts";
+import { z } from "zod";
 
 const say = (text: string): AgentEvent[] => [
   { type: "text_delta", text },
@@ -765,5 +766,50 @@ describe("review fixes", () => {
     expect(events).toContainEqual({ type: "assistant", text: "Second." });
     expect(events.at(-1)).toMatchObject({ type: "turn_end", reason: "end" });
     expect(provider.requests[2]!.history.map((t) => t.text)).toEqual(["first", "First.", "second"]);
+  });
+});
+
+describe("final review fixes", () => {
+  const custom = (name: string) => ({
+    name,
+    description: "mine",
+    input: z.object({}),
+    label: () => name,
+    run: async () => ({ output: "ran mine", summary: "mine" }),
+  });
+
+  test("a tool of your own can't take a built-in tool's name (the built-in would run instead)", () => {
+    expect(() => makeSession(new ScriptedProvider([]), { tools: [custom("bash")] })).toThrow('A tool named "bash" is already built in: give yours another name.');
+    // Built in even when it isn't offered (skill, with no skills): the name is still taken.
+    expect(() => makeSession(new ScriptedProvider([]), { tools: [custom("skill")] })).toThrow(/"skill" is already built in/);
+  });
+
+  test("two tools of your own can't share a name", () => {
+    expect(() => makeSession(new ScriptedProvider([]), { tools: [custom("x"), custom("x")] })).toThrow('Two tools are named "x".');
+  });
+
+  test("mcp__ names are for MCP servers' tools", () => {
+    expect(() => makeSession(new ScriptedProvider([]), { tools: [custom("mcp__a__b")] })).toThrow('Tool names starting with "mcp__" are for MCP servers\' tools.');
+  });
+
+  test("configure() with an unknown provider kind throws and changes nothing", async () => {
+    const provider = new ScriptedProvider([useTools(call("w1", "write_file", { path: "out.txt", content: "hi\n" })), say("Still me.")]);
+    const session = makeSession(provider, { yolo: true });
+    const bad = { kind: "nope" } as unknown as ProviderOption;
+    expect(() => session.configure({ provider: bad, yolo: false })).toThrow(/Unknown provider kind "nope"/);
+    // The bad provider wasn't kept: changing something else afterwards works.
+    session.configure({ thinking: true });
+    const events = await collect(session.send("hi"));
+    expect(events).toContainEqual({ type: "assistant", text: "Still me." });
+    expect(provider.requests).toHaveLength(2);
+    // Nor was the yolo: false that came with it: with no approver, the edit still ran on its own.
+    expect(existsSync(join(project, "out.txt"))).toBe(true);
+  });
+
+  test("after close(), send() throws; close() twice is fine", async () => {
+    const session = makeSession(new ScriptedProvider([say("Hi.")]));
+    await session.close();
+    await session.close();
+    expect(() => session.send("hi")).toThrow("This session is closed.");
   });
 });

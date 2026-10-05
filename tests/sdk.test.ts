@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import * as sdk from "marv/sdk";
 import { createSession, type SessionEvent, type Tool } from "marv/sdk";
+import { homeOrAbove } from "../src/paths.ts";
 import type { AgentEvent } from "../src/provider/types.ts";
+import { sandboxAvailable } from "../src/sandbox.ts";
 import { ScriptedProvider } from "./fake-provider.ts";
 
 let root: string;
@@ -146,5 +148,68 @@ test("resume without persist, and a cwd that isn't a folder, fail before anythin
 test("a stdio entry may say type: 'stdio' (many .mcp.json files do)", async () => {
   const session = await createSession({ cwd: root, provider: new ScriptedProvider([]), configDir, mcpServers: { fs: { type: "stdio", command: "true" } } });
   expect(session.problems).toEqual([]);
+  await session.close();
+});
+
+const mine = (name: string): Tool => ({
+  name,
+  description: "mine",
+  input: z.object({}),
+  label: () => name,
+  run: async () => ({ output: "ran mine", summary: "mine" }),
+});
+
+test("a tool named like a built-in, another of yours, or an MCP tool is refused, and no MCP server is left running", async () => {
+  const marker = `leak-clash-${crypto.randomUUID()}`;
+  const mcpServers = { fx: { command: process.execPath, args: [FIXTURE, marker] } };
+  const create = (tools: Tool[]) => createSession({ cwd: root, provider: new ScriptedProvider([]), configDir, tools, mcpServers });
+  await expect(create([mine("bash")])).rejects.toThrow('A tool named "bash" is already built in: give yours another name.');
+  await expect(create([mine("x"), mine("x")])).rejects.toThrow('Two tools are named "x".');
+  await expect(create([mine("mcp__fx__echo")])).rejects.toThrow(/"mcp__" are for MCP servers' tools/);
+  await Bun.sleep(500);
+  expect(running(marker)).toEqual([]);
+});
+
+test("with no approver, the home folder (or anything above it) isn't a project", async () => {
+  const provider = new ScriptedProvider([]);
+  await expect(createSession({ cwd: homedir(), provider, configDir })).rejects.toThrow(`cwd ${homedir()} is your home folder (or above it)`);
+  await expect(createSession({ cwd: dirname(homedir()), provider, configDir })).rejects.toThrow(/is your home folder \(or above it\)/);
+  await expect(createSession({ cwd: "/", provider, configDir })).rejects.toThrow(/cwd \/ is the root of the file system/);
+});
+
+test("with an approver, the home folder is allowed (every change is asked)", async () => {
+  const session = await createSession({ cwd: homedir(), provider: new ScriptedProvider([]), configDir, approve: async () => "no" });
+  await session.close();
+});
+
+test("the home check sees through symlinks", async () => {
+  const home = join(root, "home");
+  await mkdir(home);
+  await symlink(home, join(root, "link"));
+  expect(homeOrAbove(join(root, "link"), home)).toBe(true);
+  expect(homeOrAbove(root, join(root, "link"))).toBe(true);
+  expect(homeOrAbove(join(home, "project"), home)).toBe(false);
+  expect(homeOrAbove(`${home}2`, home)).toBe(false);
+});
+
+test("onWarning hears what the user should know (a trajectory that can't be written)", async () => {
+  const warnings: string[] = [];
+  const trajectories = new sdk.TrajectoryStore(join(root, "AGENTS.md")); // a file, so its folders can't be made
+  const session = await createSession({ cwd: root, provider: new ScriptedProvider([say("Hi.")]), configDir, trajectories, onWarning: (text) => warnings.push(text) });
+  await collect(session.send("hi"));
+  await session.flush();
+  expect(warnings.join("\n")).toContain("Couldn't write the trajectory log");
+  await session.close();
+});
+
+test.skipIf(!sandboxAvailable())("with no approver, a sandboxed command without network runs on its own", async () => {
+  const provider = new ScriptedProvider([
+    [{ type: "tool_call", call: { id: "b1", name: "bash", arguments: JSON.stringify({ command: "echo hi > out.txt" }) } }, { type: "done", reason: "tool_calls" }],
+    say("Done."),
+  ]);
+  const session = await createSession({ cwd: root, provider, configDir });
+  const events = await collect(session.send("write it"));
+  expect(events).toContainEqual(expect.objectContaining({ type: "tool_end", result: expect.objectContaining({ approval: "auto" }) }));
+  expect(await readFile(join(root, "out.txt"), "utf8")).toBe("hi\n");
   await session.close();
 });

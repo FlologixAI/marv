@@ -80,7 +80,7 @@ export interface SessionInit {
   mcp?: McpManager;
   /** close() closes the MCP servers (the session started them; the CLI closes its own). */
   ownsMcp?: boolean;
-  /** Extra tools, offered after the built-in ones. */
+  /** Extra tools, offered (to the main agent only) after the built-in ones. Their names must be their own: the constructor throws on a clash. */
   tools?: Tool[];
   /** Replaces Marv's system prompt, or appends to it. */
   systemPrompt?: string | { append: string };
@@ -134,6 +134,21 @@ const stepLimitRequest = (steps: number): ApprovalRequest => ({
   scope: { key: "continue", description: "the step limit" },
 });
 
+/**
+ * Tools of the caller's own must have names of their own. runTool() runs the first tool with the call's name, so a
+ * custom "bash" would be offered next to the built-in one (two specs with one name) while every call ran the
+ * built-in; and `mcp__` names are where MCP servers' tools go. Checked before anything starts.
+ */
+function checkToolNames(custom: Tool[]): void {
+  const seen = new Set<string>();
+  for (const { name } of custom) {
+    if (builtinTools.some((t) => t.name === name)) throw new Error(`A tool named "${name}" is already built in: give yours another name.`);
+    if (name.startsWith("mcp__")) throw new Error(`Tool names starting with "mcp__" are for MCP servers' tools.`);
+    if (seen.has(name)) throw new Error(`Two tools are named "${name}".`);
+    seen.add(name);
+  }
+}
+
 /** What `createSession()` returns: a conversation you drive with send(). (The class below has more; this is the public surface.) */
 export interface Session {
   /** The session's id: its file name under sessions/, and what `marv -r` and `resume` take. */
@@ -152,7 +167,7 @@ export interface Session {
   readonly problems: readonly string[];
   /** The last request's tokens (how full the context is), and the whole session's (survives clear()). */
   usage(): { last?: Usage; totals: Totals; contextLength?: number };
-  /** Runs one turn and yields what happens; leaving the loop early interrupts it. Throws if a turn is running. */
+  /** Runs one turn and yields what happens; leaving the loop early interrupts it. Throws if a turn is running, or after close(). */
   send(text: string, options?: { forModel?: string; signal?: AbortSignal }): AsyncIterable<SessionEvent>;
   /** Stops the running turn or compaction. Approvals still waiting are answered "no". */
   interrupt(): void;
@@ -162,7 +177,10 @@ export interface Session {
   clear(): Promise<void>;
   /** Brings back a saved session (its id, or "latest"); null if there is none. Rejects during a turn. */
   resume(id: string | "latest"): Promise<Resumed | null>;
-  /** New settings; each turn reads them when it starts. */
+  /**
+   * New settings; each turn reads them when it starts, so a change during a turn applies from the next one. Throws
+   * only for an invalid provider (an unknown kind), and then nothing changed.
+   */
   configure(changes: { provider?: ProviderOption; thinking?: boolean; sandbox?: boolean; yolo?: boolean; trajectories?: boolean }): void;
   /** Feedback on the last turn, in its trajectory. */
   rate(feedback: { score: 1 | -1 | 0; note?: string; labels?: string[] }): "rated" | "off" | "nothing";
@@ -170,7 +188,7 @@ export interface Session {
   save(): Promise<void>;
   /** The pending save, and the trajectory's queued records, on disk. */
   flush(): Promise<void>;
-  /** Stops what's running, waits for it to wind down, flushes, and closes the MCP servers the session started. */
+  /** Stops what's running, waits for it to wind down, flushes, and closes the MCP servers the session started. No turns after it; calling it again is fine. */
   close(): Promise<void>;
 }
 
@@ -214,8 +232,11 @@ export class MarvSession implements Session {
   private flushing: Promise<void> = Promise.resolve();
   /** The running turn's or compaction's work, until it has fully ended: close() waits for it. */
   private working: Promise<unknown> | null = null;
+  /** close() was called: no new turns. */
+  private closed = false;
 
   constructor(private readonly init: SessionInit) {
+    checkToolNames(init.tools ?? []);
     this.problems = init.problems ?? [];
     this.option = init.provider;
     this.thinking = init.thinking ?? false;
@@ -267,6 +288,8 @@ export class MarvSession implements Session {
    * from what the user typed (a /skill's instructions). Throws if a turn is running.
    */
   send(text: string, options: { forModel?: string; signal?: AbortSignal } = {}): AsyncIterable<SessionEvent> {
+    // A turn after close() would run with its MCP servers closed, and save after the final flush.
+    if (this.closed) throw new Error("This session is closed.");
     this.idle();
     this.running = true;
     const stop = new AbortController();
@@ -336,7 +359,12 @@ export class MarvSession implements Session {
     return { id: saved.id, updatedAt: saved.updatedAt, model: saved.model, transcript: saved.transcript, totals: saved.totals };
   }
 
-  /** New settings. Each turn reads them when it starts, so a change during a turn applies from the next one. */
+  /**
+   * New settings. Each turn reads them when it starts, so a change during a turn applies from the next one.
+   * All or nothing: the new provider is made first, and only once that worked does anything change. An invalid
+   * provider (an unknown kind) throws and leaves the session exactly as it was; had it been kept, every later
+   * configure() would rebuild from it and throw too.
+   */
   configure(changes: {
     provider?: ProviderFactory | ProviderOption;
     thinking?: boolean;
@@ -344,17 +372,21 @@ export class MarvSession implements Session {
     yolo?: boolean;
     trajectories?: boolean;
   }): void {
+    let remade: { option: ProviderFactory | ProviderOption; thinking: boolean; factory: ProviderFactory; provider: Provider; info: ModelInfo | undefined } | undefined;
+    if (changes.provider !== undefined || changes.thinking !== undefined) {
+      const option = changes.provider ?? this.option;
+      const thinking = changes.thinking ?? this.thinking;
+      const factory = isFactory(option) ? option : providerFactory(option, thinking); // throws for an unknown kind
+      // Same model (a /think or /yolo): what the list said about it still holds, so the provider keeps its reasoning switch.
+      const info = factory.id === this.factory.id && factory.model === this.factory.model ? this.info : undefined;
+      const provider = factory.make(undefined, info?.reasoning ? { reasoning: info.reasoning } : undefined);
+      remade = { option, thinking, factory, provider, info };
+    }
     if (changes.sandbox !== undefined) this.sandbox = changes.sandbox;
     if (changes.yolo !== undefined) this.yolo = changes.yolo;
     if (changes.trajectories !== undefined) this.logging = changes.trajectories;
-    if (changes.provider === undefined && changes.thinking === undefined) return;
-    if (changes.provider !== undefined) this.option = changes.provider;
-    if (changes.thinking !== undefined) this.thinking = changes.thinking;
-    const next = isFactory(this.option) ? this.option : providerFactory(this.option, this.thinking);
-    // Same model (a /think or /yolo): what the list said about it still holds, so the provider keeps its reasoning switch.
-    if (next.id !== this.factory.id || next.model !== this.factory.model) this.info = undefined;
-    this.factory = next;
-    this.provider = next.make(undefined, this.info?.reasoning ? { reasoning: this.info.reasoning } : undefined);
+    if (!remade) return;
+    ({ option: this.option, thinking: this.thinking, factory: this.factory, provider: this.provider, info: this.info } = remade);
     this.lookup();
   }
 
@@ -393,6 +425,7 @@ export class MarvSession implements Session {
 
   /** Stops what's running, waits for it to wind down, flushes, and closes the MCP servers the session started. */
   async close(): Promise<void> {
+    this.closed = true;
     this.interrupt();
     // A turn's end saves its conversation (and arms a save timer): waiting for it means that save is part of this
     // flush, rather than one that lands after close() returned.

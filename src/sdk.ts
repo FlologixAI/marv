@@ -2,7 +2,7 @@
 //
 // A session is Marv without its terminal: the agent loop, the tools, subagents, MCP servers, compaction, saved
 // sessions and trajectories, driven by your code. createSession() reads nothing from disk unless asked
-// (`sources`), and without an `approve` callback only what yolo mode vouches for runs (edits outside .git,
+// (`sources`), and without an `approve` callback only what yolo mode vouches for runs (reading, edits outside .git,
 // sandboxed commands without network); anything else goes back to the model as refused. Bun only, for now.
 import "./bun-guard.ts"; // first: see the file
 import { statSync } from "node:fs";
@@ -12,7 +12,7 @@ import { defaultConfigDir } from "./config/config.ts";
 import { parseMcpServers, type McpServerConfig } from "./mcp/config.ts";
 import { McpManager } from "./mcp/manager.ts";
 import { McpTrust } from "./mcp/trust.ts";
-import { projectKey } from "./paths.ts";
+import { homeOrAbove, projectKey } from "./paths.ts";
 import type { ProviderOption } from "./provider/factory.ts";
 import { MarvSession, type Session } from "./session.ts";
 import { SessionStore } from "./sessions.ts";
@@ -27,7 +27,11 @@ export type McpServerEntry =
   | { type: "http" | "streamable-http"; url: string; headers?: Record<string, string>; timeout?: number };
 
 export interface SessionOptions {
-  /** The project folder: the tools can't reach outside it. */
+  /**
+   * The project folder: the tools can't reach outside it. Without `approve`, it can't be your home folder, a folder
+   * above it, or `/` (createSession throws): edits would then run without asking on your dotfiles (~/.bashrc,
+   * ~/.ssh/config). With an approver, every change there is asked about, so it's allowed.
+   */
   cwd: string;
   /** { kind: "openrouter", apiKey, model? }, { kind: "ollama", model, host?, contextLength? }, or a Provider of your own. */
   provider: ProviderOption;
@@ -39,7 +43,11 @@ export interface SessionOptions {
   sources?: Source[];
   /** Replaces Marv's system prompt, or adds to it. */
   systemPrompt?: string | { append: string };
-  /** Your own tools, offered next to the built-in ones. */
+  /**
+   * Your own tools, offered to the main agent next to the built-in ones (subagents don't get them). `input` must be a
+   * zod 4 schema: it's described to the model with z.toJSONSchema. Names must be their own: one of a built-in tool,
+   * one used twice, or one starting with `mcp__` (MCP servers' tools) makes createSession throw.
+   */
   tools?: Tool[];
   /**
    * MCP servers in .mcp.json's format: { name: { command, args?, env? } | { type: "http", url, headers? } }.
@@ -49,7 +57,13 @@ export interface SessionOptions {
    * `sources: ["project"]`, whose servers still need trusting.
    */
   mcpServers?: Record<string, McpServerEntry>;
-  /** Asked for every call that needs a yes. Without it, only what yolo mode vouches for runs. */
+  /**
+   * Asked for every call that needs a yes. Without it, only what runs without asking does: read-only tools, what
+   * yolo mode vouches for (edits outside .git, bash in the sandbox without network: Linux with bubblewrap only, so
+   * elsewhere every command needs an approver), subagents (in the shared folder, or in a worktree when sandboxed;
+   * either way under these same rules), and MCP tools their server says are read-only. Anything else goes back to
+   * the model as refused.
+   */
   approve?: (request: ApprovalRequest) => Promise<Decision>;
   /** Run bash in the bubblewrap sandbox (default true). */
   sandbox?: boolean;
@@ -68,8 +82,15 @@ export interface SessionOptions {
    * An unknown id throws. Call `session.resume()` yourself if you need what was resumed (its transcript).
    */
   resume?: string | "latest";
-  /** Where Marv keeps its files (default ~/.marv, or $MARV_CONFIG_DIR). */
+  /**
+   * Where Marv keeps its files (default ~/.marv, or $MARV_CONFIG_DIR): memory, mcp.json, sessions, trajectories,
+   * worktrees and MCP trust. Personal skills and agents are still read from ~/.marv in your home folder (`sources:
+   * ["user"]`), as the CLI does. A project's MCP servers can only be trusted through the CLI's /mcp trust, which
+   * writes this folder's mcp-trust.json.
+   */
   configDir?: string;
+  /** Something you should hear about that isn't a turn's event (a trajectory that can't be written). */
+  onWarning?: (text: string) => void;
 }
 
 /** true → the default store; a store → that one; false or absent → none. */
@@ -85,6 +106,13 @@ export async function createSession(options: SessionOptions): Promise<Session> {
     isFolder = statSync(root).isDirectory();
   } catch {}
   if (!isFolder) throw new Error(`cwd ${root} isn't a folder`);
+  // With no one to ask, yolo-safe edits run on their own: in the home folder (or above it) that's every dotfile.
+  if (!options.approve && homeOrAbove(root)) {
+    const where = root === "/" ? "the root of the file system" : "your home folder (or above it)";
+    throw new Error(
+      `cwd ${root} is ${where}: with no approver, Marv would change files there without asking, dotfiles included. Use a project folder, or pass an approve callback.`,
+    );
+  }
   if (options.resume && !options.persist) throw new Error("resume needs persist (there's nowhere to resume from)");
   const configDir = options.configDir ?? defaultConfigDir(process.env);
   const loaded = await loadSources({ root, sources: options.sources ?? [], configDir });
@@ -97,7 +125,8 @@ export async function createSession(options: SessionOptions): Promise<Session> {
     else servers.push(server);
   }
   // Creating the manager spawns nothing; start() does. So it only starts once the session exists (its constructor
-  // can throw, e.g. an unknown provider kind), and anything that fails after that closes the session, servers included.
+  // can throw: an unknown provider kind, a tool name that's taken), and anything that fails after that closes the
+  // session, servers included.
   const mcp = servers.length ? new McpManager(servers, { root, version: pkg.version, trust: new McpTrust(join(configDir, "mcp-trust.json")) }) : undefined;
 
   const session = new MarvSession({
@@ -120,6 +149,7 @@ export async function createSession(options: SessionOptions): Promise<Session> {
     trajectories: storeFor(options.trajectories, () => new TrajectoryStore(join(configDir, "trajectories"))),
     worktreesDir: join(configDir, "worktrees", projectKey(root)),
     transcript: options.transcript,
+    onWarning: options.onWarning,
     problems,
   });
   void mcp?.start();
