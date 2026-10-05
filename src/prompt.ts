@@ -39,7 +39,7 @@ You can change files with edit_file (replace exact text; copy it from read_file,
 Your replies are rendered as Markdown in a terminal. Keep them concise and structured: short paragraphs, bullet or numbered lists for several items, \`backticks\` for file paths, identifiers and commands, and fenced code blocks with a language for code. Use a small table only when comparing things side by side. Point to code as path:line.`;
 
   const agentList = agents.length
-    ? `\n\n# Agents\n\nThe agent tool hands a self-contained task to a subagent: a fresh agent that sees only the prompt you give it, works with its own tools, and returns a report. Use one for research across many files, implementing one well-specified task, or an independent review, and keep your own context for coordinating. Put everything it needs in the prompt. Several agent calls in one reply run in parallel; give parallel agents that change files isolation: "worktree" so they don't collide, then review and merge their branches with git. Types:\n\n${agents.map((a) => `- ${a.name}: ${a.description}`).join("\n")}`
+    ? `\n\n# Agents\n\nThe agent tool hands a self-contained task to a subagent: a fresh agent that sees only the prompt you give it, works with its own tools, and returns a report. Use one for research across many files, implementing one well-specified task, or an independent review, and keep your own context for coordinating. Put everything it needs in the prompt. Several agent calls in a row run in parallel (up to 4 at once); give parallel agents that change files isolation: "worktree" so they don't collide, then review and merge their branches with git. A worktree starts from the last commit (HEAD): commit first if the agents need your uncommitted changes. Types:\n\n${agents.map((a) => `- ${a.name}: ${a.description}`).join("\n")}`
     : "";
   const remembered = memory ? `\n\n${memorySection(memory)}` : "";
   return base + remembered + skillsSection(skills) + agentList + projectSection(instructions);
@@ -71,17 +71,20 @@ interface SubagentPromptInput {
  */
 export function subagentPrompt({ cwd, tools, body, instructions, skills = [], worktree, date = new Date() }: SubagentPromptInput): string {
   const role = body || "You are a general-purpose coding agent.";
+  const hasBash = tools.includes("bash");
   const where = worktree
-    ? `\n\nYou are working in your own git worktree, on branch ${worktree.branch} (started from ${worktree.base}). Other agents can't see your changes until your branch is merged. Files ignored by git, such as node_modules and build output, aren't here: install dependencies first if you need them (bash with network: true). You can't commit: the repository is read-only here (git status, diff and log work). When you finish, Marv commits everything you changed to your branch.`
+    ? `\n\nYou are working in your own git worktree, on branch ${worktree.branch} (started from ${worktree.base}). Other agents can't see your changes until your branch is merged. Files ignored by git, such as node_modules and build output, aren't here${hasBash ? ": install dependencies first if you need them (bash with network: true)" : ""}. Don't commit yourself (in the sandbox the repository is read-only; git status, diff and log work): when you finish, Marv commits everything you changed to your branch.`
     : "";
+  const sandbox = hasBash ? " Commands run in a sandbox: only the working directory is writable, and there's no network unless you set network: true." : "";
+  const editing = tools.includes("edit_file") ? " edit_file replaces exact text: copy it from read_file, whitespace included." : "";
   const base = `${role}
 
-You are a subagent of Marv, a coding agent in the user's terminal. Another agent gave you the task in the first message. Your final message is your report back to it: say what you did, what you found, and anything left undone, completely and concisely. The user doesn't see your steps, only that report.
+You are a subagent of Marv, a coding agent in the user's terminal. Another agent gave you the task in the first message. Your final message is your report back to it: start with a one-line summary, then say what you did, what you found, and anything left undone (in the format your instructions or the task ask for, if any). The agent that called you sees only that report, not your steps or tool output, so include everything it needs. Nobody can answer questions while you work: make reasonable assumptions and note them, or, if you're truly blocked, say what you need in your report.
 
 Working directory: ${cwd}
 Today's date: ${date.toISOString().slice(0, 10)}
 
-Your tools: ${tools.join(", ")}. Look at the actual code before you change or judge it. Paths are relative to the working directory. Commands run in a sandbox: only the working directory is writable, and there's no network unless you set network: true.${where}`;
+Your tools: ${tools.join(", ")}. Look at the actual code before you change or judge it. Start narrow: grep for a name or glob for a file pattern, then read the relevant part of a file rather than whole large files. Paths are relative to the working directory.${editing}${sandbox}${where}`;
   return base + skillsSection(skills) + projectSection(instructions);
 }
 

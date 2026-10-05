@@ -108,3 +108,44 @@ describe("subagentPrompt", () => {
     expect(prompt).toEndWith("# Project instructions (from AGENTS.md)\n\nUse tabs.");
   });
 });
+
+describe("prompt wording for subagents", () => {
+  const agents = [{ name: "reviewer", description: "Review." }];
+
+  test("# Agents explains worktree base and the parallel limit", () => {
+    const prompt = systemPrompt({ cwd: "~/proj", date: DATE, tools: ["agent"], agents });
+    expect(prompt).toContain("A worktree starts from the last commit (HEAD): commit first if the agents need your uncommitted changes.");
+    expect(prompt).toContain("Several agent calls in a row run in parallel (up to 4 at once)");
+  });
+
+  const base = { cwd: "~/proj", date: DATE, tools: ["read_file", "grep"], body: "Role." };
+
+  test("subagent: report format, no questions, search advice", () => {
+    const prompt = subagentPrompt(base);
+    expect(prompt).toContain("start with a one-line summary");
+    expect(prompt).toContain("sees only that report, not your steps or tool output");
+    expect(prompt).toContain("Nobody can answer questions while you work");
+    expect(prompt).toContain("Start narrow: grep for a name or glob for a file pattern");
+  });
+
+  test("edit_file advice only when edit_file is a tool", () => {
+    expect(subagentPrompt(base)).not.toContain("edit_file replaces exact text");
+    expect(subagentPrompt({ ...base, tools: ["edit_file"] })).toContain("edit_file replaces exact text: copy it from read_file, whitespace included.");
+  });
+
+  test("sandbox and network text only with bash", () => {
+    const without = subagentPrompt(base);
+    expect(without).not.toContain("sandbox");
+    expect(without).not.toContain("network");
+    expect(subagentPrompt({ ...base, tools: ["bash"] })).toContain("Commands run in a sandbox");
+  });
+
+  test("worktree note: install hint only with bash; commit wording", () => {
+    const wt = { branch: "b", base: "abc" };
+    const without = subagentPrompt({ ...base, worktree: wt });
+    expect(without).toContain("node_modules");
+    expect(without).not.toContain("network");
+    expect(without).toContain("Don't commit yourself (in the sandbox the repository is read-only; git status, diff and log work): when you finish, Marv commits everything you changed to your branch.");
+    expect(subagentPrompt({ ...base, tools: ["bash"], worktree: wt })).toContain("install dependencies first if you need them (bash with network: true)");
+  });
+});
