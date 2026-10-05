@@ -162,26 +162,53 @@ export function App({
   const [streaming, setStreaming] = useState<string | null>(null);
   // Set while a tool runs (its transcript line shows the progress, so no "Thinking…").
   const [toolRunning, setToolRunning] = useState(false);
-  // A tool waiting for the user's yes/no (shown in place of the prompt).
-  const [approval, setApproval] = useState<{ request: ApprovalRequest; resolve: (d: Decision) => void } | null>(null);
-  const approvalRef = useRef(approval);
-  approvalRef.current = approval;
+  // Tools waiting for the user's yes/no, oldest first (parallel subagents can
+  // ask at the same time). The first one is shown in place of the prompt.
+  type Pending = { request: ApprovalRequest; resolve: (d: Decision) => void };
+  const approvals = useRef<Pending[]>([]);
+  const [approval, setApproval] = useState<{ head: Pending; waiting: number } | null>(null);
+  const showApprovals = useCallback(() => {
+    const [head] = approvals.current;
+    setApproval(head ? { head, waiting: approvals.current.length - 1 } : null);
+  }, []);
   // "Yes, don't ask again": scopes approved for the rest of this session.
   const alwaysAllowed = useRef(new Set<string>());
 
   const approve = useCallback(
     (request: ApprovalRequest): Promise<Decision> =>
-      alwaysAllowed.current.has(request.scope.key) ? Promise.resolve("yes") : new Promise((resolve) => setApproval({ request, resolve })),
-    [],
+      alwaysAllowed.current.has(request.scope.key)
+        ? Promise.resolve("yes")
+        : new Promise((resolve) => {
+            approvals.current.push({ request, resolve });
+            showApprovals();
+          }),
+    [showApprovals],
   );
-  const decide = useCallback((decision: Decision) => {
-    const pending = approvalRef.current;
-    if (!pending) return;
-    if (decision === "always") alwaysAllowed.current.add(pending.request.scope.key);
-    approvalRef.current = null;
-    setApproval(null);
-    pending.resolve(decision);
-  }, []);
+  const decide = useCallback(
+    (decision: Decision) => {
+      const [head, ...rest] = approvals.current;
+      if (!head) return;
+      let remaining = rest;
+      if (decision === "always") {
+        const key = head.request.scope.key;
+        alwaysAllowed.current.add(key);
+        // Requests already waiting in the same scope are covered too.
+        for (const pending of rest) if (pending.request.scope.key === key) pending.resolve("yes");
+        remaining = rest.filter((pending) => pending.request.scope.key !== key);
+      }
+      approvals.current = remaining;
+      showApprovals();
+      head.resolve(decision);
+    },
+    [showApprovals],
+  );
+  /** Esc or ctrl+c at an approval: no to everything waiting. */
+  const declineAll = useCallback(() => {
+    const pending = approvals.current;
+    approvals.current = [];
+    showApprovals();
+    for (const p of pending) p.resolve("no");
+  }, [showApprovals]);
   // The model's reasoning while it thinks. Shown live, never sent back to the model.
   const [thinking, setThinking] = useState("");
   const [confirmExit, setConfirmExit] = useState(false);
@@ -537,7 +564,7 @@ export function App({
   // which the prompt handles, and which stops the run too.)
   useInput(
     (_char, key) => {
-      if (key.escape && abortRef.current && !approvalRef.current) abortRef.current.abort();
+      if (key.escape && abortRef.current && approvals.current.length === 0) abortRef.current.abort();
     },
     { isActive: phase === "main" && setupMode === null },
   );
@@ -548,7 +575,7 @@ export function App({
     (char, key) => {
       if (!(key.ctrl && char === "c")) return;
       if (abortRef.current) {
-        decide("no"); // a pending approval counts as declined
+        declineAll(); // pending approvals count as declined
         abortRef.current.abort();
       } else if (input) {
         setInput("");
@@ -712,7 +739,7 @@ export function App({
           <SessionPicker sessions={picker} onPick={(id) => void pickSession(id)} onCancel={() => setPicker(null)} />
         ) : approval && !setupMode ? (
           <>
-            <Approval request={approval.request} onDecide={decide} />
+            <Approval request={approval.head.request} waiting={approval.waiting} onDecide={decide} onCancel={declineAll} />
             <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy />
           </>
         ) : setupMode ? (

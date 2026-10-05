@@ -13,11 +13,23 @@ const COLOR: Record<DiffLine["kind"], string> = { add: theme.diffAdd, del: theme
  * command), then yes / yes for the rest of the session / no. Shown in place
  * of the prompt while the agent waits for the answer.
  */
-export function Approval({ request, onDecide }: { request: ApprovalRequest; onDecide: (decision: Decision) => void }) {
+export function Approval({
+  request,
+  onDecide,
+  onCancel,
+  waiting = 0,
+}: {
+  request: ApprovalRequest;
+  onDecide: (decision: Decision) => void;
+  /** Esc: no to this and to everything waiting behind it. */
+  onCancel?: () => void;
+  /** Other requests queued behind this one (parallel subagents). */
+  waiting?: number;
+}) {
   const { preview, scope } = request;
 
   useInput((_input, key) => {
-    if (key.escape) onDecide("no");
+    if (key.escape) (onCancel ?? (() => onDecide("no")))();
   });
 
   const diff = preview.diff ?? [];
@@ -26,6 +38,7 @@ export function Approval({ request, onDecide }: { request: ApprovalRequest; onDe
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={preview.warning ? theme.warning : theme.accent} paddingX={1}>
+      {request.agent && <Text color={theme.dim}>[{request.agent}]</Text>}
       <Text bold>{preview.title}</Text>
 
       {(shown.length > 0 || preview.command || preview.text) && (
@@ -48,6 +61,7 @@ export function Approval({ request, onDecide }: { request: ApprovalRequest; onDe
 
       {preview.note && <Text color={theme.dim}>{preview.note}</Text>}
       {preview.warning && <Text color={theme.warning}>⚠ {preview.warning}</Text>}
+      {waiting > 0 && <Text color={theme.dim}>{waiting} more waiting</Text>}
 
       <Box marginTop={1} flexDirection="column">
         <Text>Do you want to proceed?</Text>

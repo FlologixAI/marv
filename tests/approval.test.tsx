@@ -33,6 +33,22 @@ const COMMAND: ApprovalRequest = {
 };
 
 describe("Approval", () => {
+  test("says which subagent is asking, and how many more are waiting", () => {
+    const frame = render(<Approval request={{ ...EDIT, agent: "implementer · Task 2" }} waiting={2} onDecide={() => {}} />).lastFrame()!;
+    expect(frame).toContain("[implementer · Task 2]");
+    expect(frame).toContain("2 more waiting");
+  });
+
+  test("Esc cancels everything when the App passes onCancel", async () => {
+    const onDecide = mock();
+    const onCancel = mock();
+    const { stdin } = render(<Approval request={EDIT} onDecide={onDecide} onCancel={onCancel} />);
+    stdin.write(ESC);
+    await tick();
+    expect(onCancel).toHaveBeenCalled();
+    expect(onDecide).not.toHaveBeenCalled();
+  });
+
   test("shows the change as a diff and the three choices", () => {
     const { lastFrame } = render(<Approval request={EDIT} onDecide={() => {}} />);
     const frame = lastFrame()!;
