@@ -8,6 +8,13 @@
 // it can't plant hooks or config that git would later run outside the
 // sandbox. When it's done, Marv commits its changes to the branch, removes the
 // folder and keeps the branch, which the parent agent reviews and merges.
+//
+// Known limits:
+// - Repositories that use a split index or the reftable ref format can't be
+//   committed automatically (Marv's own git dir lacks their extra files); git
+//   fails, so the folder is kept and reported, nothing is lost.
+// - `nestedRepo` walks the whole worktree synchronously before the commit,
+//   which takes a moment in a very large tree.
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -39,8 +46,19 @@ export function gitEnvironment(pinned: Record<string, string> = {}): Record<stri
   return { ...env, ...pinned };
 }
 
+/** No git call of Marv's should take this long; `spawnSync` blocks everything (the UI, every other subagent) while it runs. */
+const GIT_TIMEOUT_MS = 60_000;
+
 function git(cwd: string, args: string[], pinned?: Record<string, string>): { ok: boolean; out: string } {
-  const result = Bun.spawnSync(["git", ...NO_PROGRAMS, ...args], { cwd, env: gitEnvironment(pinned), stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(["git", ...NO_PROGRAMS, ...args], {
+    cwd,
+    env: gitEnvironment(pinned),
+    stdin: "ignore", // nothing may wait for input: there's no one to type it
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: GIT_TIMEOUT_MS,
+  });
+  if (result.exitedDueToTimeout) return { ok: false, out: `git timed out after ${GIT_TIMEOUT_MS / 1000} s` };
   const ok = result.exitCode === 0;
   return { ok, out: (ok ? result.stdout : result.stderr).toString().trim() };
 }
@@ -49,16 +67,22 @@ function git(cwd: string, args: string[], pinned?: Record<string, string>): { ok
  * Where git must look for a worktree a subagent has used. The worktree's
  * `.git` file was within the subagent's reach and could point at a fake
  * repository with its own config, so Marv's git outside the sandbox (e.g. the
- * file listing behind glob and grep) never reads it. The finishing commit
- * goes further and doesn't use the worktree's record either (`commitGitDir`).
+ * file listing behind glob and grep) never reads it. It still trusts the
+ * worktree's record (.git/worktrees/<id>: its `config.worktree`, HEAD and
+ * `commondir`), which the sandbox shows read-only, so callers must also pass
+ * `NO_PROGRAMS` and run git with `gitEnvironment()`. The finishing commit goes
+ * further and doesn't use the worktree's record at all (`commitGitDir`).
  */
 export const worktreeEnv = (wt: Worktree) => ({ GIT_DIR: wt.adminDir, GIT_COMMON_DIR: wt.gitDir, GIT_WORK_TREE: wt.dir });
 
 /**
  * A git dir of Marv's own for the finishing commit: HEAD on the worktree's
- * branch, the repository's real .git as `commondir`, and a copy of the index
- * (which only saves re-reading unchanged files; without it, `add -A` stages
- * everything from scratch). Pinning GIT_DIR to the worktree's record
+ * branch, the repository's real .git as `commondir`, and a copy of the index.
+ * The copy is required, not just faster: the index is what says a file is
+ * tracked even though it matches .gitignore (added with `add -f`) or is marked
+ * skip-worktree, and `add -A` from an empty index would silently leave those
+ * files out of the commit, i.e. delete them from the branch. So without it,
+ * this throws and nothing is committed. Pinning GIT_DIR to the worktree's record
  * (.git/worktrees/<id>) isn't enough: git finds branches through that folder's
  * `commondir` file even when GIT_COMMON_DIR is set, follows its HEAD, and,
  * in a repository with per-worktree config, reads its `config.worktree`, where
@@ -71,8 +95,9 @@ function commitGitDir(wt: Worktree): string {
   writeFileSync(join(dir, "commondir"), `${wt.gitDir}\n`);
   try {
     copyFileSync(join(wt.adminDir, "index"), join(dir, "index"));
-  } catch {
-    // No index: git stages every file anew, with the same result.
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
   }
   return dir;
 }
@@ -138,7 +163,12 @@ export function createWorktree({ root, baseDir, description }: { root: string; b
 
 /** Commits everything in the worktree to its branch. Returns why it couldn't, or undefined. */
 function commitChanges(wt: Worktree, message: string): string | undefined {
-  const gitDir = commitGitDir(wt);
+  let gitDir: string;
+  try {
+    gitDir = commitGitDir(wt);
+  } catch (error) {
+    return `couldn't read the worktree's index (${errorMessage(error)}).`;
+  }
   const run = (...args: string[]) => git(wt.dir, args, { GIT_DIR: gitDir, GIT_COMMON_DIR: wt.gitDir, GIT_WORK_TREE: wt.dir });
   try {
     const status = run("status", "--porcelain");
@@ -146,7 +176,9 @@ function commitChanges(wt: Worktree, message: string): string | undefined {
     if (!status.out) return undefined;
     const added = run("add", "-A");
     if (!added.ok) return `couldn't stage the changes (${added.out}).`;
-    const committed = run("commit", "-q", "-m", message);
+    // Unsigned, even if the repository signs commits: Marv's full-screen UI can't host a pinentry prompt, and
+    // spawnSync would block the event loop while it waited, freezing every parallel subagent. The parent's merge can sign.
+    const committed = run("-c", "commit.gpgSign=false", "commit", "-q", "-m", message);
     if (!committed.ok) return `couldn't commit the changes (${committed.out}).`;
     if (run("status", "--porcelain").out) return "some changes couldn't be committed.";
     return undefined;
@@ -167,7 +199,7 @@ export function finishWorktree(wt: Worktree, { description, interrupted }: { des
   try {
     nested = nestedRepo(wt.dir);
   } catch (error) {
-    return keep(`couldn't look through the worktree (${error instanceof Error ? error.message : String(error)}).`);
+    return keep(`couldn't look through the worktree (${errorMessage(error)}).`);
   }
   if (nested) return keep(`the worktree contains another git repository (${nested}), so Marv didn't commit it automatically.`);
   const problem = commitChanges(wt, `marv: ${description}${interrupted ? " (interrupted)" : ""}`);
@@ -177,11 +209,25 @@ export function finishWorktree(wt: Worktree, { description, interrupted }: { des
   const count = Number(commits.out);
   // Delete the folder and this worktree's own record directly. `git worktree remove` would read inside the
   // worktree, and `git worktree prune` would also drop the user's worktrees whose folders are missing right now.
-  rmSync(wt.dir, { recursive: true, force: true });
-  rmSync(wt.adminDir, { recursive: true, force: true });
+  // Everything is committed by now, so a folder that can't be removed (e.g. one the subagent made read-only) only
+  // needs mentioning.
+  const leftovers = [wt.dir, wt.adminDir].filter((path) => !remove(path));
+  const note = leftovers.map((path) => ` The folder couldn't be removed: ${path}.`).join("");
   if (count === 0) {
     repoGit(wt, "branch", "-D", wt.branch);
-    return `No changes (branch ${wt.branch} removed).`;
+    return `No changes (branch ${wt.branch} removed).${note}`;
   }
-  return `Branch ${wt.branch}: ${count} commit${count === 1 ? "" : "s"} on ${wt.base}. Review it with \`git diff ${wt.base}...${wt.branch}\`, then merge it.`;
+  return `Branch ${wt.branch}: ${count} commit${count === 1 ? "" : "s"} on ${wt.base}. Review it with \`git diff ${wt.base}...${wt.branch}\`, then merge it.${note}`;
 }
+
+/** Deletes a folder; false if it couldn't. */
+function remove(path: string): boolean {
+  try {
+    rmSync(path, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));

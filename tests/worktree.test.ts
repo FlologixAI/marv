@@ -162,6 +162,55 @@ describe("createWorktree / finishWorktree", () => {
     expect(existsSync(join(repo, "b.txt"))).toBe(false); // the main checkout is untouched
   });
 
+  test("tracked files that match .gitignore stay on the branch", async () => {
+    await writeFile(join(repo, ".gitignore"), "*.env\n");
+    await writeFile(join(repo, "keep.env"), "secret=1\n");
+    git(repo, "add", "-f", ".gitignore", "keep.env");
+    git(repo, "commit", "-q", "-m", "tracked but ignored");
+    const wt = createWorktree({ root: repo, baseDir: trees, description: "Ignored" });
+    await writeFile(join(wt.dir, "a.txt"), "two\n");
+    expect(finishWorktree(wt, { description: "Ignored", interrupted: false })).toContain("1 commit");
+    expect(git(repo, "show", `${wt.branch}:keep.env`)).toBe("secret=1");
+    expect(git(repo, "show", `${wt.branch}:a.txt`)).toBe("two");
+  });
+
+  test("without the worktree's index nothing is committed: the folder is kept", async () => {
+    // Staging from an empty index would silently drop tracked files that match .gitignore.
+    const wt = createWorktree({ root: repo, baseDir: trees, description: "No index" });
+    await rm(join(wt.adminDir, "index"));
+    await writeFile(join(wt.dir, "b.txt"), "bee\n");
+    const line = finishWorktree(wt, { description: "No index", interrupted: false });
+    expect(line).toContain(`still in ${wt.dir}`);
+    expect(existsSync(join(wt.dir, "b.txt"))).toBe(true);
+    expect(git(repo, "rev-list", "--count", `main..${wt.branch}`)).toBe("0");
+  });
+
+  test("a repository that signs commits: Marv's commit isn't signed, so nothing prompts or hangs", async () => {
+    const gpg = join(trees, "gpg.sh");
+    await writeFile(gpg, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    git(repo, "config", "commit.gpgSign", "true");
+    git(repo, "config", "gpg.program", gpg);
+    const wt = createWorktree({ root: repo, baseDir: trees, description: "Signed" });
+    await writeFile(join(wt.dir, "b.txt"), "bee\n");
+    expect(finishWorktree(wt, { description: "Signed", interrupted: false })).toContain("1 commit");
+    expect(git(repo, "show", `${wt.branch}:b.txt`)).toBe("bee");
+  });
+
+  test("a folder that can't be removed after the commit: the branch line still comes back", async () => {
+    const wt = createWorktree({ root: repo, baseDir: trees, description: "Stuck" });
+    await mkdir(join(wt.dir, "ro"));
+    await writeFile(join(wt.dir, "ro", "f.txt"), "f\n");
+    await chmod(join(wt.dir, "ro"), 0o555);
+    try {
+      const line = finishWorktree(wt, { description: "Stuck", interrupted: false });
+      expect(line).toContain(`Branch ${wt.branch}: 1 commit on ${wt.base}`);
+      expect(line).toContain(`The folder couldn't be removed: ${wt.dir}.`);
+      expect(git(repo, "show", `${wt.branch}:ro/f.txt`)).toBe("f");
+    } finally {
+      await chmod(join(wt.dir, "ro"), 0o755); // so afterEach can delete it
+    }
+  });
+
   test("an interrupted subagent's work is committed and marked", async () => {
     const wt = createWorktree({ root: repo, baseDir: trees, description: "Half done" });
     await writeFile(join(wt.dir, "c.txt"), "c\n");
