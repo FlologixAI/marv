@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, useApp, useInput, useWindowSize, type DOMElement } from "ink";
-import { answerAllCalls, DEFAULT_MAX_STEPS, runAgent } from "./agent.ts";
+import { agentArgs, answerAllCalls, DEFAULT_MAX_STEPS, runAgent } from "./agent.ts";
 import { applyEvent, createAgentLog, type AgentLog } from "./agent-log.ts";
 import { GENERAL_PURPOSE, type AgentType } from "./agents.ts";
 import { copyToClipboard } from "./clipboard.ts";
@@ -56,18 +56,6 @@ const NOTICE_MS = 2000;
  * for frames nobody would see.
  */
 const STREAM_FLUSH_MS = 33;
-
-/** What an agent call asked for: its task (the first entry in its view) and the rest, for its trajectory. */
-function agentArgs(args: string): { prompt: string; type: string; description: string; isolation?: string } {
-  let parsed: Record<string, unknown> = {};
-  try {
-    const value: unknown = JSON.parse(args);
-    // The model can send any JSON ("null", "[]", "3"): only an object has fields. runTool reports the bad input.
-    if (value && typeof value === "object" && !Array.isArray(value)) parsed = value as Record<string, unknown>;
-  } catch {}
-  const text = (key: string) => (typeof parsed[key] === "string" ? (parsed[key] as string) : undefined);
-  return { prompt: text("prompt") ?? "", type: text("type") ?? "general-purpose", description: text("description") ?? "", isolation: text("isolation") };
-}
 
 /** An untrusted project server, for the trust notice: what it runs, what it reads from your environment, and which project files. */
 function describeUntrusted(s: McpServerStatus): string {

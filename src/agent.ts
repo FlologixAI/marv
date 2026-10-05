@@ -86,6 +86,18 @@ interface Options {
  */
 export const agentLabel = (type: unknown, description: string) => `${typeof type === "string" ? type : "general-purpose"} · ${description}`;
 
+/** What an agent call asked for: its task (the first entry in its view) and the rest, for its trajectory. */
+export function agentArgs(args: string): { prompt: string; type: string; description: string; isolation?: string } {
+  let parsed: Record<string, unknown> = {};
+  try {
+    const value: unknown = JSON.parse(args);
+    // The model can send any JSON ("null", "[]", "3"): only an object has fields. runTool reports the bad input.
+    if (value && typeof value === "object" && !Array.isArray(value)) parsed = value as Record<string, unknown>;
+  } catch {}
+  const text = (key: string) => (typeof parsed[key] === "string" ? (parsed[key] as string) : undefined);
+  return { prompt: text("prompt") ?? "", type: text("type") ?? "general-purpose", description: text("description") ?? "", isolation: text("isolation") };
+}
+
 /** The transcript label for a call before it runs ("src/app.ts"), falling back to the raw arguments. */
 function labelOf(call: ToolCall): string {
   try {
