@@ -38,12 +38,21 @@ interface Options {
 export async function summarize({ provider, history, system, tools, signal, focus, onUsage }: Options): Promise<{ summary: string } | { error: string }> {
   const request: ChatTurn[] = [...history, { role: "user", text: focus ? `${INSTRUCTIONS}\n\nFocus especially on: ${focus}` : INSTRUCTIONS }];
   let text = "";
+  let toolCall = false;
+  let reason: string | undefined;
   for await (const event of provider.stream(request, { system, tools, signal })) {
     if (event.type === "text_delta") text += event.text;
+    else if (event.type === "tool_call") toolCall = true;
+    else if (event.type === "done") reason = event.reason;
     else if (event.type === "usage") onUsage?.(event.usage);
     else if (event.type === "error") return { error: event.message };
   }
   if (signal.aborted) return { error: "Stopped." };
+  // The tools are offered (so the cache prefix matches), and a model may reach for one ("Let me re-read
+  // src/app.tsx first.") instead of summarizing; or the summary hits the output limit. Either way the text isn't
+  // a summary, and replacing the history with it would lose the conversation for good.
+  if (toolCall) return { error: "The model tried to use a tool instead of summarizing." };
+  if (reason === "length") return { error: "The summary was cut off by the model's output limit." };
   return text.trim() ? { summary: text.trim() } : { error: "The model returned an empty summary." };
 }
 

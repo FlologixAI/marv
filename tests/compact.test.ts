@@ -39,6 +39,17 @@ describe("summarize", () => {
   });
 });
 
+test("a reply that calls a tool, or is cut off, isn't a summary: the history is kept", async () => {
+  const wantsTool = new ScriptedProvider([
+    [{ type: "text_delta", text: "Let me re-read src/app.tsx first." }, { type: "tool_call", call: { id: "c1", name: "read_file", arguments: "{}" } }, { type: "done", reason: "tool_calls" }],
+  ]);
+  const cutOff = new ScriptedProvider([[{ type: "text_delta", text: "## Goal\nThe user wants to refac" }, { type: "done", reason: "length" }]]);
+  for (const provider of [wantsTool, cutOff]) {
+    const result = await summarize({ provider, history: [{ role: "user", text: "hi" }], system: "S", tools: [], signal: new AbortController().signal });
+    expect(result).toEqual({ error: expect.stringMatching(/tool|cut off/) });
+  }
+});
+
 test("compactedHistory starts the model's history over from the summary", () => {
   expect(compactedHistory("the summary")).toEqual([
     { role: "user", text: expect.stringContaining("the summary") },
