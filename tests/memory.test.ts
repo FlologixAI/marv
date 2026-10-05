@@ -50,6 +50,37 @@ describe("memory store", () => {
     expect(existsSync(paths.project)).toBe(true);
   });
 
+  test("changing memory keeps everything else you wrote in the file", async () => {
+    const hand = [
+      "# My notes for Marv",
+      "",
+      "## Style",
+      "Short answers, please. Explain the why.",
+      "",
+      "* prefer tabs",
+      "  - except in YAML",
+      "+ run tests with bun",
+      "- use bun, not npm",
+      "",
+    ].join("\n");
+    await mkdir(join(dir, "memory"), { recursive: true });
+    await writeFile(paths.personal, hand);
+    expect((await loadMemory(paths)).personal).toEqual(["prefer tabs", "run tests with bun", "use bun, not npm"]);
+
+    await addMemory(paths.personal, "likes small commits");
+    expect(await readFile(paths.personal, "utf8")).toBe(`${hand}- likes small commits\n`);
+
+    expect(await removeMemory(paths.personal, "prefer tabs")).toEqual({ removed: "prefer tabs" });
+    expect(await readFile(paths.personal, "utf8")).toBe(`${hand.replace("* prefer tabs\n", "")}- likes small commits\n`);
+  });
+
+  test("a file without a final newline still gets its new memory on a line of its own", async () => {
+    await mkdir(join(dir, "memory"), { recursive: true });
+    await writeFile(paths.personal, "- one");
+    await addMemory(paths.personal, "two");
+    expect((await loadMemory(paths)).personal).toEqual(["one", "two"]);
+  });
+
   test("no memory files yet is fine", async () => {
     expect(await loadMemory(paths)).toEqual({ personal: [], project: [] });
   });

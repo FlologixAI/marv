@@ -47,19 +47,34 @@ export function memoryPaths(configDir: string, root: string): MemoryPaths {
 /** Which scope a memory file belongs to (project files live under memory/projects/). */
 const scopeOf = (path: string): MemoryScope => (path.includes(join("memory", "projects")) ? "project" : "personal");
 
-/** The "- " entries of a memory file (other lines, like the header, are ignored). */
+/** A top-level bullet ("- ", "* " or "+ "): one memory. Anything else (headings, prose, nested bullets) is yours. */
+const BULLET = /^[-*+] (.*)$/;
+
+const readLines = async (path: string) => (existsSync(path) ? (await Bun.file(path).text()).split("\n") : []);
+
+/** The memories in a file: its top-level bullets. */
 async function readEntries(path: string): Promise<string[]> {
-  if (!existsSync(path)) return [];
-  return (await Bun.file(path).text())
-    .split("\n")
-    .filter((line) => line.startsWith("- "))
-    .map((line) => line.slice(2).trim())
-    .filter(Boolean);
+  return (await readLines(path)).flatMap((line) => {
+    const entry = BULLET.exec(line.trimEnd())?.[1]?.trim();
+    return entry ? [entry] : [];
+  });
 }
 
-async function writeEntries(path: string, entries: string[]) {
-  const scope = scopeOf(path);
-  await writePrivate(path, `${HEADERS[scope]}\n\n${entries.map((e) => `- ${e}`).join("\n")}\n`);
+/**
+ * Changes go line by line: adding appends one bullet, removing deletes the one line that holds it. Every other
+ * line stays as written, since the file is yours to edit too (rewriting it from its bullets wiped headings,
+ * notes and nested bullets).
+ */
+async function appendEntry(path: string, entry: string) {
+  const text = existsSync(path) ? await Bun.file(path).text() : `${HEADERS[scopeOf(path)]}\n\n`;
+  await writePrivate(path, `${text}${text === "" || text.endsWith("\n") ? "" : "\n"}- ${entry}\n`);
+}
+
+async function deleteEntry(path: string, entry: string) {
+  const lines = await readLines(path);
+  const at = lines.findIndex((line) => BULLET.exec(line.trimEnd())?.[1]?.trim() === entry);
+  if (at >= 0) lines.splice(at, 1);
+  await writePrivate(path, lines.join("\n"));
 }
 
 export async function loadMemory(paths: MemoryPaths): Promise<Memories> {
@@ -78,7 +93,7 @@ export async function addMemory(path: string, text: string): Promise<{ added: bo
   const entries = await readEntries(path);
   if (entries.some((e) => e.toLowerCase() === entry.toLowerCase())) return { added: false };
   if (entries.length >= MAX_ENTRIES) return { added: false, error: `Memory is full (${MAX_ENTRIES} entries). Remove something first.` };
-  await writeEntries(path, [...entries, entry]);
+  await appendEntry(path, entry);
   return { added: true };
 }
 
@@ -94,7 +109,7 @@ export async function removeMemory(path: string, match: string): Promise<{ remov
   const found = await findMemory(path, match);
   if (found.length === 0) return { error: `No ${scope} memory matches "${match}".` };
   if (found.length > 1) return { error: `${found.length} memories match "${match}"; use more of the text: ${found.map((f) => `"${f}"`).join(", ")}.` };
-  await writeEntries(path, (await readEntries(path)).filter((e) => e !== found[0]));
+  await deleteEntry(path, found[0]!);
   return { removed: found[0]! };
 }
 
