@@ -44,7 +44,11 @@ interface SandboxOptions {
   network: boolean;
   /** PATH inside the sandbox. */
   path: string;
-  /** Extra folders the command may read but not change, e.g. a worktree's shared .git (so git status/diff/log work). */
+  /**
+   * Extra folders the command may read but not change, e.g. a worktree's shared .git (so git status/diff/log
+   * work), or the worktree around a subagent that works in one of its subfolders (mounted under the project,
+   * which stays writable).
+   */
   readOnly?: string[];
   /** The file system, injectable for tests: whether a path exists (following symlinks), */
   exists?: (path: string) => boolean;
@@ -63,8 +67,12 @@ function lstatKind(path: string): "file" | "symlink" | null {
   }
 }
 
-/** The real path of an extra folder, after checking that mounting it is safe. bwrap follows symlinks, so the check must too. */
-function resolveExtra(dir: string, home: string, root: string): string {
+/**
+ * The real path of an extra folder, after checking that mounting it is safe, and whether it holds the project
+ * (it's then mounted before the project, so the project stays writable on top). bwrap follows symlinks, so the
+ * check must too.
+ */
+function resolveExtra(dir: string, home: string, root: string): { real: string; around: boolean } {
   if (!isAbsolute(dir)) throw new Error(`Extra sandbox folder ${dir} must be an absolute path.`);
   let real: string;
   try {
@@ -78,11 +86,11 @@ function resolveExtra(dir: string, home: string, root: string): string {
   if (real === "/" || contains(real, realHome)) {
     throw new Error(`Refusing to make ${dir} visible in the sandbox: it is, or leads to, the home folder or one of its parents.`);
   }
-  // Mounted after the root bind, the project itself would silently turn read-only.
-  if (contains(real, realRoot)) {
-    throw new Error(`Refusing to make ${dir} visible in the sandbox: it is the project folder or one of its parents.`);
+  // Read-only over the project itself would leave nothing writable.
+  if (real === realRoot) {
+    throw new Error(`Refusing to make ${dir} read-only in the sandbox: it is the project folder.`);
   }
-  return real;
+  return { real, around: contains(real, realRoot) };
 }
 
 /** Whether `outer` is `inner` or a parent of it. */
@@ -156,9 +164,12 @@ export function sandboxArgs({
   // On top of the toolchain mounts, so the empty file hides the real one.
   const masks = new Set(CREDENTIALS.flatMap((file) => credentialMasks(join(home, file), mounts, stat, realpath)));
   for (const mask of masks) args.push("--ro-bind", "/dev/null", mask);
+  // Bind the resolved path (what was checked), at the path the caller gave. A folder around the project goes
+  // first: mounted after it, it would cover the project and silently turn it read-only.
+  const extras = readOnly.map((dir) => ({ dir, ...resolveExtra(dir, home, root) }));
+  for (const { dir, real } of extras.filter((e) => e.around)) args.push("--ro-bind", real, dir);
   args.push("--bind", root, root);
-  // Bind the resolved path (what was checked), at the path the caller gave.
-  for (const dir of readOnly) args.push("--ro-bind", resolveExtra(dir, home, root), dir);
+  for (const { dir, real } of extras.filter((e) => !e.around)) args.push("--ro-bind", real, dir);
   if (!network) args.push("--unshare-net");
   args.push(
     "--unshare-pid", // its processes can't see or signal ours, and all die with it

@@ -55,7 +55,16 @@ describe("sandboxArgs", () => {
       expect(a.join(" ")).toContain(`--ro-bind ${real} ${alias}`);
     });
 
-    test("that equal the project or contain it are refused", () => {
+    test("around the project (a worktree whose subfolder is the project) go before it, so the project stays writable", () => {
+      const tree = join(tmp, "tree");
+      const pkg = join(tree, "pkg");
+      mkdirSync(pkg, { recursive: true });
+      const a = sandboxArgs({ root: pkg, home, path: "/usr/bin", network: false, readOnly: [tree, git] });
+      const line = a.join(" ");
+      expect(line).toContain(`--ro-bind ${realpathSync(tree)} ${tree} --bind ${pkg} ${pkg} --ro-bind ${realpathSync(git)} ${git}`);
+    });
+
+    test("that equal the project, or hold the home folder, are refused", () => {
       expect(() => args([root])).toThrow();
       expect(() => args([home])).toThrow();
       const inner = join(root, "sub");

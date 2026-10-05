@@ -61,17 +61,20 @@ export function subagentApprove(approve: ToolContext["approve"], agent: string, 
  * The tool context a subagent's tools run with. Built from scratch rather than
  * copied from the parent's, so nothing is inherited by accident: no agentHost
  * (it can't start subagents), no memory (only the main agent changes it), no
- * callId. In a worktree it works in the worktree's folder, bash sees the
- * shared .git read-only, and Marv's own git calls are pinned to the worktree.
+ * callId. In a worktree it works in the worktree's folder (or the same
+ * subfolder the parent works in), bash sees the shared .git read-only (and,
+ * from a subfolder, the rest of the worktree, so git finds the repository and
+ * doesn't list the other files as deleted), and Marv's own git calls are
+ * pinned to the worktree.
  */
 export function subagentContext(ctx: ToolContext, who: string, worktree?: Worktree): ToolContext {
   const sandboxed = (ctx.sandbox ?? true) && sandboxAvailable();
   return {
-    root: worktree?.dir ?? ctx.root,
+    root: worktree?.workDir ?? ctx.root,
     signal: ctx.signal,
     sandbox: ctx.sandbox,
     skills: ctx.skills,
-    readOnly: worktree ? [worktree.gitDir] : undefined,
+    readOnly: worktree ? [...(worktree.prefix ? [worktree.dir] : []), worktree.gitDir] : undefined,
     gitEnv: worktree && worktreeEnv(worktree),
     approve: subagentApprove(ctx.approve, who, Boolean(worktree) && sandboxed),
   };
@@ -122,7 +125,7 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
     const names = available.map((t) => t.name);
     const subCtx = subagentContext(ctx, who, worktree);
     const system = subagentPrompt({
-      cwd: worktree ? shortenHome(worktree.dir) : host.cwd,
+      cwd: worktree ? shortenHome(worktree.workDir) : host.cwd,
       tools: names,
       body: type.body,
       instructions: host.instructions,

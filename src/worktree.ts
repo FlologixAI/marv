@@ -32,6 +32,14 @@ export interface Worktree {
   gitDir: string;
   /** This worktree's own folder inside it (.git/worktrees/<id>): its HEAD and index. */
   adminDir: string;
+  /** Where the parent's project sits in the repository, as git says it ("pkg/", or "" at the top). */
+  prefix: string;
+  /**
+   * Where the subagent works: the same subfolder of the worktree (`dir` + `prefix`). `git worktree add`
+   * checks out the whole repository, but a session started in repo/pkg should give its subagent pkg,
+   * not the whole repository. The finishing commit still covers the whole worktree.
+   */
+  workDir: string;
 }
 
 export const NOT_A_REPO =
@@ -108,12 +116,18 @@ function nestedRepo(root: string): string | undefined {
   return undefined;
 }
 
-/** What a worktree would start from, and how many uncommitted changes it would leave behind. Null outside a repo. */
-export function inspectRepo(root: string): { base: string; dirty: number } | null {
+/**
+ * What a worktree would start from, how many uncommitted changes it would leave behind (in the whole
+ * repository, even when `root` is a subfolder of it), and where `root` sits in it ("pkg/", or "" at the top).
+ * Null outside a repo.
+ */
+export function inspectRepo(root: string): { base: string; dirty: number; prefix: string } | null {
   const head = git(root, ["rev-parse", "--short", "HEAD"]);
   if (!head.ok) return null;
+  const prefix = git(root, ["rev-parse", "--show-prefix"]);
+  if (!prefix.ok) return null;
   const status = git(root, ["status", "--porcelain"]).out;
-  return { base: head.out, dirty: status ? status.split("\n").length : 0 };
+  return { base: head.out, dirty: status ? status.split("\n").length : 0, prefix: prefix.out };
 }
 
 /** "Task 2: Parser errors" → "marv/task-2-parser-errors-ab12" */
@@ -139,7 +153,10 @@ export function createWorktree({ root, baseDir, description }: { root: string; b
   const absolute = (path: string) => (isAbsolute(path) ? path : resolve(dir, path));
   const gitDir = absolute(git(dir, ["rev-parse", "--git-common-dir"]).out);
   const adminDir = absolute(git(dir, ["rev-parse", "--git-dir"]).out);
-  return { dir, branch, base: repo.base, repo: root, gitDir, adminDir };
+  const workDir = resolve(dir, repo.prefix); // no trailing slash
+  // A folder with no tracked files (e.g. a new package) isn't checked out: start it empty.
+  mkdirSync(workDir, { recursive: true });
+  return { dir, branch, base: repo.base, repo: root, gitDir, adminDir, prefix: repo.prefix, workDir };
 }
 
 /** Commits everything in the worktree to its branch. Returns why it couldn't, or undefined. */

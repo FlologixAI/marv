@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runAgent } from "../src/agent.ts";
@@ -191,6 +191,37 @@ describe("the agent tool", () => {
       expect(provider.requests[0]!.options.system).toContain(`branch ${branch}`);
     });
 
+    test("started from a subfolder, it works in that subfolder of its worktree", async () => {
+      await mkdir(join(root, "pkg"));
+      await writeFile(join(root, "pkg", "p.txt"), "p\n");
+      await writeFile(join(root, "top.txt"), "top\n");
+      git(root, "add", "-A");
+      git(root, "commit", "-q", "-m", "pkg");
+      const provider = new ScriptedProvider([
+        [
+          { type: "tool_call", call: { id: "r1", name: "read_file", arguments: JSON.stringify({ path: "../top.txt" }) } },
+          { type: "tool_call", call: { id: "g1", name: "glob", arguments: JSON.stringify({ pattern: "*" }) } },
+          { type: "tool_call", call: { id: "w1", name: "write_file", arguments: JSON.stringify({ path: "made.txt", content: "m\n" }) } },
+          ...(sandboxAvailable() ? [{ type: "tool_call" as const, call: { id: "b1", name: "bash", arguments: JSON.stringify({ command: "git status --porcelain" }) } }] : []),
+          { type: "done", reason: "tool_calls" },
+        ],
+        say("Made it."),
+      ]);
+      const { host } = makeHost(provider);
+      const { ctx } = ctxWith(host);
+      const result = await runTool(agentCall({ description: "sub", prompt: "p", isolation: "worktree" }), { ...ctx, root: join(root, "pkg") });
+      const results = provider.requests[1]!.history.filter((t) => t.role === "tool").map((t) => (t.role === "tool" ? t.text : ""));
+      expect(results[0]).toContain("outside the project");
+      expect(results[1]).toBe("p.txt"); // listed relative to pkg, nothing from the top
+      // In the sandbox git works, and the rest of the worktree is there (read-only), not listed as deleted.
+      if (sandboxAvailable()) expect(results[3]).toBe("?? pkg/made.txt\n\n[exit code 0]");
+      expect(provider.requests[0]!.options.system).toMatch(new RegExp(`${trees.replace(/^.*\//, "")}/sub-[0-9a-f]{4}/pkg`));
+      const branch = /Marv: Branch (marv\/sub-[0-9a-f]{4}): 1 commit/.exec(result.output)?.[1];
+      expect(branch).toBeDefined();
+      expect(git(root, "show", `${branch}:pkg/made.txt`)).toBe("m");
+      expect(git(root, "show", `${branch}:top.txt`)).toBe("top");
+    });
+
     test("network commands still ask", async () => {
       const provider = new ScriptedProvider([useTool("b1", "bash", { command: "bun install", network: true }), say("never")]);
       const { host } = makeHost(provider);
@@ -303,6 +334,16 @@ describe("the agent tool", () => {
       await runTool(agentCall({ description: "x", prompt: "p", isolation: "worktree" }), ctx);
       expect(asked[0]!.preview.warning).toContain("1 uncommitted change in the project won't be in the worktree");
     });
+
+    test("from a subfolder, the approval says where it works, and that the count is the whole repository's", async () => {
+      await mkdir(join(root, "pkg"));
+      await writeFile(join(root, "dirty.txt"), "x\n");
+      const { host } = makeHost(new ScriptedProvider([say("ok")]));
+      const { ctx, asked } = ctxWith(host);
+      await runTool(agentCall({ description: "x", prompt: "p", isolation: "worktree" }), { ...ctx, root: join(root, "pkg") });
+      expect(asked[0]!.preview.note).toContain(", working in pkg/");
+      expect(asked[0]!.preview.warning).toContain("1 uncommitted change in the repository won't be in the worktree");
+    });
   });
 
   test("a description is short", async () => {
@@ -319,6 +360,8 @@ describe("the agent tool", () => {
       repo: "/proj",
       gitDir: "/proj/.git",
       adminDir: "/proj/.git/worktrees/x-1a2b",
+      prefix: "",
+      workDir: "/trees/x-1a2b",
     };
     const parent = (host: AgentHost): ToolContext => ({
       root: "/proj",
@@ -339,6 +382,14 @@ describe("the agent tool", () => {
       expect(sub.memory).toBeUndefined();
       expect(sub.callId).toBeUndefined();
       expect(sub.sandbox).toBe(false);
+    });
+
+    test("in a worktree started from a subfolder: that subfolder, with the rest of the worktree read-only", async () => {
+      const { host } = makeHost(new ScriptedProvider([]));
+      const sub = subagentContext({ ...parent(host), root: "/proj/pkg" }, "general-purpose · x", { ...wt, repo: "/proj/pkg", prefix: "pkg/", workDir: "/trees/x-1a2b/pkg" });
+      expect(sub.root).toBe("/trees/x-1a2b/pkg");
+      expect(sub.readOnly).toEqual([wt.dir, wt.gitDir]);
+      expect(sub.gitEnv).toEqual(worktreeEnv(wt)); // git still sees the whole worktree
     });
 
     test("in the shared folder: the project, nothing extra", async () => {

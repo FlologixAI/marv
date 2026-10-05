@@ -47,9 +47,10 @@ export const agent: Tool<typeof input> = {
     return {
       title: `Start ${found.name} in its own worktree: ${description}`,
       text: prompt.length > PREVIEW_CHARS ? `${prompt.slice(0, PREVIEW_CHARS)}…` : prompt,
-      note: `new branch from ${repo.base} · ${auto ? "edits and sandboxed commands run without asking inside its worktree" : "asks before each change (no sandbox)"}`,
+      note: `new branch from ${repo.base}${repo.prefix ? `, working in ${repo.prefix}` : ""} · ${auto ? "edits and sandboxed commands run without asking inside its worktree" : "asks before each change (no sandbox)"}`,
+      // git counts the whole repository's changes, even from a subfolder, so say which.
       warning: repo.dirty
-        ? `${repo.dirty} uncommitted change${repo.dirty === 1 ? "" : "s"} in the project won't be in the worktree (it starts from ${repo.base})`
+        ? `${repo.dirty} uncommitted change${repo.dirty === 1 ? "" : "s"} in the ${repo.prefix ? "repository" : "project"} won't be in the worktree (it starts from ${repo.base})`
         : undefined,
     };
   },

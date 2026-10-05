@@ -27,7 +27,7 @@ afterEach(async () => {
 
 describe("inspectRepo", () => {
   test("the base commit and how many uncommitted changes would be left behind", async () => {
-    expect(inspectRepo(repo)).toEqual({ base: git(repo, "rev-parse", "--short", "HEAD"), dirty: 0 });
+    expect(inspectRepo(repo)).toEqual({ base: git(repo, "rev-parse", "--short", "HEAD"), dirty: 0, prefix: "" });
     await writeFile(join(repo, "b.txt"), "new\n");
     expect(inspectRepo(repo)!.dirty).toBe(1);
   });
@@ -54,6 +54,34 @@ describe("createWorktree / finishWorktree", () => {
     expect(wt.gitDir).toBe(join(repo, ".git"));
     expect(wt.adminDir).toStartWith(join(repo, ".git", "worktrees"));
     expect(wt.base).toBe(git(repo, "rev-parse", "--short", "HEAD"));
+  });
+
+  test("started from a subfolder, it works in the same subfolder; the commit covers the whole worktree", async () => {
+    await mkdir(join(repo, "pkg"));
+    await writeFile(join(repo, "pkg", "p.txt"), "p\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "pkg");
+    const wt = createWorktree({ root: join(repo, "pkg"), baseDir: trees, description: "Sub" });
+    expect(wt.prefix).toBe("pkg/");
+    expect(wt.workDir).toBe(join(wt.dir, "pkg"));
+    expect(existsSync(join(wt.workDir, "p.txt"))).toBe(true);
+    await writeFile(join(wt.workDir, "new.txt"), "n\n");
+    expect(finishWorktree(wt, { description: "Sub", interrupted: false })).toContain("1 commit");
+    expect(git(repo, "show", `${wt.branch}:pkg/new.txt`)).toBe("n");
+    expect(existsSync(wt.dir)).toBe(false);
+  });
+
+  test("started from an untracked subfolder, that folder is created in the worktree", async () => {
+    await mkdir(join(repo, "fresh"));
+    const wt = createWorktree({ root: join(repo, "fresh"), baseDir: trees, description: "Fresh" });
+    expect(wt.workDir).toBe(join(wt.dir, "fresh"));
+    expect(existsSync(wt.workDir)).toBe(true);
+  });
+
+  test("at the top of the repository, it works in the worktree itself", () => {
+    const wt = createWorktree({ root: repo, baseDir: trees, description: "Top" });
+    expect(wt.prefix).toBe("");
+    expect(wt.workDir).toBe(wt.dir);
   });
 
   test("Marv's own git ignores a planted hook and redirected git pointers", async () => {
