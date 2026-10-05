@@ -1,5 +1,6 @@
 import { Box, Text, useInput } from "ink";
 import type { ApprovalRequest, Decision, DiffLine } from "../tools/types.ts";
+import { printable } from "../printable.ts";
 import { Select } from "./Select.tsx";
 import { theme } from "./theme.ts";
 
@@ -38,29 +39,29 @@ export function Approval({
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={preview.warning ? theme.warning : theme.accent} paddingX={1}>
-      {request.agent && <Text color={theme.dim}>[{request.agent}]</Text>}
-      <Text bold>{preview.title}</Text>
+      {request.agent && <Text color={theme.dim}>[{printable(request.agent)}]</Text>}
+      <Text bold>{printable(preview.title)}</Text>
 
       {(shown.length > 0 || preview.command || preview.text) && (
         <Box flexDirection="column" marginTop={1}>
           {preview.command && (
             <Text color={theme.code}>
               <Text color={theme.dim}>$ </Text>
-              {preview.command}
+              {printable(preview.command)}
             </Text>
           )}
-          {preview.text && <Text>{preview.text}</Text>}
+          {preview.text && <Text>{printable(preview.text)}</Text>}
           {shown.map((line, i) => (
             <Text key={i} color={COLOR[line.kind]} wrap="truncate-end">
-              {line.kind === "gap" ? "  …" : MARK[line.kind] + line.text}
+              {line.kind === "gap" ? "  …" : MARK[line.kind] + printable(line.text)}
             </Text>
           ))}
           {hidden > 0 && <Text color={theme.dim}>  … {hidden} more lines</Text>}
         </Box>
       )}
 
-      {preview.note && <Text color={theme.dim}>{preview.note}</Text>}
-      {preview.warning && <Text color={theme.warning}>⚠ {preview.warning}</Text>}
+      {preview.note && <Text color={theme.dim}>{printable(preview.note)}</Text>}
+      {preview.warning && <Text color={theme.warning}>⚠ {printable(preview.warning)}</Text>}
       {waiting > 0 && <Text color={theme.dim}>{waiting} more waiting</Text>}
 
       <Box marginTop={1} flexDirection="column">

@@ -5,6 +5,7 @@
 // come from the layout instead of from the raw text.
 import { memo, useMemo, useRef, type ReactNode } from "react";
 import { Box, Text } from "ink";
+import { printable } from "../printable.ts";
 import { marked, type Token, type Tokens } from "marked";
 import stringWidth from "string-width";
 import { theme } from "./theme.ts";
@@ -240,10 +241,14 @@ export function createStreamLexer() {
  */
 export const Markdown = memo(function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const streamLexer = useRef<ReturnType<typeof createStreamLexer> | null>(null);
+  // Sanitized as a whole before lexing, so the lexer's cache sees one consistent text.
+  // (An unfinished escape sequence at the end is dropped until it completes; the
+  // lexer starts over if the text no longer extends what it cached.)
   const tokens = useMemo(() => {
-    if (!streaming) return lex(text);
+    const clean = printable(text);
+    if (!streaming) return lex(clean);
     streamLexer.current ??= createStreamLexer();
-    return streamLexer.current(text);
+    return streamLexer.current(clean);
   }, [text, streaming]);
   return <Blocks tokens={tokens} depth={0} />;
 });

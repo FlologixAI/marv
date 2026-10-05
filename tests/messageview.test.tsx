@@ -85,3 +85,29 @@ describe("MessageView wrapping", () => {
     for (const line of lines) expect(stringWidth(line)).toBeLessThanOrEqual(40);
   });
 });
+
+describe("MessageView terminal control sequences", () => {
+  const EVIL = "\x1b]52;c;aGk=\x07";
+  const messages: Pick<Message, "role" | "text" | "tool" | "markdown">[] = [
+    { role: "assistant", text: `before ${EVIL}after` },
+    { role: "tool", text: `read${EVIL}_file`, tool: { label: `a${EVIL}.ts`, status: "done", summary: `1${EVIL} line`, steps: [`s${EVIL}tep`] } },
+    { role: "system", text: `note ${EVIL}here` },
+    { role: "system", text: `note ${EVIL}here`, markdown: true },
+  ];
+  for (const message of messages) {
+    test(`${message.role}${message.markdown ? " (markdown)" : ""} never reaches the terminal with an escape sequence`, async () => {
+      const stdout = new FakeTerminal(80);
+      const { unmount } = render(
+        <Box width={80} flexDirection="column">
+          <MessageView message={message} showSteps />
+        </Box>,
+        { stdout: stdout as unknown as NodeJS.WriteStream, stdin: new FakeKeyboard() as unknown as NodeJS.ReadStream, interactive: true },
+      );
+      await Bun.sleep(30);
+      unmount();
+      const plain = stdout.written.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+      expect(plain).not.toContain("\x1b");
+      expect(plain).not.toContain("\x07");
+    });
+  }
+});

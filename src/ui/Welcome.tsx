@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 import { Martian } from "./Martian.tsx";
+import { printable } from "../printable.ts";
 import { theme } from "./theme.ts";
 
 // The banner at the top of the session: the Marv martian, with the
@@ -31,7 +32,7 @@ export function Welcome({
           <Text color={theme.dim}> v{version}</Text>
         </Text>
         <Text color={theme.dim}>/help for commands</Text>
-        <Text color={theme.dim}>cwd: {cwd}</Text>
+        <Text color={theme.dim}>cwd: {printable(cwd)}</Text>
         {(instructions || skills > 0 || memories > 0) && (
           <Text color={theme.dim}>
             {[

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Box, Text, useInput } from "ink";
+import { printable } from "../printable.ts";
 import { theme } from "./theme.ts";
 
 export interface SelectItem<T extends string> {
@@ -31,8 +32,8 @@ export function Select<T extends string>({ items, initialValue, onSelect }: Prop
         return (
           <Text key={item.value} color={active ? theme.accent : undefined}>
             {active ? "❯ " : "  "}
-            {item.label}
-            {item.hint && <Text color={theme.dim}> · {item.hint}</Text>}
+            {printable(item.label)}
+            {item.hint && <Text color={theme.dim}> · {printable(item.hint)}</Text>}
           </Text>
         );
       })}

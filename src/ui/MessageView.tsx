@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { Box, Text } from "ink";
 import type { Message } from "../types.ts";
+import { printable } from "../printable.ts";
 import { Markdown } from "./Markdown.tsx";
 import { theme } from "./theme.ts";
 
@@ -39,7 +40,7 @@ export const MessageView = memo(function MessageView({
         <Box marginBottom={1}>
           <Gutter mark=">" color={theme.user} />
           <Box flexShrink={1}>
-            <Text color={theme.user}>{message.text}</Text>
+            <Text color={theme.user}>{printable(message.text)}</Text>
           </Box>
         </Box>
       );
@@ -62,18 +63,18 @@ export const MessageView = memo(function MessageView({
         <Box flexDirection="column" marginBottom={1}>
           <Text wrap="truncate-end">
             <Text color={failed ? theme.error : theme.accent}>{"● "}</Text>
-            <Text bold>{message.text}</Text>
-            <Text color={theme.dim}> {tool.label}</Text>
+            <Text bold>{printable(message.text)}</Text>
+            <Text color={theme.dim}> {printable(tool.label)}</Text>
           </Text>
           <Text color={failed ? theme.error : declined ? theme.warning : theme.dim} wrap="truncate-end">
             {"  ⎿ "}
-            {tool.status === "running" ? (tool.summary ?? "running…") : tool.summary}
+            {printable((tool.status === "running" ? (tool.summary ?? "running…") : tool.summary) ?? "")}
           </Text>
           {showSteps &&
             tool.steps?.map((step, i) => (
               <Text key={i} color={theme.dim} wrap="truncate-end">
                 {"    · "}
-                {step}
+                {printable(step)}
               </Text>
             ))}
         </Box>
@@ -89,7 +90,7 @@ export const MessageView = memo(function MessageView({
       }
       return (
         <Box marginBottom={1}>
-          <Text color={message.isError ? theme.error : theme.dim}>{message.text}</Text>
+          <Text color={message.isError ? theme.error : theme.dim}>{printable(message.text)}</Text>
         </Box>
       );
   }

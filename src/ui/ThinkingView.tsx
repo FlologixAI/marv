@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
+import { printable } from "../printable.ts";
 import { theme } from "./theme.ts";
 
 const PREVIEW_LINES = 3;
@@ -8,7 +9,7 @@ const PREVIEW_LINES = 3;
 // of their reasoning, so a long think visibly makes progress instead of
 // looking like a hang.
 export function ThinkingView({ thought, label = "Thinking…" }: { thought: string; label?: string }) {
-  const tail = thought
+  const tail = printable(thought)
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
