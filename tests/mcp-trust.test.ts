@@ -35,3 +35,14 @@ test("your own servers are trusted; a project's only once you say so, per projec
   expect(await new McpTrust(join(dir, "mcp-trust.json")).isTrusted("/p", server("files", "k1"))).toBe(true);
   expect(statSync(join(dir, "mcp-trust.json")).mode & 0o777).toBe(0o600);
 });
+
+test("a trust file of the wrong shape trusts nothing, and doesn't crash", async () => {
+  for (const content of ["null", "[]", "5", '"x"', '{"k": 5}', '{"k": "abc"}', '{"k": [1, 2]}']) {
+    const path = join(dir, "mcp-trust.json");
+    await Bun.write(path, content);
+    const trust = new McpTrust(path);
+    expect(await trust.isTrusted("/p", server("files", "abc"))).toBe(false);
+    await trust.trust("/p", [server("files", "k1")]);
+    expect(await trust.isTrusted("/p", server("files", "k1"))).toBe(true);
+  }
+});

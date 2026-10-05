@@ -1060,7 +1060,13 @@ export function App({
 
   const openPicker = useCallback(async () => {
     if (!sessions) return;
-    const list = (await sessions.list(root)).filter((s) => s.id !== sessionRef.current.id);
+    let list: SessionSummary[];
+    try {
+      list = (await sessions.list(root)).filter((s) => s.id !== sessionRef.current.id);
+    } catch (err) {
+      addMessage({ role: "system", isError: true, text: `Couldn't list the saved sessions: ${(err as Error).message}` });
+      return;
+    }
     // A turn started while the list loaded: don't put the picker over it.
     if (abortRef.current) addMessage({ role: "system", isError: true, text: "Marv is working: stop the current turn (Esc) before resuming another session." });
     else if (list.length === 0) addMessage({ role: "system", text: "No saved sessions for this project yet." });

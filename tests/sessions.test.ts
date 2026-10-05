@@ -86,6 +86,16 @@ describe("SessionStore", () => {
     }
   });
 
+  test("a session file of the wrong shape (an old format, a hand edit) is skipped, not a crash", async () => {
+    const good = session("/home/me/proj", "good", 2000);
+    await store.save(good);
+    const folder = join(dir, projectKey("/home/me/proj"));
+    await writeFile(join(folder, "old.json"), JSON.stringify({ version: 1, id: "old", root: "/home/me/proj", updatedAt: 3000 })); // no transcript
+    await writeFile(join(folder, "null.json"), "null");
+    expect((await store.list("/home/me/proj")).map((s) => s.title)).toEqual(["good"]);
+    expect((await store.latest("/home/me/proj"))?.id).toBe(good.id);
+  });
+
   test("doesn't save a session with nothing in it", async () => {
     await store.save(newSession("/home/me/proj", { provider: "ollama", model: "m" }));
     expect(await store.list("/home/me/proj")).toEqual([]);

@@ -178,6 +178,17 @@ describe("trust", () => {
   });
 });
 
+test("a broken trust file can't crash startup: the project's servers just wait to be trusted", async () => {
+  const path = join(root, "trust.json");
+  await Bun.write(path, "null");
+  const m = manager([stdio("proj", { source: "project" }), stdio()], { trust: new McpTrust(path) });
+  await m.start();
+  expect(m.status().map((s) => [s.name, s.state])).toEqual([
+    ["proj", "untrusted"],
+    ["test", "connected"],
+  ]);
+});
+
 describe("naming and output", () => {
   test("tool names stay within what providers accept", () => {
     expect(mcpToolName("gh", "create_issue")).toBe("mcp__gh__create_issue");

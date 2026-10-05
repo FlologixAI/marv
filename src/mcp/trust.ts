@@ -7,11 +7,14 @@
 //   ~/.marv/mcp-trust.json  { "<project key>": ["<server config key>", …] }
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
+import { z } from "zod";
 import { projectKey } from "../paths.ts";
 import { writePrivate } from "../private-file.ts";
 import type { McpServerConfig } from "./config.ts";
 
-type Trusted = Record<string, string[]>;
+/** Project key → the keys of the server configs trusted there. */
+const TrustedSchema = z.record(z.string(), z.array(z.string()));
+type Trusted = z.infer<typeof TrustedSchema>;
 
 export class McpTrust {
   constructor(readonly path: string) {}
@@ -19,7 +22,9 @@ export class McpTrust {
   private async read(): Promise<Trusted> {
     if (!existsSync(this.path)) return {};
     try {
-      return (await Bun.file(this.path).json()) as Trusted;
+      // Valid JSON of the wrong shape (a hand edit: null, a list, a string) is as unreadable as broken JSON.
+      const parsed = TrustedSchema.safeParse(await Bun.file(this.path).json());
+      return parsed.success ? parsed.data : {};
     } catch {
       return {}; // unreadable: trust nothing, ask again
     }

@@ -87,7 +87,11 @@ export class McpManager {
   start(): Promise<void> {
     this.settled = false;
     this.ready = (async () => {
-      const trusted = await Promise.all(this.connections.map(async (c) => (this.opts.trust ? this.opts.trust.isTrusted(this.opts.root, c.config) : true)));
+      // `ready` must never reject (nothing could start, and a rejection nobody handles ends the process): a trust
+      // check that fails counts as "not trusted", and the server waits for /mcp trust.
+      const trusted = await Promise.all(
+        this.connections.map(async (c) => (this.opts.trust ? this.opts.trust.isTrusted(this.opts.root, c.config).catch(() => false) : true)),
+      );
       await Promise.all(this.connections.filter((_, i) => trusted[i]).map((c) => this.connect(c)));
       this.rebuild();
       this.settled = true;

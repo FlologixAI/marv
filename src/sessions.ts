@@ -10,6 +10,7 @@
 import { existsSync } from "node:fs";
 import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { z } from "zod";
 import { legacyProjectKey, projectKey } from "./paths.ts";
 import { writePrivate } from "./private-file.ts";
 import type { ChatTurn } from "./provider/types.ts";
@@ -17,6 +18,17 @@ import type { Message } from "./types.ts";
 import { emptyTotals, type Totals } from "./usage.ts";
 
 const VERSION = 1;
+
+const SessionShape = z.looseObject({
+  version: z.number(),
+  id: z.string(),
+  root: z.string(),
+  updatedAt: z.number(),
+  model: z.string(),
+  conversation: z.array(z.looseObject({ role: z.string() })),
+  transcript: z.array(z.looseObject({ id: z.number(), role: z.string(), text: z.string() })),
+  totals: z.looseObject({}),
+});
 const TITLE_CHARS = 56;
 
 export interface Session {
@@ -82,7 +94,10 @@ export class SessionStore {
   private async read(file: string, root: string): Promise<Session | null> {
     if (!existsSync(file)) return null;
     try {
-      const session = (await Bun.file(file).json()) as Session;
+      // The fields the app relies on; a file without them (an old format, a hand edit) is skipped, not a crash.
+      const parsed = SessionShape.safeParse(await Bun.file(file).json());
+      if (!parsed.success) return null;
+      const session = parsed.data as unknown as Session;
       return session.version === VERSION && session.root === root ? session : null;
     } catch {
       return null;
