@@ -179,6 +179,56 @@ Put it in `.marv/agents/<name>.md` (this project) or `~/.marv/agents/<name>.md` 
 
 Ollama's context window defaults to 32k tokens (`contextLength` in the config file). That is large enough for an agent to read code, and fits in 12 GB of VRAM for 9-12B models.
 
+## Using Marv from code
+
+Marv's engine is a library too: `marv/sdk` gives your Bun program the same agent the terminal runs (the
+tools, subagents, MCP servers, compaction, saved sessions), without the terminal.
+
+```ts
+import { createSession } from "marv/sdk";
+
+const session = await createSession({
+  cwd: "/path/to/project",
+  provider: { kind: "openrouter", apiKey: process.env.OPENROUTER_API_KEY! },
+  // or { kind: "ollama", model: "qwen3.5:9b" }, or a Provider of your own
+});
+
+for await (const event of session.send("Fix the failing test")) {
+  if (event.type === "text_delta") process.stdout.write(event.text);
+}
+await session.close();
+```
+
+- **Turns and events.** `send()` starts a turn at once and returns its events: `turn_start` first and
+  `turn_end` last, exactly once however it ends, with the model's text, tool calls (`tool_start`/`tool_end`),
+  subagents' events (`subagent`, tagged with the call that started them), `status` (waiting for MCP servers,
+  compacting, running) and compaction in between. Leaving the loop early interrupts the turn (and waits until
+  every tool call it started has its result); so do `interrupt()` and a `signal`. A turn you never read still
+  runs to the end. One turn at a time: `send()` and `clear()` throw during one, `resume()` and `compact()`
+  reject; the session is free again just before `turn_end`, so you can send the next message from there.
+- **Approvals.** Pass `approve: async (request) => "yes" | "always" | "no"` to decide what runs. Without it,
+  only what Marv's yolo mode vouches for runs (edits outside `.git`, sandboxed commands without network);
+  anything else goes back to the model as refused, and it carries on. With no one to ask, the 25-step limit
+  is a hard stop too.
+- **Nothing from disk unless asked.** `sources: ["project"]` reads the repository's `AGENTS.md`, `.marv/` and
+  `.mcp.json` (whose servers still need trusting); `"user"` reads your `~/.marv` (skills, agents, memory, MCP
+  servers). Environment variables like `OPENROUTER_API_KEY` and `MARV_MODEL` are ignored: the session uses what
+  you pass. `persist: true` saves the conversation where `marv -r` finds it, and `resume: id | "latest"` (with
+  `persist`) continues one; `trajectories: true` logs every turn.
+- **MCP servers in code:** `mcpServers: { name: { command, args } }` (`.mcp.json`'s format). These are trusted like
+  your own: no trust prompt, started in your home folder (use an absolute path, or `${MARV_PROJECT_DIR}` for
+  the project). So never pass config read from a repository you don't control; `sources: ["project"]` is the
+  way to use a repository's servers, and those still need trusting.
+- **Your own tools:** `tools: [{ name, description, input: z.object({...}), label, run }]`. A Provider of
+  your own is used for everything, subagents included.
+- **Settings between turns.** `configure({ provider, thinking, sandbox, yolo })` never throws: a turn reads
+  its settings when it starts, so a change during one applies from the next. `close()` stops what's running,
+  waits for it, saves, and stops the MCP servers the session started.
+- **Bun only** (1.3 or newer). `marv/sdk` is TypeScript source, so your `tsconfig.json` needs
+  `"moduleResolution": "bundler"` and `"allowImportingTsExtensions": true` (`bun init`'s defaults have both).
+
+`examples/sdk.ts` is a complete script.
+
 ## Development
 
 ```sh
