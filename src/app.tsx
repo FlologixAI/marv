@@ -476,7 +476,8 @@ export function App({
           sandbox: config.sandbox,
         });
       }
-      lastTurn.current = { id: turn, session: sessionRef.current.id };
+      // Only a logged turn can be rated: feedback for a turn the file never recorded would be an orphan.
+      lastTurn.current = log ? { id: turn, session: log.session } : null;
       const record = (r: TrajectoryRecord) => log?.write(r);
       const main = new AgentRecorder(record, { turn, agent: "main" });
       // Subagents' recorders, by call id; ids are unique within the turn.

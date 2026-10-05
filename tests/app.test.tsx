@@ -1039,6 +1039,18 @@ describe("trajectories", () => {
     ]);
   });
 
+  test("a turn that wasn't logged can't be rated after logging is turned back on", async () => {
+    const { stdin, lastFrame, records } = renderLogged(new ScriptedProvider([reply("Hi.")]), { ...LOCAL, trajectories: false });
+    await type(stdin, "hello");
+    await tick(150);
+    await type(stdin, "/trajectories on");
+    await tick(100);
+    await type(stdin, "/bad wrong file");
+    await tick();
+    expect(lastFrame()).toContain("Nothing to rate yet");
+    expect(await records()).toEqual([]);
+  });
+
   test("/trajectories off stops logging and saves it", async () => {
     const { stdin, lastFrame, records } = renderLogged(new ScriptedProvider([reply("Hi.")]));
     await type(stdin, "/trajectories off");
