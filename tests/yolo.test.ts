@@ -131,6 +131,30 @@ describe("bash", () => {
       expect(await readFile(join(root, ".git", "description"), "utf8")).toBe("ok\n");
     });
 
+    test("a .git that's a symlink still works, and what it points to stays protected", async () => {
+      await rm(join(root, ".git"), { recursive: true });
+      await mkdir(join(root, "gitdir"));
+      await writeFile(join(root, "gitdir", "config"), "[core]\n");
+      await symlink(join(root, "gitdir"), join(root, ".git"));
+      const result = await run("bash", { command: "echo hi; echo evil >> .git/config" });
+      expect(result.output).toContain("hi"); // the sandbox started
+      expect(await readFile(join(root, "gitdir", "config"), "utf8")).toBe("[core]\n");
+      expect(result.output).toContain("git_write: true");
+    });
+
+    test("a .git symlink pointing outside the project: commands run (it's read-only there anyway)", async () => {
+      const elsewhere = await mkdtemp(join(tmpdir(), "marv-gitdir-"));
+      try {
+        await rm(join(root, ".git"), { recursive: true });
+        await symlink(elsewhere, join(root, ".git"));
+        const result = await run("bash", { command: "echo hi; touch .git/x 2>&1; echo done" });
+        expect(result.output).toContain("done");
+        expect(existsSync(join(elsewhere, "x"))).toBe(false);
+      } finally {
+        await rm(elsewhere, { recursive: true, force: true });
+      }
+    });
+
     test("in a project without .git, commands still run, and leave no .git behind", async () => {
       await rm(join(root, ".git"), { recursive: true });
       expect((await run("bash", { command: "echo fine" })).output).toContain("fine");

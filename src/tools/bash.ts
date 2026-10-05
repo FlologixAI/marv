@@ -1,21 +1,43 @@
-import { lstatSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { rmdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import { sandboxArgs, sandboxAvailable } from "../sandbox.ts";
 import type { Tool } from "./types.ts";
 
 const DEFAULT_TIMEOUT_S = 120;
-/** Whether anything is at `path`, a dangling symlink included. */
-const lexists = (path: string) => {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
+const isInside = (outer: string, inner: string) => {
+  const rel = relative(outer, inner);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 };
+
+/**
+ * How a command that runs without asking is kept away from the project's .git: read-only if it's there, an
+ * empty read-only placeholder if it isn't (so it can't create one). bwrap can't mount on a symlink, so for a .git
+ * that is one, the same goes for what it points to, when that's inside the project; outside it, the sandbox
+ * already shows it read-only (or hides it, in the home folder).
+ */
+function gitGuard(root: string): { readOnly?: string[]; placeholders?: string[] } {
+  const gitDir = join(root, ".git");
+  let isLink: boolean;
+  try {
+    isLink = lstatSync(gitDir).isSymbolicLink();
+  } catch {
+    return { placeholders: [gitDir] };
+  }
+  if (!isLink) return { readOnly: [gitDir] };
+  const target = resolve(dirname(gitDir), readlinkSync(gitDir));
+  const realRoot = realpathSync(root);
+  let real: string;
+  try {
+    real = realpathSync(target);
+  } catch {
+    // It leads nowhere yet: inside the project, keep that spot empty too.
+    return isInside(realRoot, target) || isInside(root, target) ? { placeholders: [target] } : {};
+  }
+  return isInside(realRoot, real) ? { readOnly: [real] } : {};
+}
 /** Appended when a confined command fails on the read-only .git, so the model learns how to do it. */
 const GIT_HINT = "Marv: .git is read-only for commands that run without asking. To change the repository, run the command again with git_write: true (the user is asked).";
 const MAX_TIMEOUT_S = 600;
@@ -178,15 +200,22 @@ export const bash: Tool<typeof input> = {
     // A command that runs without asking sees .git read-only: git runs hooks and config from it outside any sandbox
     // (the user's next commit, their editor), so a planted hook would escape. Without a .git, it can't create one
     // either (an empty read-only placeholder sits there), or `git status` in that folder would run its config.
-    const gitDir = join(root, ".git");
-    const hadGit = lexists(gitDir);
-    const guard = confined ? (hadGit ? { readOnly: [...readOnly, gitDir] } : { readOnly, placeholders: [gitDir] }) : { readOnly };
+    const guard = confined ? gitGuard(root) : {};
     let result: CommandResult;
     try {
-      result = await runCommand({ command, root, sandbox: sandbox && sandboxAvailable(), network, timeoutMs: timeout * 1000, signal, ...guard });
+      result = await runCommand({
+        command,
+        root,
+        sandbox: sandbox && sandboxAvailable(),
+        network,
+        timeoutMs: timeout * 1000,
+        signal,
+        readOnly: [...readOnly, ...(guard.readOnly ?? [])],
+        placeholders: guard.placeholders,
+      });
     } finally {
-      // bwrap leaves the placeholder's empty mount point; rmdir only removes it while it's empty.
-      if (confined && !hadGit) await rmdir(gitDir).catch(() => {});
+      // bwrap leaves a placeholder's empty mount point; rmdir only removes it while it's empty.
+      for (const path of guard.placeholders ?? []) await rmdir(path).catch(() => {});
     }
     if (confined && /\.git\b.*Read-only file system/.test(result.output)) result.output += `\n${GIT_HINT}\n`;
     const lines = result.output.trimEnd() === "" ? 0 : result.output.trimEnd().split("\n").length;
