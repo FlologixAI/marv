@@ -161,12 +161,18 @@ test("4 subagents reporting progress still reach React in batches", async () => 
   stdin.write("go now");
   await Bun.sleep(20);
   renders = 0;
+  const started = Date.now();
   stdin.write("\r");
   while (!lastFrame()!.includes("all four finished")) await Bun.sleep(10);
+  const elapsed = Date.now() - started;
   unmount();
   await rm(dir, { recursive: true, force: true });
-  // 4 x 40 tool calls = 320 progress reports. Batched this measures ~8 renders;
-  // with progress flushed immediately it measures ~46 (React coalesces some
-  // of the synchronous updates). 25 sits well clear of both.
-  expect(renders).toBeLessThan(25);
+  // 4 x 40 tool calls = 320 progress reports. Batching guarantees at most one
+  // progress render per 33 ms flush window, so the bound scales with elapsed
+  // time (a slow machine gets more windows). SLACK covers the non-progress
+  // renders: submit, tool starts and ends, the final reply.
+  const SLACK = 10;
+  const bound = Math.ceil(elapsed / 33) + SLACK;
+  if (renders > bound) throw new Error(`${renders} renders in ${elapsed} ms; bound is ${bound} (ceil(elapsed/33) + ${SLACK})`);
+  console.log(`subagent renders: ${renders}, elapsed ${elapsed} ms, bound ${bound}`);
 }, 30000);
