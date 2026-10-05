@@ -214,18 +214,29 @@ describe("the file listing never runs a repository's programs", () => {
 
   test("with gitEnv, a redirected .git file is ignored", async () => {
     const pwned = join(outside, "PWNED");
-    // The real repository, outside the folder the agent works in.
+    // Two usable repositories outside the work folder. Only the fake one hides hidden.txt.
     const real = join(outside, "real.git");
-    gitIn(outside, "init", "-q", "--bare", real);
-    // A fake one the .git file in the work folder points to, with a program in its config.
     const fake = join(outside, "fake.git");
-    gitIn(outside, "init", "-q", "--bare", fake);
+    for (const dir of [real, fake]) {
+      gitIn(outside, "init", "-q", "--bare", dir);
+      gitIn(dir, "config", "core.bare", "false");
+    }
     gitIn(fake, "config", "core.fsmonitor", `touch ${pwned}`);
+    await writeFile(join(fake, "info", "exclude"), "hidden.txt\n");
+    // The .git file in the work folder points to the fake one.
     await writeFile(join(root, ".git"), `gitdir: ${fake}\n`);
-    await writeFile(join(root, "b.txt"), "b\n");
+    await writeFile(join(root, "shown.txt"), "s\n");
+    await writeFile(join(root, "hidden.txt"), "h\n");
 
-    const result = await runTool(globCall, { root, gitEnv: { GIT_DIR: real, GIT_COMMON_DIR: real, GIT_WORK_TREE: root } });
-    expect(result.output).toContain("b.txt");
+    // Unpinned, git follows the .git file: the fake repository's view.
+    const followed = await runTool(globCall, { root });
+    expect(followed.output).toContain("shown.txt");
+    expect(followed.output).not.toContain("hidden.txt");
+
+    // Pinned to the real repository: its view (hidden.txt isn't excluded there).
+    const pinned = await runTool(globCall, { root, gitEnv: { GIT_DIR: real, GIT_COMMON_DIR: real, GIT_WORK_TREE: root } });
+    expect(pinned.output).toContain("shown.txt");
+    expect(pinned.output).toContain("hidden.txt");
     expect(existsSync(pwned)).toBe(false);
   });
 });
