@@ -86,6 +86,8 @@ describe("MessageView wrapping", () => {
   });
 });
 
+// Ink itself already drops these sequences, so these pass even without `printable`.
+// They guard against a future Ink (or a render path) that passes control sequences through.
 describe("MessageView terminal control sequences", () => {
   const EVIL = "\x1b]52;c;aGk=\x07";
   const messages: Pick<Message, "role" | "text" | "tool" | "markdown">[] = [

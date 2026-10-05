@@ -34,7 +34,7 @@ export function StatusBar({ model, cwd, usage, confirmExit, notice, busy, agents
   const hint = confirmExit
     ? "Press ctrl+c again to exit"
     : notice
-      ? printable(notice)
+      ? notice
       : busy
       ? `esc to interrupt${agents ? ` · ${agents} agent${agents === 1 ? "" : "s"} running` : ""}`
       : "/help · PgUp/PgDn to scroll · ctrl+c to exit";
@@ -46,7 +46,7 @@ export function StatusBar({ model, cwd, usage, confirmExit, notice, busy, agents
       </Box>
       {/* On a narrow terminal the model/cwd side gets cut off, not the hint. */}
       <Text color={theme.dim} wrap="truncate-start">
-        {usage && `${printable(usage)} · `}
+        {usage && `${usage} · `}
         {printable(model)} · {printable(cwd)}
       </Text>
     </Box>
