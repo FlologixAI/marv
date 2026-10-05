@@ -1162,7 +1162,7 @@ describe("MCP servers", () => {
     expect(lastFrame()).toContain("This project's .mcp.json lists MCP servers you haven't trusted yet: test");
     await type(stdin, "/mcp trust");
     for (let i = 0; i < 100 && !lastFrame()!.includes("test: connected"); i++) await tick();
-    expect(lastFrame()).toContain("test: connected · 7 tools");
+    expect(lastFrame()).toContain("test: connected · 8 tools");
     expect(await trust.isTrusted(project, server("project"))).toBe(true);
   });
 

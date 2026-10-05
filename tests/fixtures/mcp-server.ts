@@ -30,6 +30,14 @@ export function makeServer(): McpServer {
   server.registerTool("env", { description: "Shows whether a secret reached the server." }, async () => ({
     content: [{ type: "text", text: `key=${process.env.OPENROUTER_API_KEY ?? ""} custom=${process.env.CUSTOM ?? ""}` }],
   }));
+  server.registerTool("progress", { description: "Takes 1.5 s, reporting progress every 0.3 s." }, async (extra) => {
+    const token = extra._meta?.progressToken;
+    for (let i = 1; i <= 5; i++) {
+      await Bun.sleep(300);
+      if (token !== undefined) await extra.sendNotification({ method: "notifications/progress", params: { progressToken: token, progress: i, total: 5 } });
+    }
+    return { content: [{ type: "text", text: "made it" }] };
+  });
   server.registerTool("cwd", { description: "Shows the folder the server runs in." }, async () => ({ content: [{ type: "text", text: process.cwd() }] }));
   return server;
 }

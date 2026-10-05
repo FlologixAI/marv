@@ -52,7 +52,7 @@ describe("a local (stdio) server", () => {
     const m = manager([stdio()]);
     await m.start();
     expect(m.status()).toEqual([
-      expect.objectContaining({ name: "test", state: "connected", tools: ["mcp__test__echo", "mcp__test__lookup", "mcp__test__fail", "mcp__test__picture", "mcp__test__slow", "mcp__test__env", "mcp__test__cwd"] }),
+      expect.objectContaining({ name: "test", state: "connected", tools: ["mcp__test__echo", "mcp__test__lookup", "mcp__test__fail", "mcp__test__picture", "mcp__test__slow", "mcp__test__env", "mcp__test__progress", "mcp__test__cwd"] }),
     ]);
     const echo = m.specs.find((s) => s.name === "mcp__test__echo")!;
     expect(echo.description).toBe('(MCP server "test") Echo the text back.');
@@ -90,6 +90,12 @@ describe("a local (stdio) server", () => {
     } finally {
       delete process.env.OPENROUTER_API_KEY;
     }
+  });
+
+  test("a long call that reports progress isn't cut off by the timeout", async () => {
+    const m = manager([stdio("test", { timeout: 1 })]); // 1 s, but the tool takes 1.5 s, reporting every 0.3 s
+    await m.start();
+    expect((await call(m, "mcp__test__progress", {})).result.output).toBe("made it");
   });
 
   test("Esc stops a call that's taking long", async () => {

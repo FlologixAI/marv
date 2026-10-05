@@ -166,7 +166,14 @@ export class McpManager {
       } while (cursor);
       const timeout = (c.config.timeout ?? DEFAULT_CALL_TIMEOUT_S) * 1000;
       const call = (name: string, args: Record<string, unknown>, signal?: AbortSignal) =>
-        client.callTool({ name, arguments: args }, undefined, { signal, timeout, resetTimeoutOnProgress: true }) as Promise<McpCallResult>;
+        client.callTool({ name, arguments: args }, undefined, {
+          signal,
+          timeout,
+          // A progress report restarts the timeout, so a long tool that keeps saying how far it got isn't cut off.
+          // The SDK only asks the server for progress when there's a handler, hence the empty one.
+          resetTimeoutOnProgress: true,
+          onprogress: () => {},
+        }) as Promise<McpCallResult>;
       c.tools = infos.map((info) => makeMcpTool(c.config, info, call));
       c.state = "connected";
       // A server that exits later: its tools stay listed (the specs can't change), and calls fail with a clear error.
