@@ -424,12 +424,13 @@ export class MarvSession {
   }
 
   /**
-   * Adds a request's tokens and cost to the totals (the main agent's, subagents', summaries'). `factory` is the one
-   * that made the provider the request went to (a turn's own, even if the user switched models meanwhile).
+   * Adds a request's tokens and cost to the totals (the main agent's, subagents', summaries'). `factory` made the
+   * provider the request went to, and `info` has that model's prices: a turn passes its own, so a model switched
+   * to meanwhile neither prices nor counts as local the requests of the one the turn started with.
    */
-  private count(usage: Usage, factory: ProviderFactory = this.factory): void {
+  private count(usage: Usage, factory: ProviderFactory = this.factory, info: ModelInfo | undefined = this.info): void {
     const local = Boolean(factory.local);
-    this.totals = { ...addUsage(this.totals, usage, this.info), local: (this.totals.requests === 0 || Boolean(this.totals.local)) && local };
+    this.totals = { ...addUsage(this.totals, usage, info), local: (this.totals.requests === 0 || Boolean(this.totals.local)) && local };
   }
 
   private note(role: "user" | "assistant", text: string): void {
@@ -447,6 +448,7 @@ export class MarvSession {
     signal: AbortSignal,
     provider: Provider = this.provider,
     factory: ProviderFactory = this.factory,
+    info: ModelInfo | undefined = this.info,
   ): Promise<CompactResult> {
     if (this.conversation.length === 0) return { compacted: false, reason: "empty", error: "Nothing to compact yet." };
     const before = this.last;
@@ -457,7 +459,7 @@ export class MarvSession {
       tools: this.offered().specs,
       signal,
       focus,
-      onUsage: (usage) => this.count(usage, factory),
+      onUsage: (usage) => this.count(usage, factory, info),
     });
     if ("error" in result) return { compacted: false, reason: signal.aborted ? "stopped" : "failed", error: result.error };
     this.conversation = compactedHistory(result.summary);
@@ -600,9 +602,10 @@ export class MarvSession {
       }
       // What this turn runs with, all read now: settings changed while it runs (configure(), or the model list
       // arriving and remaking the provider) apply from the next turn. That includes the factory, so a subagent
-      // naming its own model gets it from the same provider as the turn, and its usage is counted as that one's.
+      // naming its own model gets it from the same provider as the turn, and its usage is counted (local or not) as
+      // that one's, priced with what the model list said about the turn's model.
       const { specs, tools } = this.offered();
-      const { sandbox, yolo, factory, provider } = this;
+      const { sandbox, yolo, factory, provider, info } = this;
       const log = this.trajectory();
       const record = (r: TrajectoryRecord) => log?.write(r);
       this.startTurnLog(log, turn, text, forModel, specs);
@@ -619,7 +622,7 @@ export class MarvSession {
       // Nearly out of context: summarize first, so this message (and what follows) fits.
       if (this.nearlyFull()) {
         emit({ type: "status", status: "compacting" });
-        const result = await this.summarizeInto(undefined, stop.signal, provider, factory);
+        const result = await this.summarizeInto(undefined, stop.signal, provider, factory, info);
         emit({ type: "compaction", result });
         if (!result.compacted && result.reason === "stopped") {
           // Stopping meant "stop": the message too (it would run on the nearly full context).
@@ -642,7 +645,7 @@ export class MarvSession {
         instructions: this.init.instructions,
         worktreesDir: this.init.worktreesDir,
         providerFor: (model) => (model ? factory.make(model) : provider),
-        onUsage: (usage) => this.count(usage, factory),
+        onUsage: (usage) => this.count(usage, factory, info),
         onProgress: (callId, progress) => emit({ type: "subagent_progress", callId, progress }),
         onEvent: (callId, event) => {
           subRecorders.get(callId)?.event(event);
@@ -670,7 +673,7 @@ export class MarvSession {
         switch (event.type) {
           case "usage":
             this.last = event.usage;
-            this.count(event.usage, factory);
+            this.count(event.usage, factory, info);
             break;
           case "assistant":
             this.note("assistant", event.text);

@@ -606,6 +606,29 @@ describe("review fixes", () => {
     expect(session.usage().totals.local).toBe(true);
   });
 
+  test("a turn prices its requests with the model it started with", async () => {
+    let session!: MarvSession;
+    const switched = fixed(new ScriptedProvider([]), { id: "other", model: "other-model" }); // no prices known
+    const priced: ProviderFactory = {
+      id: "openrouter",
+      model: "x/y",
+      lookup: async () => ({ id: "x/y", priceIn: 2, priceOut: 4 }),
+      make: () => ({
+        name: "x/y",
+        async *stream() {
+          // The user switches models while the turn runs, before its request is counted.
+          session.configure({ provider: switched });
+          yield { type: "usage", usage: { promptTokens: 1_000_000, completionTokens: 500_000 } };
+          yield* say("Hi.");
+        },
+      }),
+    };
+    session = makeSession(priced);
+    await Bun.sleep(0); // the prices arrive
+    await collect(session.send("hi"));
+    expect(session.usage().totals).toMatchObject({ requests: 1, cost: 4, estimated: true }); // $2 in + $2 out
+  });
+
   test("an onChange that throws doesn't break the session", async () => {
     const provider = new ScriptedProvider([say("Hi.")]);
     const factory = fixed(provider, { lookup: async () => ({ id: "test-model", context: 1000 }) });
