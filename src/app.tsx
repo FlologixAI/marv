@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, useApp, useInput, useWindowSize, type DOMElement } from "ink";
-import { runAgent } from "./agent.ts";
+import { DEFAULT_MAX_STEPS, runAgent } from "./agent.ts";
 import { applyEvent, createAgentLog, type AgentLog } from "./agent-log.ts";
 import { GENERAL_PURPOSE, type AgentType } from "./agents.ts";
 import { copyToClipboard } from "./clipboard.ts";
@@ -527,6 +527,17 @@ export function App({
             runTool(call, { root, signal: controller.signal, approve, sandbox: config.sandbox, yolo: config.yolo, skills, memory: memory?.paths, agentHost }),
           signal: controller.signal,
           isParallel: isParallelCall,
+          // At the step limit, ask (in the approval queue, so Esc still stops everything) instead of stopping dead.
+          onLimit: async (steps) =>
+            (await approve({
+              tool: "continue",
+              label: `${steps} steps`,
+              preview: {
+                title: `Keep going? Marv has taken ${steps} steps on this request without finishing`,
+                note: `it asks again after another ${DEFAULT_MAX_STEPS}; no stops it here, and you can say what to do next`,
+              },
+              scope: { key: "continue", description: "the step limit" },
+            })) !== "no",
         })) {
           main.event(event);
           switch (event.type) {

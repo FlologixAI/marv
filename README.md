@@ -1,20 +1,22 @@
 # Marv
 
-A terminal coding agent, in the spirit of Claude Code. Marv reads your code, edits files and runs commands, asking for your approval before every change, inside a full-screen terminal UI with a little martian for company.
+A terminal coding agent, in the spirit of Claude Code. Marv reads your code, edits files and runs commands (sandboxed, and asking for your approval wherever the sandbox can't contain what it does), inside a full-screen terminal UI with a little martian for company.
 
 Marv is written in TypeScript on [Bun](https://bun.sh), with an [Ink](https://github.com/vadimdemedes/ink) (React for the terminal) interface. It talks to models through [OpenRouter](https://openrouter.ai) (hundreds of cloud models with one API key) or [Ollama](https://ollama.com) (models running on your own machine).
 
 ## Features
 
 - **An agent loop with tools.** It can read, search (`glob`, `grep`), edit, write, and run shell commands. The model decides which tools to use; Marv runs them and reports back.
-- **You approve every change.** File edits are shown as a colored diff and commands are shown exactly before they run: yes, yes for the rest of the session, or no (which stops Marv so you can redirect it).
+- **Safe yolo mode (on by default).** Sandboxed commands and edits inside the project run without asking; anything the sandbox can't contain (network access, git commits and other repository changes, `.git` itself, memory) still shows you a colored diff or the exact command first: yes, yes for the rest of the session, or no (which stops Marv so you can redirect it). `/yolo off` asks for every change.
 - **Sandboxed commands.** On Linux, commands run in [bubblewrap](https://github.com/containers/bubblewrap): only the project folder is writable, your home folder (keys, SSH, Marv's own config) is hidden, there's no network unless a command asks for it, and API keys never reach the command.
 - **Any model.** OpenRouter or a local Ollama model, with a searchable model picker showing prices. Switch with `/model`.
 - **Skills.** Drop a `SKILL.md` into `.marv/skills/` (or `~/.marv/skills/`) and Marv loads it when a task matches, or run it yourself with `/<skill-name>`.
-- **Subagents.** Marv can hand a task to a fresh agent with its own context, which reports back when it's done, so the files it read don't fill up the conversation. Several can run in parallel, each in its own git worktree if they change files. Agent types are Markdown files, compatible with Claude Code's.
+- **Subagents.** Marv can hand a task to a fresh agent with its own context, which reports back when it's done, so the files it read don't fill up the conversation. Several can run in parallel, each in its own git worktree if they change files. Click one to watch its own transcript live. Agent types are Markdown files, compatible with Claude Code's.
 - **Memory.** Marv remembers your preferences and project facts across sessions. Every change it makes to its memory needs your approval.
 - **Sessions.** Every conversation is saved; `marv -c` continues the last one, `/resume` picks an earlier one.
 - **Long conversations.** When the context window fills up, Marv summarizes the conversation and carries on (`/compact` does it on demand). Requests reuse the provider's prompt cache wherever possible.
+- **Trajectories and feedback.** Every turn is logged step by step (requests, replies, tool calls, subagents, timings, tokens) to `~/.marv/trajectories/`, with your ratings: `/good`, `/bad`, `/label`, and what your next message implies ("thanks, perfect" or "that's wrong"). `bun run stats` sums them up per model or Marv version, so you can measure whether a change made runs better.
+- **No dead stops.** After 25 steps without finishing, Marv asks whether to keep going instead of giving up.
 - **Cost tracking.** OpenRouter's actual charge per request, plus context and cache use, in the status bar; `/cost` for the breakdown.
 - **A comfortable TUI.** Streaming Markdown replies, mouse-wheel scrolling, drag-to-copy with auto-scroll, a `/` command menu, and Esc to interrupt.
 
@@ -72,6 +74,10 @@ Type what you want in plain language, for example:
 | `/compact` | Summarize the conversation to free up context (`/compact <what to keep>`) |
 | `/cost` | Tokens used and cost so far |
 | `/sandbox` | Show or set the command sandbox (`/sandbox on`, `/sandbox off`) |
+| `/yolo` | Run what the sandbox contains without asking (`/yolo on`, `/yolo off`) |
+| `/good`, `/bad` | Rate the last turn, with an optional note (`/bad edited the wrong file`) |
+| `/label` | Tag the last turn (`/label refactor, tests`) |
+| `/trajectories` | Show or set run logging (`/trajectories on`, `/trajectories off`) |
 | `/clear` | Start a fresh conversation (the old one stays saved) |
 | `/exit` | Quit |
 
@@ -81,9 +87,10 @@ Type `/` to open the command menu: ↑/↓ to choose, Enter to run, Tab or → t
 
 | Key | Action |
 |---|---|
-| Esc | Stop a reply or a running tool |
+| Esc | Stop a reply or a running tool (in a subagent's view: go back) |
 | ctrl+c | Stop / clear the input / press twice to quit |
 | ctrl+o | Show or hide what subagents did (their last steps) |
+| Click a subagent | Open its own transcript, live |
 | PgUp / PgDn, mouse wheel | Scroll the conversation |
 | Drag with the mouse | Select text; it's copied when you let go (drag past the edge to scroll) |
 | ↑ / ↓ | Previous inputs |
@@ -102,11 +109,12 @@ marv --help       show the help
 
 Marv is built so that you stay in control of what changes on your machine:
 
-1. **Reading is free; changing needs approval.** Reading and searching files never asks. Editing or writing a file, running a command, and changing memory always show you exactly what will happen first (the one exception is a subagent in its own worktree; see 5). "Don't ask again" covers the rest of the session only: all file edits, or one exact command.
-2. **Paths are confined to the project.** Tools refuse anything outside the folder Marv was started in, including through symlinks.
-3. **Commands run in a sandbox.** The system is read-only and the home folder is hidden (toolchains like `~/.bun` and your git config are mounted read-only). The project folder is the only writable place, and there's no network unless the command asks for it, which the approval prompt shows. The environment starts empty, so API keys can't leak into commands.
-4. **Memory changes are approved too.** Memory comes back in every future session, so an instruction planted by a malicious file and saved there would be a persistent prompt injection. You see every memory before it's saved.
-5. **Subagents ask like Marv does, or work in a worktree.** A subagent in the project folder asks before each change, and the prompt says which one is asking. One in its own git worktree is approved once when it starts; inside its sandboxed worktree its edits and commands then run without asking, except commands that want the network (and with the sandbox off, everything asks). It can't touch the repository's `.git` (it's read-only in the sandbox, so no commits, branch moves, hooks or config), and when it's done, Marv commits its changes to its branch, without running any of the repository's hooks. Its work comes back as a branch you (or Marv, with your approval) review and merge. Esc at an approval prompt declines everything waiting and stops the run.
+1. **Reading is free; what can't be contained needs approval.** Reading and searching files never asks. With yolo mode on (the default), commands that run in a working sandbox without network, and edits inside the project (but not in `.git`), run without asking; everything else shows you exactly what will happen first: a command that wants the network or changes the git repository (it must say so with `git_write`), an edit inside `.git`, any command when the sandbox is off or unavailable, and every memory change. With `/yolo off`, every edit and command asks. "Don't ask again" covers the rest of the session only: all file edits, or one exact command.
+2. **`.git` is protected.** Git runs hooks and config from `.git` outside any sandbox (your next commit would run a planted hook with full access), so commands that run without asking see it read-only. What yolo can't protect: files you later run yourself outside the sandbox, like scripts and `package.json`; review with `git diff` before running them.
+3. **Paths are confined to the project.** Tools refuse anything outside the folder Marv was started in, including through symlinks.
+4. **Commands run in a sandbox.** The system is read-only and the home folder is hidden (toolchains like `~/.bun` and your git config are mounted read-only). The project folder is the only writable place, and there's no network unless the command asks for it, which the approval prompt shows. The environment starts empty, so API keys can't leak into commands.
+5. **Memory changes are approved too.** Memory comes back in every future session, so an instruction planted by a malicious file and saved there would be a persistent prompt injection. You see every memory before it's saved.
+6. **Subagents ask like Marv does, or work in a worktree.** A subagent in the project folder asks before each change, and the prompt says which one is asking. One in its own git worktree is approved once when it starts; inside its sandboxed worktree its edits and commands then run without asking, except commands that want the network (and with the sandbox off, everything asks). It can't touch the repository's `.git` (it's read-only in the sandbox, so no commits, branch moves, hooks or config), and when it's done, Marv commits its changes to its branch, without running any of the repository's hooks. Its work comes back as a branch you (or Marv, with your approval) review and merge. Esc at an approval prompt declines everything waiting and stops the run.
 
 ## Skills
 
@@ -147,6 +155,7 @@ Put it in `.marv/agents/<name>.md` (this project) or `~/.marv/agents/<name>.md` 
 |---|---|
 | `~/.marv/config.json` | Provider, model, API key (mode 0600) |
 | `~/.marv/sessions/<project>/` | Saved conversations (private) |
+| `~/.marv/trajectories/<project>/` | Every turn, step by step, with your ratings (private; `bun run stats` to sum up) |
 | `~/.marv/memory/personal.md` | Personal memory, used in every project |
 | `~/.marv/memory/projects/<project>.md` | Memory for one project (never stored in the repo) |
 | `~/.marv/skills/` | Your personal skills |
@@ -172,6 +181,7 @@ bun install
 bun run dev          # run from source
 bun test             # the test suite
 bun run typecheck    # tsc --noEmit
+bun run stats        # sum up your trajectory logs (--by model or --by marv)
 ```
 
 The architecture and conventions are documented in [`CLAUDE.md`](CLAUDE.md) (also available as `AGENTS.md`): the provider seam, the agent loop, the tool registry, the prompt-cache rules, and how the TUI renders.

@@ -397,6 +397,38 @@ describe("App", () => {
       expect(lastFrame()).toContain("Do you want to proceed?");
     });
 
+    describe("at the step limit", () => {
+      const reads = (n: number) =>
+        Array.from({ length: n }, (_, i) => [{ type: "tool_call", call: { id: `r${i}`, name: "read_file", arguments: '{"path":"notes.txt"}' } }, { type: "done" }] as AgentEvent[]);
+
+      test("it asks to keep going instead of stopping, and yes carries on", async () => {
+        const model = new ScriptedProvider([...reads(25), reply("Finally done.")]);
+        const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+        await type(stdin, "read it a lot");
+        await tick(400);
+        expect(lastFrame()).toContain("Keep going? Marv has taken 25 steps on this request without finishing");
+        expect(model.requests).toHaveLength(25); // waiting: nothing more is sent until the answer
+        stdin.write(ENTER);
+        await tick(150);
+        expect(lastFrame()).toContain("Finally done.");
+        expect(lastFrame()).not.toContain("Stopped");
+      });
+
+      test("no stops it, and says how to continue", async () => {
+        const model = new ScriptedProvider([...reads(25), reply("never")]);
+        const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+        await type(stdin, "read it a lot");
+        await tick(400);
+        stdin.write(DOWN);
+        stdin.write(DOWN);
+        await tick();
+        stdin.write(ENTER);
+        await tick(150);
+        expect(lastFrame()).toContain('Stopped at 25 steps, as you asked. Say "continue" to pick up where it left off.');
+        expect(model.requests).toHaveLength(25);
+      });
+    });
+
     test("a change waits for approval, then runs and the model carries on", async () => {
       const model = new ScriptedProvider([writeCall("c1", "made.txt"), reply("Created it.")]);
       const { lastFrame, stdin } = renderApp(ASKS, 0, undefined, () => model);

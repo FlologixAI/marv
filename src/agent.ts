@@ -41,6 +41,8 @@ export type LoopEvent =
   | { type: "tool_start"; call: ToolCall; label: string }
   | { type: "tool_end"; call: ToolCall; result: ToolResult & { label: string } }
   | { type: "error"; message: string }
+  /** It reached a multiple of maxSteps and asked (onLimit) whether to keep going. */
+  | { type: "step_limit"; steps: number; continued: boolean }
   | { type: "done"; reason: "end" | "length" | "aborted" | "declined" | "max_steps" | "error" };
 
 interface Options {
@@ -52,6 +54,12 @@ interface Options {
   runTool: (call: ToolCall) => Promise<ToolResult & { label: string }>;
   signal: AbortSignal;
   maxSteps?: number;
+  /**
+   * Asked each time the run reaches another multiple of maxSteps, after that
+   * step's tool results are in (so the history is valid whatever the answer):
+   * true keeps going for another maxSteps. Without it, maxSteps is a hard stop.
+   */
+  onLimit?: (steps: number) => Promise<boolean>;
   /** Calls that may run at the same time as their neighbours (subagents). Default: none. */
   isParallel?: (call: ToolCall) => boolean;
   maxParallel?: number;
@@ -172,10 +180,31 @@ export async function* runAgent({
   runTool,
   signal,
   maxSteps = DEFAULT_MAX_STEPS,
+  onLimit,
   isParallel = () => false,
   maxParallel = MAX_PARALLEL,
 }: Options): AsyncGenerator<LoopEvent> {
-  for (let step = 0; step < maxSteps; step++) {
+  for (let step = 0; ; step++) {
+    // The step limit guards against a model that never finishes. With
+    // onLimit, the user decides at each multiple whether it goes on.
+    if (step > 0 && step % maxSteps === 0) {
+      const continued = onLimit ? await onLimit(step) : false;
+      if (onLimit) yield { type: "step_limit", steps: step, continued };
+      if (signal.aborted) {
+        yield { type: "done", reason: "aborted" };
+        return;
+      }
+      if (!continued) {
+        yield {
+          type: "error",
+          message: onLimit
+            ? `Stopped at ${step} steps, as you asked. Say "continue" to pick up where it left off.`
+            : `Stopped after ${step} steps without a final answer. Say "continue" to pick up where it left off.`,
+        };
+        yield { type: "done", reason: "max_steps" };
+        return;
+      }
+    }
     let text = "";
     const calls: ToolCall[] = [];
     let error: string | null = null;
@@ -255,10 +284,4 @@ export async function* runAgent({
       return;
     }
   }
-
-  yield {
-    type: "error",
-    message: `Stopped after ${maxSteps} steps without a final answer. Ask again to let it continue.`,
-  };
-  yield { type: "done", reason: "max_steps" };
 }

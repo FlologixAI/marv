@@ -115,6 +115,12 @@ describe("recording one agent's run", () => {
     expect(records[1]).toEqual({ type: "error", turn: "t1", agent: "main", message: "Rate limited" });
   });
 
+  test("hitting the step limit is recorded, with the user's answer", () => {
+    const { rec, records } = recorder();
+    rec.event({ type: "step_limit", steps: 25, continued: true });
+    expect(records).toEqual([{ type: "step_limit", turn: "t1", agent: "main", steps: 25, continued: true }]);
+  });
+
   test("finish() closes a run that never sent done (it threw), once", () => {
     const { rec, records } = recorder();
     rec.finish("error");

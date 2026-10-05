@@ -93,6 +93,50 @@ describe("runAgent", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "max_steps" });
   });
 
+  test("at the limit it asks whether to keep going: yes buys another maxSteps, no stops", async () => {
+    const loop = Array.from({ length: 10 }, (_, i) => useTools(call(`c${i}`, "a.ts")));
+    const provider = new ScriptedProvider(loop);
+    const asked: number[] = [];
+    const events = await run(provider, [{ role: "user", text: "go" }], {
+      maxSteps: 2,
+      onLimit: async (steps) => (asked.push(steps), steps < 4),
+    });
+    expect(asked).toEqual([2, 4]);
+    expect(provider.requests).toHaveLength(4);
+    expect(events.filter((e) => e.type === "step_limit")).toEqual([
+      { type: "step_limit", steps: 2, continued: true },
+      { type: "step_limit", steps: 4, continued: false },
+    ]);
+    expect(events).toContainEqual({ type: "error", message: 'Stopped at 4 steps, as you asked. Say "continue" to pick up where it left off.' });
+    expect(events.at(-1)).toEqual({ type: "done", reason: "max_steps" });
+  });
+
+  test("it asks only after a step's tool results are in, so the history stays valid either way", async () => {
+    const provider = new ScriptedProvider([useTools(call("c1", "a.ts")), say("done")]);
+    const history: ChatTurn[] = [{ role: "user", text: "go" }];
+    await run(provider, history, {
+      maxSteps: 1,
+      onLimit: async () => {
+        expect(history.at(-1)).toMatchObject({ role: "tool", callId: "c1" });
+        return true;
+      },
+    });
+    expect(history.at(-1)).toEqual({ role: "assistant", text: "done" });
+  });
+
+  test("Esc while it asks is an interrupt", async () => {
+    const controller = new AbortController();
+    const provider = new ScriptedProvider([useTools(call("c1", "a.ts")), say("never")]);
+    const events = await run(provider, [{ role: "user", text: "go" }], {
+      maxSteps: 1,
+      signal: controller.signal,
+      onLimit: async () => (controller.abort(), false),
+    });
+    expect(provider.requests).toHaveLength(1);
+    expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+
   test("an interrupt mid-tools still answers every call, so the next request is valid", async () => {
     const controller = new AbortController();
     const provider = new ScriptedProvider([useTools(call("c1", "a.ts"), call("c2", "b.ts"))]);
