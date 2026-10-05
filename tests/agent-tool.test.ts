@@ -335,6 +335,17 @@ describe("the agent tool", () => {
       expect(asked[0]!.preview.warning).toContain("1 uncommitted change in the project won't be in the worktree");
     });
 
+    test("the approval says what will run without asking, and that network commands still ask", async () => {
+      const { host } = makeHost(new ScriptedProvider([say("ok"), say("ok")]));
+      const { ctx, asked } = ctxWith(host);
+      await runTool(agentCall({ description: "x", prompt: "p", isolation: "worktree" }), ctx);
+      await runTool(agentCall({ description: "y", prompt: "p", isolation: "worktree" }), { ...ctx, sandbox: false });
+      if (sandboxAvailable()) {
+        expect(asked[0]!.preview.note).toEndWith("edits and sandboxed commands run without asking inside its worktree; network commands still ask");
+      }
+      expect(asked[1]!.preview.note).toEndWith("asks before each change (no sandbox)");
+    });
+
     test("from a subfolder, the approval says where it works, and that the count is the whole repository's", async () => {
       await mkdir(join(root, "pkg"));
       await writeFile(join(root, "dirty.txt"), "x\n");
