@@ -136,6 +136,23 @@ describe("the agent tool", () => {
     expect(existsSync(join(root, "made.txt"))).toBe(true);
   });
 
+  test("in yolo mode, a shared-folder subagent's edits run without asking", async () => {
+    const provider = new ScriptedProvider([useTool("w1", "write_file", { path: "made.txt", content: "hi\n" }), say("Made it.")]);
+    const { host } = makeHost(provider);
+    const { ctx, asked } = ctxWith(host);
+    await runTool(agentCall({ description: "make file", prompt: "p" }), { ...ctx, yolo: true });
+    expect(asked).toHaveLength(0);
+    expect(existsSync(join(root, "made.txt"))).toBe(true);
+  });
+
+  test("in yolo mode, what isn't safe still asks, labeled with who asks", async () => {
+    const provider = new ScriptedProvider([useTool("b1", "bash", { command: "curl x", network: true }), say("never")]);
+    const { host } = makeHost(provider);
+    const { ctx, asked } = ctxWith(host, () => "no");
+    await runTool(agentCall({ description: "fetch", prompt: "p" }), { ...ctx, yolo: true });
+    expect(asked.map((r) => [r.tool, r.agent])).toEqual([["bash", "general-purpose · fetch"]]);
+  });
+
   test("a no inside the subagent stops it and the parent", async () => {
     const provider = new ScriptedProvider([
       [{ type: "text_delta", text: "I'll write made.txt now." }, ...useTool("w1", "write_file", { path: "made.txt", content: "hi\n" })],
@@ -189,6 +206,23 @@ describe("the agent tool", () => {
       expect(git(root, "show", `${branch}:new.txt`)).toBe("new");
       expect(existsSync(join(root, "new.txt"))).toBe(false);
       expect(provider.requests[0]!.options.system).toContain(`branch ${branch}`);
+    });
+
+    test.if(sandboxAvailable())("in yolo mode, starting it doesn't ask either", async () => {
+      const provider = new ScriptedProvider([useTool("w1", "write_file", { path: "new.txt", content: "new\n" }), say("Added.")]);
+      const { host } = makeHost(provider);
+      const { ctx, asked } = ctxWith(host);
+      const result = await runTool(agentCall({ description: "add file", prompt: "p", isolation: "worktree" }), { ...ctx, yolo: true });
+      expect(asked).toHaveLength(0);
+      expect(result.output).toContain("1 commit");
+    });
+
+    test("in yolo mode without the sandbox, starting it still asks", async () => {
+      const provider = new ScriptedProvider([say("Nothing to do.")]);
+      const { host } = makeHost(provider);
+      const { ctx, asked } = ctxWith(host);
+      await runTool(agentCall({ description: "noop", prompt: "p", isolation: "worktree" }), { ...ctx, yolo: true, sandbox: false });
+      expect(asked.map((r) => r.tool)).toEqual(["agent"]);
     });
 
     test("started from a subfolder, it works in that subfolder of its worktree", async () => {

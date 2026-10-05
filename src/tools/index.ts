@@ -70,6 +70,12 @@ export async function runTool(call: ToolCall, ctx: ToolContext, available: Tool[
       if (ctx.signal?.aborted) {
         return { output: NOT_RUN.aborted, summary: "interrupted", declined: true, label };
       }
+      // Yolo: a call the tool vouches for runs without asking, confined (bash
+      // then can't touch .git). It still went through the preview above, so
+      // a call that can't succeed fails the same way.
+      if (ctx.yolo && tool.autoSafe?.(parsed.data, ctx)) {
+        return { ...(await tool.run(parsed.data, { ...ctx, callId: call.id, confined: true })), label };
+      }
       const decision = await ctx.approve({ tool: call.name, label, preview, scope, ...network });
       if (decision === "no") {
         return {

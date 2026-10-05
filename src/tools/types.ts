@@ -55,6 +55,10 @@ export interface ToolContext {
   approve?: (request: ApprovalRequest) => Promise<Decision>;
   /** Run bash in the bubblewrap sandbox (default true). */
   sandbox?: boolean;
+  /** Yolo mode: calls whose tool says they're safe (`autoSafe`) run without asking. */
+  yolo?: boolean;
+  /** Set by runTool for a call that runs without asking: bash then sees the project's .git read-only. */
+  confined?: boolean;
   /** Skills the `skill` tool can load. */
   skills?: Skill[];
   /** Where the memory tool reads and writes. */
@@ -102,6 +106,12 @@ export interface Tool<S extends z.ZodType = z.ZodType> {
   preview?(input: z.infer<S>, ctx: ToolContext): Promise<Preview>;
   /** What "don't ask again" covers. */
   scope?(input: z.infer<S>): Scope;
+  /**
+   * Whether yolo mode may run this call without asking: what it can change is
+   * confined to the project (never its .git, whose hooks and config git runs
+   * outside the sandbox) and it can't reach the network. Absent: always ask.
+   */
+  autoSafe?(input: z.infer<S>, ctx: ToolContext): boolean;
   run(input: z.infer<S>, ctx: ToolContext): Promise<ToolResult>;
 }
 

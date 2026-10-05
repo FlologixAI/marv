@@ -17,6 +17,7 @@ export type CommandAction =
   | { type: "model"; id?: string }
   | { type: "thinking"; on: boolean }
   | { type: "sandbox"; on: boolean }
+  | { type: "yolo"; on: boolean }
   | { type: "resume" }
   | { type: "remember"; scope: "personal" | "project"; text: string }
   | { type: "forget"; text: string }
@@ -136,6 +137,15 @@ export const commands: Command[] = [
     },
   },
   {
+    name: "yolo",
+    description: "Run what the sandbox confines without asking (/yolo on, /yolo off)",
+    run: (args, { config }) => {
+      const arg = args.toLowerCase();
+      if (arg && arg !== "on" && arg !== "off") return { type: "print", text: "Usage: /yolo, /yolo on, or /yolo off", isError: true };
+      return { type: "yolo", on: arg ? arg === "on" : !config.yolo };
+    },
+  },
+  {
     name: "clear",
     description: "Clear the conversation",
     run: () => ({ type: "clear" }),
@@ -181,11 +191,21 @@ function configText({ config, configPath }: CommandContext): string {
     `Model:     ${config.model}`,
     `Thinking:  ${config.thinking ? "on" : "off"}`,
     `Sandbox:   ${sandboxStatus(config)}`,
+    `Yolo:      ${config.yolo ? "on" : "off"} (/yolo)`,
     `Endpoint:  ${config.baseUrl}`,
     ...(config.provider === "ollama" ? [`Context:   ${config.contextLength.toLocaleString("en-US")} tokens (contextLength in the config file)`] : []),
     `API key:   ${key}`,
     `File:      ${configPath}`,
   ].join("\n");
+}
+
+/** What yolo mode does with this config, for the notice when it's turned on. */
+export function yoloStatus(config: Config): string {
+  if (!config.yolo) return "Yolo off: every change asks first.";
+  const sandboxed = config.sandbox && sandboxAvailable();
+  return sandboxed
+    ? "Yolo on: sandboxed commands and file edits run without asking. Network access, git changes (git_write), edits inside .git, and memory still ask."
+    : `Yolo on: file edits run without asking. Commands still ask: ${config.sandbox ? "bubblewrap isn't available here" : "the sandbox is off"}, so nothing confines them.`;
 }
 
 function sandboxStatus(config: Config): string {

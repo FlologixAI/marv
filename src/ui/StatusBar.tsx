@@ -28,21 +28,29 @@ interface Props {
   busy: boolean;
   /** Subagents running right now. */
   agents?: number;
+  /** Yolo mode is on: always shown, so the user knows what runs without asking. */
+  yolo?: boolean;
 }
 
-export function StatusBar({ model, cwd, usage, confirmExit, notice, busy, agents = 0 }: Props) {
+export function StatusBar({ model, cwd, usage, confirmExit, notice, busy, agents = 0, yolo = false }: Props) {
   const hint = confirmExit
     ? "Press ctrl+c again to exit"
     : notice
       ? notice
       : busy
       ? `esc to interrupt${agents ? ` · ${agents} agent${agents === 1 ? "" : "s"} running` : ""}`
-      : "/help · PgUp/PgDn to scroll · ctrl+c to exit";
+      : "/help · PgUp/PgDn · ctrl+c exit";
+  // On the left, which is never cut off, and whenever the hint is (busy is when it matters most).
+  const showYolo = yolo && !confirmExit && !notice;
 
   return (
     <Box paddingX={1} justifyContent="space-between">
       <Box flexShrink={0} marginRight={2}>
-        <Text color={confirmExit ? theme.warning : theme.dim}>{hint}</Text>
+        <Text color={confirmExit ? theme.warning : theme.dim}>
+          {showYolo && <Text color={theme.accent}>yolo</Text>}
+          {showYolo && " · "}
+          {hint}
+        </Text>
       </Box>
       {/* On a narrow terminal the model/cwd side gets cut off, not the hint. */}
       <Text color={theme.dim} wrap="truncate-start">

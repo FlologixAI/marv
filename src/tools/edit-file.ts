@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { z } from "zod";
 import { changeSummary, diffText } from "./diff.ts";
-import { isDirectory, projectPath, requireRegularFile, resolveInProject } from "./files.ts";
+import { isDirectory, projectPath, refuseGit, requireRegularFile, resolveInProject, touchesGit } from "./files.ts";
 import { ToolError, type Tool, type ToolContext } from "./types.ts";
 
 const input = z.object({
@@ -13,8 +13,9 @@ const input = z.object({
 type Input = z.infer<typeof input>;
 
 /** The file before and after, or a ToolError the model can act on. Used for the preview and again when applying. */
-async function plan({ path, old_string, new_string, replace_all }: Input, { root }: ToolContext) {
+async function plan({ path, old_string, new_string, replace_all }: Input, { root, confined }: ToolContext) {
   const absolute = resolveInProject(root, path);
+  if (confined) refuseGit(root, absolute);
   const shown = projectPath(root, absolute);
   if (isDirectory(absolute)) throw new ToolError(`"${shown}" is a directory.`);
   if (!existsSync(absolute)) throw new ToolError(`File not found: ${shown}. Use write_file to create a new file.`);
@@ -42,11 +43,12 @@ export const editFile: Tool<typeof input> = {
   description:
     "Change part of a file by replacing exact text: old_string must match the file exactly once (copy it from read_file, " +
     "with its whitespace and indentation, and include enough lines to be unique), or set replace_all. " +
-    "Prefer this over write_file for existing files. The user approves each change.",
+    "Prefer this over write_file for existing files. The user may be asked to approve each change.",
   input,
   kind: "write",
   label: ({ path }) => path,
   scope: () => ({ key: "files", description: "file changes" }),
+  autoSafe: ({ path }, { root }) => !touchesGit(root, path),
 
   async preview(args, ctx) {
     const { shown, before, after } = await plan(args, ctx);

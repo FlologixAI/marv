@@ -3,7 +3,7 @@ import { Box, useApp, useInput, useWindowSize } from "ink";
 import { runAgent } from "./agent.ts";
 import { GENERAL_PURPOSE, type AgentType } from "./agents.ts";
 import { copyToClipboard } from "./clipboard.ts";
-import { commands, isCommand, runCommand } from "./commands/index.ts";
+import { commands, isCommand, runCommand, yoloStatus } from "./commands/index.ts";
 import {
   needsSetup,
   PRESETS,
@@ -408,7 +408,7 @@ export function App({
           system,
           tools: specs,
           runTool: (call) =>
-            runTool(call, { root, signal: controller.signal, approve, sandbox: config.sandbox, skills, memory: memory?.paths, agentHost }),
+            runTool(call, { root, signal: controller.signal, approve, sandbox: config.sandbox, yolo: config.yolo, skills, memory: memory?.paths, agentHost }),
           signal: controller.signal,
           isParallel: isParallelCall,
         })) {
@@ -507,6 +507,7 @@ export function App({
       approve,
       declineAll,
       config.sandbox,
+      config.yolo,
       countUsage,
       compact,
       contextLength,
@@ -627,6 +628,9 @@ export function App({
             ? "Sandbox on: bash commands run in bubblewrap."
             : "Sandbox off: bash commands run directly on your system (each still needs your approval).",
         );
+        break;
+      case "yolo":
+        void saveConfig({ ...(file ?? { provider: config.provider }), yolo: action.on }, yoloStatus({ ...config, yolo: action.on }));
         break;
       case "model":
         if (action.id) void completeSetup({ ...(file ?? { provider: config.provider }), model: action.id });
@@ -862,7 +866,7 @@ export function App({
         ) : approval && !setupMode ? (
           <>
             <Approval key={approval.head.id} request={approval.head.request} waiting={approval.waiting} onDecide={decide} onCancel={cancelAll} />
-            <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy agents={agentsRunning} />
+            <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy agents={agentsRunning} yolo={config.yolo} />
           </>
         ) : setupMode ? (
           <Setup
@@ -891,6 +895,7 @@ export function App({
               notice={notice}
               busy={busy}
               agents={agentsRunning}
+              yolo={config.yolo}
             />
           </>
         )}

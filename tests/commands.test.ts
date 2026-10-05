@@ -12,6 +12,7 @@ const ctx: CommandContext = {
     thinking: false,
     contextLength: 32768,
     sandbox: true,
+    yolo: true,
   },
   configPath: "~/.marv/config.json",
 };
@@ -47,7 +48,7 @@ describe("slash commands", () => {
   });
 
   test("/config says when no key is needed (Ollama)", () => {
-    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://localhost:11434", thinking: false, contextLength: 32768, sandbox: true } });
+    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://localhost:11434", thinking: false, contextLength: 32768, sandbox: true, yolo: true } });
     expect(action).toMatchObject({ type: "print", text: expect.stringContaining("API key:   not needed") });
   });
 
@@ -61,6 +62,14 @@ describe("slash commands", () => {
     expect(runCommand("/sandbox on")).toEqual({ type: "sandbox", on: true });
     expect(runCommand("/sandbox")).toMatchObject({ type: "print", text: expect.stringMatching(/^Sandbox: on/) });
     expect(runCommand("/sandbox maybe")).toMatchObject({ type: "print", isError: true });
+  });
+
+  test("/yolo toggles, or takes on/off", () => {
+    expect(runCommand("/yolo")).toEqual({ type: "yolo", on: false }); // on by default
+    expect(run("/yolo", { ...ctx, config: { ...ctx.config, yolo: false } })).toEqual({ type: "yolo", on: true });
+    expect(runCommand("/yolo on")).toEqual({ type: "yolo", on: true });
+    expect(runCommand("/yolo maybe")).toMatchObject({ type: "print", isError: true });
+    expect(runCommand("/config")).toMatchObject({ type: "print", text: expect.stringContaining("Yolo:      on") });
   });
 
   test("/skills lists skills, or explains how to add one", () => {

@@ -31,6 +31,8 @@ async function type(stdin: { write: (data: string) => void }, text: string) {
 
 // Any saved provider + model will do; makeProvider swaps in a fake, so nothing hits the network.
 const LOCAL: FileConfig = { provider: "ollama", model: "qwen3.5:9b" };
+/** Yolo off: every change asks (yolo would run these tests' edits without asking). */
+const ASKS: FileConfig = { ...LOCAL, yolo: false };
 
 let dir: string;
 let project: string;
@@ -369,9 +371,33 @@ describe("App", () => {
       [{ type: "tool_call", call: { id, name: "write_file", arguments: JSON.stringify({ path, content: "hello\n" }) } }, { type: "done" }] as AgentEvent[];
     const reply = (text: string) => [{ type: "text_delta", text }, { type: "done" }] as AgentEvent[];
 
-    test("a change waits for approval, then runs and the model carries on", async () => {
+    test("in yolo mode (the default), an edit runs without asking, and the status bar says so", async () => {
       const model = new ScriptedProvider([writeCall("c1", "made.txt"), reply("Created it.")]);
       const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      expect(lastFrame()).toContain("yolo · /help");
+      await type(stdin, "make a file");
+      await tick(150);
+      expect(lastFrame()).not.toContain("Do you want to proceed?");
+      expect(existsSync(join(project, "made.txt"))).toBe(true);
+      expect(lastFrame()).toContain("Created it.");
+    });
+
+    test("/yolo off turns it off and saves it; then changes ask", async () => {
+      const model = new ScriptedProvider([writeCall("c1", "made.txt"), reply("Created it.")]);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "/yolo off");
+      await tick(100);
+      expect(await store.load()).toEqual({ ...LOCAL, yolo: false });
+      expect(lastFrame()).toContain("Yolo off");
+      expect(lastFrame()).not.toContain("yolo · /help");
+      await type(stdin, "make a file");
+      await tick(150);
+      expect(lastFrame()).toContain("Do you want to proceed?");
+    });
+
+    test("a change waits for approval, then runs and the model carries on", async () => {
+      const model = new ScriptedProvider([writeCall("c1", "made.txt"), reply("Created it.")]);
+      const { lastFrame, stdin } = renderApp(ASKS, 0, undefined, () => model);
       await type(stdin, "make a file");
       await tick(150);
       expect(lastFrame()).toContain("Create made.txt");
@@ -388,7 +414,7 @@ describe("App", () => {
 
     test("no stops the agent and leaves the file alone", async () => {
       const model = new ScriptedProvider([writeCall("c1", "made.txt"), reply("should not get here")]);
-      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      const { lastFrame, stdin } = renderApp(ASKS, 0, undefined, () => model);
       await type(stdin, "make a file");
       await tick(150);
       stdin.write(DOWN);
@@ -405,7 +431,7 @@ describe("App", () => {
 
     test("'don't ask again' covers later changes this session", async () => {
       const model = new ScriptedProvider([writeCall("c1", "one.txt"), writeCall("c2", "two.txt"), reply("Both done.")]);
-      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      const { lastFrame, stdin } = renderApp(ASKS, 0, undefined, () => model);
       await type(stdin, "make two files");
       await tick(150);
       stdin.write(DOWN);
@@ -419,7 +445,7 @@ describe("App", () => {
 
     test("Esc at the prompt declines and stops the run", async () => {
       const model = new ScriptedProvider([writeCall("c1", "made.txt"), reply("should not get here")]);
-      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      const { lastFrame, stdin } = renderApp(ASKS, 0, undefined, () => model);
       await type(stdin, "make a file");
       await tick(150);
       stdin.write("\x1b");
@@ -432,7 +458,7 @@ describe("App", () => {
 
     test("ctrl+c at the prompt declines and stops", async () => {
       const model = new ScriptedProvider([writeCall("c1", "made.txt")]);
-      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      const { lastFrame, stdin } = renderApp(ASKS, 0, undefined, () => model);
       await type(stdin, "make a file");
       await tick(150);
       stdin.write("\x03");
@@ -763,9 +789,9 @@ describe("subagents", () => {
   const calls = (...list: { id: string; name: string; args: unknown }[]) =>
     [...list.map(({ id, name, args }) => ({ type: "tool_call", call: { id, name, arguments: JSON.stringify(args) } })), { type: "done" }] as AgentEvent[];
 
-  function renderAgents(model: Provider) {
+  function renderAgents(model: Provider, file = ASKS) {
     return render(
-      <App store={store} initialFile={LOCAL} env={{}} version="9.9.9" cwd="~/x" root={project} splashMs={0} makeProvider={() => model} loadModels={async () => []} agents={[GENERAL_PURPOSE]} />,
+      <App store={store} initialFile={file} env={{}} version="9.9.9" cwd="~/x" root={project} splashMs={0} makeProvider={() => model} loadModels={async () => []} agents={[GENERAL_PURPOSE]} />,
     );
   }
 

@@ -53,6 +53,8 @@ const FileConfigSchema = z.object({
   contextLength: z.number().int().min(2048).optional(),
   /** Run bash commands in the bubblewrap sandbox (default on). */
   sandbox: z.boolean().optional(),
+  /** Run what the sandbox confines without asking: sandboxed commands, edits outside .git (default on). */
+  yolo: z.boolean().optional(),
 });
 
 /** 32k fits fully on a 12 GB GPU for 9-12B models and holds a fair amount of code. */
@@ -71,6 +73,7 @@ export interface Config {
   thinking: boolean;
   contextLength: number;
   sandbox: boolean;
+  yolo: boolean;
 }
 
 export type Env = Record<string, string | undefined>;
@@ -143,6 +146,7 @@ export function resolveConfig(file: FileConfig | null, env: Env): Config {
     thinking: file?.thinking ?? false,
     contextLength: file?.contextLength ?? DEFAULT_CONTEXT_LENGTH,
     sandbox: file?.sandbox ?? true,
+    yolo: file?.yolo ?? true,
   };
 }
 

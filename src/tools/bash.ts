@@ -1,9 +1,13 @@
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 import { sandboxArgs, sandboxAvailable } from "../sandbox.ts";
 import type { Tool } from "./types.ts";
 
 const DEFAULT_TIMEOUT_S = 120;
+/** Appended when a confined command fails on the read-only .git, so the model learns how to do it. */
+const GIT_HINT = "Marv: .git is read-only for commands that run without asking. To change the repository, run the command again with git_write: true (the user is asked).";
 const MAX_TIMEOUT_S = 600;
 /** Kept in memory per command; anything beyond is dropped (the middle is cut for the model anyway). */
 const MAX_CAPTURE = 2_000_000;
@@ -121,20 +125,28 @@ const input = z.object({
   command: z.string().min(1).describe("The shell command (bash). Runs in the project folder."),
   timeout: z.number().int().min(1).max(MAX_TIMEOUT_S).optional().describe(`Seconds before it's stopped. Default ${DEFAULT_TIMEOUT_S}.`),
   network: z.boolean().optional().describe("Allow network access (e.g. to install packages). Off by default."),
+  git_write: z
+    .boolean()
+    .optional()
+    .describe("Set when the command changes the git repository (commit, checkout, merge, rebase, stash, branch, tag, init…). Otherwise .git may be read-only."),
 });
 
 export const bash: Tool<typeof input> = {
   name: "bash",
   description:
     "Run a shell command in the project folder, e.g. to run tests, a build, git status, or wc -l. " +
-    "The user approves each command. It runs in a sandbox: only the project folder is writable, the home folder is hidden, " +
-    "and there's no network unless you set network: true. Not interactive: commands can't prompt for input. " +
+    "It runs in a sandbox: only the project folder is writable, the home folder is hidden, " +
+    "and there's no network unless you set network: true. The user may be asked to approve a command; they always are for network: true or git_write: true. " +
+    "Not interactive: commands can't prompt for input. " +
     "Output (stdout and stderr together) is cut in the middle if very long.",
   input,
   kind: "execute",
   label: ({ command }) => command,
-  scope: ({ command, network }) => ({ key: `bash:${network ? "net:" : ""}${command}`, description: "this exact command" }),
+  scope: ({ command, network, git_write }) => ({ key: `bash:${network ? "net:" : ""}${git_write ? "git:" : ""}${command}`, description: "this exact command" }),
   usesNetwork: ({ network }) => Boolean(network),
+  // In the sandbox, without network, and (as runTool confines it) with .git read-only, a command can only change the
+  // project's own files. Without the sandbox, nothing limits it.
+  autoSafe: ({ network, git_write }, { sandbox = true }) => sandbox && sandboxAvailable() && !network && !git_write,
 
   async preview({ command, network, timeout }, { sandbox = true }) {
     const sandboxed = sandbox && sandboxAvailable();
@@ -151,8 +163,21 @@ export const bash: Tool<typeof input> = {
     };
   },
 
-  async run({ command, network = false, timeout = DEFAULT_TIMEOUT_S }, { root, signal, sandbox = true, readOnly }) {
-    const result = await runCommand({ command, root, sandbox: sandbox && sandboxAvailable(), network, timeoutMs: timeout * 1000, signal, readOnly });
+  async run({ command, network = false, timeout = DEFAULT_TIMEOUT_S }, { root, signal, sandbox = true, readOnly = [], confined }) {
+    // A command that runs without asking sees .git read-only: git runs hooks and config from it outside any sandbox
+    // (the user's next commit, their editor), so a planted hook would escape. Without .git, there's nothing to protect.
+    const gitDir = join(root, ".git");
+    const lockGit = confined && existsSync(gitDir);
+    const result = await runCommand({
+      command,
+      root,
+      sandbox: sandbox && sandboxAvailable(),
+      network,
+      timeoutMs: timeout * 1000,
+      signal,
+      readOnly: lockGit ? [...readOnly, gitDir] : readOnly,
+    });
+    if (lockGit && result.exitCode !== 0 && result.output.includes("Read-only file system")) result.output += `\n${GIT_HINT}\n`;
     const lines = result.output.trimEnd() === "" ? 0 : result.output.trimEnd().split("\n").length;
     const summary = result.timedOut
       ? `timed out after ${timeout}s`

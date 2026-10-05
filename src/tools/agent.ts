@@ -36,6 +36,8 @@ export const agent: Tool<typeof input> = {
   needsApproval: ({ isolation }) => isolation === "worktree",
   label: ({ type, description }) => agentLabel(type, description),
   scope: () => ({ key: "agent:worktree", description: "subagents in their own worktrees" }),
+  // Yolo: a sandboxed worktree is as confined as an agent gets (its branch is the review).
+  autoSafe: ({ isolation }, { sandbox = true }) => isolation === "worktree" && sandbox && sandboxAvailable(),
 
   async preview({ type, description, prompt }, ctx) {
     if (!ctx.agentHost) throw new ToolError(NO_SUBAGENTS);

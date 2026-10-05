@@ -61,7 +61,7 @@ export function subagentApprove(approve: ToolContext["approve"], agent: string, 
  * The tool context a subagent's tools run with. Built from scratch rather than
  * copied from the parent's, so nothing is inherited by accident: no agentHost
  * (it can't start subagents), no memory (only the main agent changes it), no
- * callId. In a worktree it works in the worktree's folder (or the same
+ * callId. Yolo mode carries over: what's safe runs without asking there too. In a worktree it works in the worktree's folder (or the same
  * subfolder the parent works in), bash sees the shared .git read-only (and,
  * from a subfolder, the rest of the worktree, so git finds the repository and
  * doesn't list the other files as deleted), and Marv's own git calls are
@@ -73,6 +73,7 @@ export function subagentContext(ctx: ToolContext, who: string, worktree?: Worktr
     root: worktree?.workDir ?? ctx.root,
     signal: ctx.signal,
     sandbox: ctx.sandbox,
+    yolo: ctx.yolo,
     skills: ctx.skills,
     readOnly: worktree ? [...(worktree.prefix ? [worktree.dir] : []), worktree.gitDir] : undefined,
     gitEnv: worktree && worktreeEnv(worktree),

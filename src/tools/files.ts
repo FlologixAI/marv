@@ -32,6 +32,38 @@ export function resolveInProject(root: string, path: string): string {
   return absolute;
 }
 
+/**
+ * Whether a project path is (or is inside) the project's .git, also through a
+ * symlink: git runs its hooks and config outside any sandbox, so yolo mode
+ * never changes it without asking. Like resolveInProject, a path that doesn't
+ * exist yet is judged by the nearest folder that does.
+ */
+function insideGitDir(root: string, absolute: string): boolean {
+  let existing = absolute;
+  while (!existsSync(existing) && existing !== dirname(existing)) existing = dirname(existing);
+  const real = join(realpathSync(existing), relative(existing, absolute));
+  return relative(realpathSync(root), real).split(sep)[0] === ".git";
+}
+
+/** For `autoSafe`: whether a path the model gave leads into .git (a path outside the project counts too: it asks, and fails). */
+export function touchesGit(root: string, path: string): boolean {
+  try {
+    return insideGitDir(root, resolveInProject(root, path));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Checked again when a change that runs without asking is applied: a command
+ * running meanwhile (a parallel subagent) could have pointed a symlink into .git.
+ */
+export function refuseGit(root: string, absolute: string): void {
+  if (insideGitDir(root, absolute)) {
+    throw new ToolError(`"${projectPath(root, absolute)}" leads into .git, which changes only with the user's approval. Try again; they'll be asked.`);
+  }
+}
+
 /** "src/app.ts" for display and for the model; "." for the root itself. */
 export const projectPath = (root: string, absolute: string) => relative(root, absolute).split(sep).join("/") || ".";
 

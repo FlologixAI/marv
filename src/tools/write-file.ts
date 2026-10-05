@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { changeSummary, diffText } from "./diff.ts";
-import { isDirectory, projectPath, requireRegularFile, resolveInProject } from "./files.ts";
+import { isDirectory, projectPath, refuseGit, requireRegularFile, resolveInProject, touchesGit } from "./files.ts";
 import { ToolError, type Tool, type ToolContext } from "./types.ts";
 
 const PREVIEW_LINES = 40;
@@ -13,8 +13,9 @@ const input = z.object({
   content: z.string().describe("The complete contents of the file."),
 });
 
-async function plan({ path, content }: z.infer<typeof input>, { root }: ToolContext) {
+async function plan({ path, content }: z.infer<typeof input>, { root, confined }: ToolContext) {
   const absolute = resolveInProject(root, path);
+  if (confined) refuseGit(root, absolute);
   const shown = projectPath(root, absolute);
   if (isDirectory(absolute)) throw new ToolError(`"${shown}" is a directory.`);
   const exists = existsSync(absolute);
@@ -29,11 +30,12 @@ export const writeFile: Tool<typeof input> = {
   name: "write_file",
   description:
     "Create a new file, or replace a file's entire contents. For changing part of an existing file, use edit_file instead. " +
-    "The user approves each change.",
+    "The user may be asked to approve each change.",
   input,
   kind: "write",
   label: ({ path }) => path,
   scope: () => ({ key: "files", description: "file changes" }),
+  autoSafe: ({ path }, { root }) => !touchesGit(root, path),
 
   async preview(args, ctx) {
     const { shown, before, content } = await plan(args, ctx);
