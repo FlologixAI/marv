@@ -20,7 +20,8 @@ import type { ToolResult } from "./tools/types.ts";
 export const DEFAULT_MAX_STEPS = 25;
 export const MAX_PARALLEL = 4;
 
-const NOT_RUN = {
+/** What the model is told about a call that never ran. */
+export const NOT_RUN = {
   aborted: "Interrupted by the user before this tool ran.",
   declined: "Not run: the user declined an earlier action.",
 };

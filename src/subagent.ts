@@ -185,7 +185,9 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
   const stopped = reason === "end" || reason === "declined" ? "" : `[${fromMarv(STOPPED[reason] ?? `It stopped (${reason}).`)}${error ? ` ${error}` : ""}]`;
   // The subagent's own text first, then Marv's lines.
   const output = [text.trim() || "(The subagent gave no report.)", stopped, branchLine].filter(Boolean).join("\n\n");
-  if (declined) return { output, summary: `declined · ${stats}`, declined: true };
+  // A "no" that came with an interrupt (Esc declines what's waiting, then
+  // stops the run) is reported as the interrupt it was.
+  if (declined && !ctx.signal?.aborted) return { output, summary: `declined · ${stats}`, declined: true };
   if (stopped) return { output, summary: `stopped · ${stats}`, isError: true };
   const first = text.trim().split("\n")[0]!.slice(0, 80);
   return { output, summary: `done · ${stats}${first ? ` · "${first}"` : ""}` };

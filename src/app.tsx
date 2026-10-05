@@ -357,6 +357,11 @@ export function App({
         setThinking("");
       };
       const toolLines = new Map<string, { line: number; label: string }>();
+      // Calls that got their tool_end; any other entry is closed in `finally`.
+      const ended = new Set<string>();
+      // Set first thing in `finally`: a subagent still winding down after the
+      // run ended mustn't schedule a flush (it would show the run as busy again).
+      let over = false;
       // Subagents' progress, batched into the same flush as streamed text: with
       // several running, updating the transcript on every step would re-render
       // it far more often than Ink can draw.
@@ -376,6 +381,7 @@ export function App({
         progress.clear();
       };
       const scheduleFlush = () => {
+        if (over) return;
         flushTimer ??= setTimeout(flush, STREAM_FLUSH_MS);
       };
       // What the agent tool needs to start subagents. Only the main agent gets
@@ -388,6 +394,7 @@ export function App({
         providerFor: (model) => (model ? makeProvider({ ...configRef.current, model }) : provider),
         onUsage: countUsage,
         onProgress: (callId, p) => {
+          if (over) return;
           progress.set(callId, p);
           steps.set(callId, p.steps);
           scheduleFlush();
@@ -427,6 +434,11 @@ export function App({
               noteThought();
               setToolsRunning((n) => n + 1);
               if (event.call.name === "agent") setAgentsRunning((n) => n + 1);
+              // Providers reuse call ids from step to step (Ollama's call_0…):
+              // nothing from an earlier call with this id carries over.
+              steps.delete(event.call.id);
+              progress.delete(event.call.id);
+              ended.delete(event.call.id);
               toolLines.set(event.call.id, {
                 label: event.label,
                 line: addMessage({ role: "tool", text: event.call.name, tool: { label: event.label, status: "running" } }),
@@ -436,10 +448,13 @@ export function App({
               const { result } = event;
               const entry = toolLines.get(event.call.id);
               progress.delete(event.call.id); // a late progress flush mustn't turn it back to "running"
+              const callSteps = steps.get(event.call.id);
+              steps.delete(event.call.id);
+              ended.add(event.call.id);
               // A plain failure shows its message; a subagent that stopped shows its own summary.
               const summary = result.isError && result.summary === "error" ? result.output.split("\n")[0] : result.summary;
               const status = result.declined ? "declined" : result.isError ? "error" : "done";
-              if (entry) updateMessage(entry.line, { tool: { label: result.label, status, summary, steps: steps.get(event.call.id) } });
+              if (entry) updateMessage(entry.line, { tool: { label: result.label, status, summary, steps: callSteps } });
               setToolsRunning((n) => Math.max(0, n - 1));
               if (event.call.name === "agent") setAgentsRunning((n) => Math.max(0, n - 1));
               stepStarted = Date.now();
@@ -462,7 +477,12 @@ export function App({
       } catch (err) {
         addMessage({ role: "system", text: `Error: ${(err as Error).message}`, isError: true });
       } finally {
+        over = true;
         if (flushTimer) clearTimeout(flushTimer);
+        // The loop stopped early (it threw): close the entries it never ended.
+        for (const [callId, entry] of toolLines) {
+          if (!ended.has(callId)) updateMessage(entry.line, { tool: { label: entry.label, status: "error", summary: "interrupted", steps: steps.get(callId) } });
+        }
         noteThought();
         // Stop anything still running (a no-op after a normal end): if the loop
         // ended early (an exception), subagents still running in a parallel

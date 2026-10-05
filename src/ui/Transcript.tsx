@@ -27,7 +27,8 @@ export const Transcript = memo(function Transcript({ items, version, cwd, instru
     item.kind === "welcome" ? (
       <Welcome key={item.id} version={version} cwd={cwd} instructions={instructions} skills={skills} memories={memories} />
     ) : (
-      <MessageView key={item.id} message={item.message} showSteps={showSteps} />
+      // Only entries with steps get the flag, so ctrl+o re-renders just those.
+      <MessageView key={item.id} message={item.message} showSteps={item.message.tool?.steps ? showSteps : false} />
     ),
   );
 });

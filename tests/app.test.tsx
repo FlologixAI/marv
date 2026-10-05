@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanup, render } from "ink-testing-library";
+import * as agentModule from "../src/agent.ts";
 import { App } from "../src/app.tsx";
 import { ConfigStore, type Config, type FileConfig } from "../src/config/config.ts";
 import { mouse } from "../src/mouse.ts";
@@ -787,6 +788,87 @@ describe("subagents", () => {
     stdin.write(CTRL_O);
     await tick();
     expect(lastFrame()).toContain("read_file notes.txt · 1 line");
+    stdin.write(CTRL_O); // and again hides them
+    await tick();
+    expect(lastFrame()).not.toContain("read_file notes.txt · 1 line");
+  });
+
+  /** Waits before answering the requests listed (by index), so a subagent can be seen mid-run. */
+  const slowAt = (inner: ScriptedProvider, waits: Record<number, number>): Provider => ({
+    name: "slow",
+    async *stream(history, options) {
+      const wait = waits[inner.requests.length];
+      if (wait) await Bun.sleep(wait);
+      yield* inner.stream(history, options);
+    },
+  });
+
+  test("while a subagent runs, its entry shows what it's doing", async () => {
+    const inner = new ScriptedProvider([
+      calls({ id: "a1", name: "agent", args: { description: "Read notes", prompt: "What's in notes.txt?" } }),
+      calls({ id: "r1", name: "read_file", args: { path: "notes.txt" } }),
+      reply("It says remember the milk."), // asked for after a pause
+      reply("Done."),
+    ]);
+    const { lastFrame, stdin } = renderAgents(slowAt(inner, { 2: 400 }));
+    await type(stdin, "check the notes");
+    await tick(200);
+    expect(lastFrame()).toContain("⎿ shared folder · 1 tool · thinking…");
+    expect(lastFrame()).toContain("1 agent running");
+    stdin.write(CTRL_O);
+    await tick();
+    expect(lastFrame()).toContain("    · read_file notes.txt · 1 line"); // its steps so far
+    await tick(500);
+    expect(lastFrame()).toContain("done · 1 tool");
+    expect(lastFrame()).not.toContain("agent running");
+  });
+
+  test("a call id reused in a later step doesn't inherit a subagent's steps", async () => {
+    // Providers number calls per reply (Ollama's call_0, call_1…), so ids repeat.
+    const model = new ScriptedProvider([
+      calls({ id: "call_0", name: "agent", args: { description: "Read notes", prompt: "What's in notes.txt?" } }),
+      calls({ id: "r1", name: "read_file", args: { path: "notes.txt" } }), // the subagent
+      reply("It says remember the milk."), // the subagent
+      calls({ id: "call_0", name: "read_file", args: { path: "notes.txt" } }), // the parent, next step
+      reply("Checked it myself."),
+    ]);
+    const { lastFrame, stdin } = renderAgents(model);
+    await type(stdin, "check the notes");
+    await tick(300);
+    expect(lastFrame()).toContain("Checked it myself.");
+    stdin.write(CTRL_O);
+    await tick();
+    const lines = lastFrame()!.split("\n");
+    const own = lines.findIndex((line) => line.includes("● read_file notes.txt"));
+    expect(own).toBeGreaterThan(-1);
+    expect(lines[own + 1]).toContain("⎿ 1 line");
+    expect(lines[own + 2]).not.toContain("· read_file");
+  });
+
+  test("if the loop fails mid-run, its entries end and a subagent still running can't bring the run back", async () => {
+    const real = agentModule.runAgent;
+    const spy = spyOn(agentModule, "runAgent").mockImplementation(async function* (options) {
+      if (options.maxSteps) return yield* real(options); // a subagent: the real loop
+      const call = { id: "a1", name: "agent", arguments: JSON.stringify({ description: "write", prompt: "write one.txt" }) };
+      yield { type: "tool_start", call, label: "general-purpose · write" };
+      void options.runTool(call);
+      await Bun.sleep(100); // the subagent is waiting at its approval prompt
+      throw new Error("boom");
+    });
+    try {
+      const writer = new ScriptedProvider([calls({ id: "w1", name: "write_file", args: { path: "one.txt", content: "x\n" } })]);
+      const { lastFrame, stdin } = renderAgents(writer);
+      await type(stdin, "go");
+      await tick(400);
+      expect(lastFrame()).toContain("Error: boom");
+      expect(lastFrame()).toContain("⎿ interrupted");
+      expect(lastFrame()).not.toContain("Do you want to proceed?");
+      expect(lastFrame()).not.toContain("esc to interrupt");
+      expect(lastFrame()).toContain("Type a message");
+      expect(existsSync(join(project, "one.txt"))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   function twoWriters() {

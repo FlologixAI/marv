@@ -144,6 +144,19 @@ describe("the agent tool", () => {
     expect(provider.requests).toHaveLength(1);
   });
 
+  test("stopped by the user (Esc declines what's waiting and aborts), it's reported as interrupted, not declined", async () => {
+    const controller = new AbortController();
+    const provider = new ScriptedProvider([useTool("w1", "write_file", { path: "made.txt", content: "hi\n" }), say("never")]);
+    const { host } = makeHost(provider);
+    const { ctx } = ctxWith(host, () => (controller.abort(), "no"));
+    const result = await runTool(agentCall({ description: "x", prompt: "p" }), { ...ctx, signal: controller.signal });
+    expect(result.declined).toBeUndefined();
+    expect(result.isError).toBe(true);
+    expect(result.summary).toStartWith("stopped ·");
+    expect(result.output).toContain("[Marv: Interrupted by the user before it finished.]");
+    expect(existsSync(join(root, "made.txt"))).toBe(false);
+  });
+
   describe("in a worktree", () => {
     beforeEach(() => {
       git(root, "init", "-q", "-b", "main");

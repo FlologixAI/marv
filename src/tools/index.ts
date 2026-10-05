@@ -1,6 +1,7 @@
 // The tool registry: what the model is offered, and how its calls are run.
 import { isAbsolute, sep } from "node:path";
 import { z } from "zod";
+import { NOT_RUN } from "../agent.ts";
 import type { ToolCall, ToolSpec } from "../provider/types.ts";
 import { agent } from "./agent.ts";
 import { bash } from "./bash.ts";
@@ -65,7 +66,7 @@ export async function runTool(call: ToolCall, ctx: ToolContext, available: Tool[
       // Stopped while the preview was being made (a parallel subagent when the
       // user pressed Esc): don't raise a prompt for a run that's over.
       if (ctx.signal?.aborted) {
-        return { output: "Not run: the user stopped the run.", summary: "declined", declined: true, label };
+        return { output: NOT_RUN.aborted, summary: "declined", declined: true, label };
       }
       const decision = await ctx.approve({ tool: call.name, label, preview, scope, ...network });
       if (decision === "no") {
