@@ -15,7 +15,7 @@
     "README.md"
   ],
   "bin": {
-    "marv": "./src/cli.tsx"
+    "marv": "./bin/marv"
   },
   "scripts": {
     "dev": "bun src/cli.tsx",
@@ -25,20 +25,25 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.0",
+    "@mozilla/readability": "^0.6.0",
     "diff": "^9.0.0",
     "ink": "^8.0.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
+    "linkedom": "^0.18.13",
     "marked": "^18.0.14",
     "react": "^19.3.0",
     "slice-ansi": "^9.0.1",
     "string-width": "^8.3.0",
     "strip-ansi": "^7.2.0",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",
     "@types/react": "^19.3.0",
+    "@types/turndown": "^5.0.6",
     "ink-testing-library": "^4.0.0",
     "typescript": "^7.0.2"
   },

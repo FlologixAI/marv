@@ -24,6 +24,7 @@ import { newSession, type SavedSession, type SessionStore } from "./sessions.ts"
 import type { Skill } from "./skills.ts";
 import { AgentRecorder, type Trajectory, type TrajectoryRecord, type TrajectoryStore } from "./trajectory.ts";
 import { isParallelCall, runTool, specOf, tools as builtinTools, toolSpecsFor } from "./tools/index.ts";
+import { pastedScopes } from "./tools/web-fetch.ts";
 import type { AgentHost, AgentProgress, ApprovalRequest, Decision, Tool } from "./tools/types.ts";
 import type { Message } from "./types.ts";
 import { addUsage, emptyTotals, type Totals } from "./usage.ts";
@@ -296,6 +297,10 @@ export class MarvSession implements Session {
    */
   send(text: string, options: { forModel?: string; signal?: AbortSignal } = {}): AsyncIterable<SessionEvent> {
     this.idle();
+    // Sites the user pasted are theirs to fetch: web_fetch reads them without asking. Only what they typed counts
+    // (not a /skill's instructions in `forModel`, a file or a page), since links found there are where a planted
+    // instruction would send the model.
+    for (const key of pastedScopes(text)) this.always.add(key);
     this.running = true;
     const stop = new AbortController();
     this.current = stop;

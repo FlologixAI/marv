@@ -12,10 +12,11 @@ import { grep } from "./grep.ts";
 import { memory } from "./memory.ts";
 import { readFile } from "./read-file.ts";
 import { skill } from "./skill.ts";
+import { webFetch } from "./web-fetch.ts";
 import { writeFile } from "./write-file.ts";
 import { ToolError, type Tool, type ToolContext, type ToolResult } from "./types.ts";
 
-export const tools: Tool[] = [readFile, glob, grep, skill, editFile, writeFile, bash, memory, agent] as Tool[];
+export const tools: Tool[] = [readFile, glob, grep, webFetch, skill, editFile, writeFile, bash, memory, agent] as Tool[];
 
 /** Whether a call may run at the same time as its neighbours (subagents). */
 export const isParallelCall = (call: ToolCall) => tools.some((t) => t.name === call.name && t.parallel);

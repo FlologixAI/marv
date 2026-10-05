@@ -87,6 +87,10 @@ if (process.stdin.isTTY && process.stdout.isTTY) {
   filterMouseInput(process.stdin);
   process.stdout.write(MOUSE_ON);
   process.on("exit", () => process.stdout.write(MOUSE_OFF));
+  // The tab would otherwise say "bun" (the process actually running; Bun's process.title doesn't rename it).
+  // Push the current title, set ours (OSC 0), and pop it back on the way out.
+  process.stdout.write("\x1b[22;0t\x1b]0;marv\x07");
+  process.on("exit", () => process.stdout.write("\x1b[23;0t"));
 }
 
 let flush: () => Promise<void> = async () => {};
