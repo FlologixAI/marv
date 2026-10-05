@@ -172,6 +172,8 @@ export class MarvSession {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   /** Writes for a conversation the session has moved on from (its last save, its trajectory): flush() waits for them. */
   private flushing: Promise<void> = Promise.resolve();
+  /** The running turn's or compaction's work, until it has fully ended: close() waits for it. */
+  private working: Promise<unknown> | null = null;
 
   constructor(private readonly init: SessionInit) {
     this.problems = init.problems ?? [];
@@ -233,6 +235,7 @@ export class MarvSession {
     // must not depend on the client reading. Events wait in the queue until it does.
     const queue = new EventQueue<SessionEvent>();
     const work = this.runTurn(text, options.forModel ?? text, stop, options.signal, (event) => queue.push(event)).finally(() => queue.close());
+    this.track(work);
     return this.read(queue, stop, work);
   }
 
@@ -248,7 +251,7 @@ export class MarvSession {
     const stop = new AbortController();
     this.current = stop;
     try {
-      return await this.summarizeInto(focus, stop.signal);
+      return await this.track(this.summarizeInto(focus, stop.signal, this.provider, this.factory, this.info));
     } finally {
       this.current = null;
       this.running = false;
@@ -348,15 +351,28 @@ export class MarvSession {
     await Promise.all([this.save().catch(() => {}), this.log?.flush(), this.flushing]);
   }
 
-  /** Stops what's running, flushes, and closes the MCP servers the session started. */
+  /** Stops what's running, waits for it to wind down, flushes, and closes the MCP servers the session started. */
   async close(): Promise<void> {
     this.interrupt();
+    // A turn's end saves its conversation (and arms a save timer): waiting for it means that save is part of this
+    // flush, rather than one that lands after close() returned.
+    await this.working?.catch(() => {});
     await this.flush();
     if (this.init.ownsMcp) await this.init.mcp?.close();
   }
 
   private get cwd(): string {
     return this.init.cwd ?? shortenHome(this.init.root);
+  }
+
+  /** Remembers what's running until it settles (for close()); returns it unchanged. */
+  private track<T>(work: Promise<T>): Promise<T> {
+    this.working = work;
+    const done = () => {
+      if (this.working === work) this.working = null;
+    };
+    work.then(done, done);
+    return work;
   }
 
   private idle(): void {
@@ -425,12 +441,16 @@ export class MarvSession {
 
   /**
    * Adds a request's tokens and cost to the totals (the main agent's, subagents', summaries'). `factory` made the
-   * provider the request went to, and `info` has that model's prices: a turn passes its own, so a model switched
-   * to meanwhile neither prices nor counts as local the requests of the one the turn started with.
+   * provider the request went to, and `info` is what the model list said about its model when the turn started: a
+   * model switched to meanwhile neither prices nor counts as local the requests of the one the turn started with.
+   * Without `info` (the list hadn't answered yet), the session's current info prices it only if it's still about
+   * the same model; another model's prices would make the estimate wrong, so then there's no estimate.
    */
-  private count(usage: Usage, factory: ProviderFactory = this.factory, info: ModelInfo | undefined = this.info): void {
+  private count(usage: Usage, factory: ProviderFactory, info: ModelInfo | undefined): void {
     const local = Boolean(factory.local);
-    this.totals = { ...addUsage(this.totals, usage, info), local: (this.totals.requests === 0 || Boolean(this.totals.local)) && local };
+    const sameModel = factory.id === this.factory.id && factory.model === this.factory.model;
+    const prices = info ?? (sameModel ? this.info : undefined);
+    this.totals = { ...addUsage(this.totals, usage, prices), local: (this.totals.requests === 0 || Boolean(this.totals.local)) && local };
   }
 
   private note(role: "user" | "assistant", text: string): void {
@@ -446,9 +466,10 @@ export class MarvSession {
   private async summarizeInto(
     focus: string | undefined,
     signal: AbortSignal,
-    provider: Provider = this.provider,
-    factory: ProviderFactory = this.factory,
-    info: ModelInfo | undefined = this.info,
+    // Passed explicitly (no defaults): a turn's `info` can be undefined, and a default would swap in the current one.
+    provider: Provider,
+    factory: ProviderFactory,
+    info: ModelInfo | undefined,
   ): Promise<CompactResult> {
     if (this.conversation.length === 0) return { compacted: false, reason: "empty", error: "Nothing to compact yet." };
     const before = this.last;
@@ -534,13 +555,11 @@ export class MarvSession {
     this.flushing = Promise.all([this.flushing, this.save().catch(() => {})]).then(() => {});
   }
 
+  /** Saves shortly (a burst of turns is one write). When the timer fires it's saveNow(), so flush() waits for it too. */
   private scheduleSave(): void {
     if (!this.init.sessions) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      void this.save().catch(() => {});
-    }, SAVE_DELAY_MS);
+    this.saveTimer = setTimeout(() => this.saveNow(), SAVE_DELAY_MS);
   }
 
   /**
@@ -600,6 +619,13 @@ export class MarvSession {
           return;
         }
       }
+      // Stopped before the message was even sent (an already-aborted signal, or interrupt() during the waits above):
+      // it isn't sent, so the conversation stays as it was, and nothing is logged (a turn the model never saw would
+      // otherwise be in the trajectory, and the next message's tone would rate it).
+      if (stop.signal.aborted) {
+        reason = "interrupted";
+        return;
+      }
       // What this turn runs with, all read now: settings changed while it runs (configure(), or the model list
       // arriving and remaking the provider) apply from the next turn. That includes the factory, so a subagent
       // naming its own model gets it from the same provider as the turn, and its usage is counted (local or not) as
@@ -610,14 +636,6 @@ export class MarvSession {
       const record = (r: TrajectoryRecord) => log?.write(r);
       this.startTurnLog(log, turn, text, forModel, specs);
       main = new AgentRecorder(record, { turn, agent: "main" });
-
-      // Stopped before the message was even sent (an already-aborted signal, or interrupt() during the waits above):
-      // it isn't sent, so the conversation stays as it was.
-      if (stop.signal.aborted) {
-        main.finish("aborted");
-        reason = "interrupted";
-        return;
-      }
 
       // Nearly out of context: summarize first, so this message (and what follows) fits.
       if (this.nearlyFull()) {

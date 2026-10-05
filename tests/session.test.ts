@@ -629,6 +629,59 @@ describe("review fixes", () => {
     expect(session.usage().totals).toMatchObject({ requests: 1, cost: 4, estimated: true }); // $2 in + $2 out
   });
 
+  test("a turn that started without prices isn't priced with the next model's", async () => {
+    let session!: MarvSession;
+    const next: ProviderFactory = {
+      id: "openrouter",
+      model: "b/priced",
+      lookup: async () => ({ id: "b/priced", priceIn: 2, priceOut: 4 }),
+      make: () => new ScriptedProvider([]),
+    };
+    const unpriced = fixed({
+      name: "unpriced",
+      async *stream() {
+        session.configure({ provider: next }); // switched mid-turn...
+        await Bun.sleep(0); // ...and the new model's prices arrive before this request is counted
+        yield { type: "usage", usage: { promptTokens: 1_000_000, completionTokens: 0 } };
+        yield* say("Hi.");
+      },
+    });
+    session = makeSession(unpriced);
+    await collect(session.send("hi"));
+    expect(session.modelInfo?.priceIn).toBe(2);
+    expect(session.usage().totals).toMatchObject({ requests: 1, cost: undefined });
+  });
+
+  test("a turn stopped before its message is sent leaves nothing in the trajectory", async () => {
+    const store = new TrajectoryStore(dir);
+    const session = makeSession(new ScriptedProvider([say("Glad to help.")]), { trajectories: store });
+    await collect(session.send("hi", { signal: AbortSignal.abort() }));
+    await collect(session.send("thanks, perfect"));
+    await session.flush();
+    const log = (await readFile(store.open(project, session.id).path, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; text?: string });
+    expect(log.filter((r) => r.type === "turn_start").map((r) => r.text)).toEqual(["thanks, perfect"]);
+    expect(log.some((r) => r.type === "feedback")).toBe(false);
+  });
+
+  test("close() waits for the running turn, and nothing is saved after it returns", async () => {
+    const sessions = new SessionStore(dir);
+    let saves = 0;
+    const save = sessions.save.bind(sessions);
+    sessions.save = (saved) => (saves++, save(saved));
+    const session = makeSession(new Hanging(), { sessions });
+    const reader = session.send("go")[Symbol.asyncIterator]();
+    while (!(await reader.next()).value?.type.startsWith("text")); // the model is working
+    await session.close();
+    expect(session.busy).toBe(false);
+    const after = saves;
+    await Bun.sleep(300); // past the save delay: a timer armed after close() would have fired by now
+    expect(saves).toBe(after);
+    expect((await sessions.load(project, session.id))?.conversation[0]).toEqual({ role: "user", text: "go" });
+  });
+
   test("an onChange that throws doesn't break the session", async () => {
     const provider = new ScriptedProvider([say("Hi.")]);
     const factory = fixed(provider, { lookup: async () => ({ id: "test-model", context: 1000 }) });
