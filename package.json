@@ -4,7 +4,7 @@
   "description": "A terminal coding agent",
   "type": "module",
   "bin": {
-    "marv": "./src/cli.tsx"
+    "marv": "./bin/marv"
   },
   "scripts": {
     "dev": "bun src/cli.tsx",
