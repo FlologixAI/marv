@@ -38,7 +38,14 @@ export const grep: Tool<typeof input> = {
 
     let files: string[];
     if (isDirectory(target)) {
-      files = (await filesUnder(root, base, gitEnv)).filter((file) => isRegularFile(join(root, file)));
+      files = (await filesUnder(root, base, gitEnv)).filter((file) => {
+        // A symlink in the project can point outside it; resolveInProject refuses those, as read_file does.
+        try {
+          return isRegularFile(resolveInProject(root, file));
+        } catch {
+          return false;
+        }
+      });
     } else {
       requireRegularFile(target, base);
       files = [base];

@@ -273,6 +273,16 @@ describe("special files can't hang Marv", () => {
     expect(result.output).toContain("not a regular file");
   });
 
+  test("a folder-wide grep doesn't follow a symlink out of the project", async () => {
+    Bun.spawnSync(["git", "init", "-q"], { cwd: root }); // the git listing includes symlinks
+    await symlink(join(outside, "secret.txt"), join(root, "notes.txt"));
+    const call = { id: "s", name: "grep", arguments: JSON.stringify({ pattern: "top secret|greet" }) };
+    const result = await runTool(call, { root });
+    expect(result.output).not.toContain("top secret");
+    expect(result.output).not.toContain("notes.txt");
+    expect(result.output).toContain("src/greet.ts");
+  });
+
   test("grep skips a FIFO in a directory, and refuses one named explicitly", async () => {
     mkfifo(join(root, "src", "pipe"));
     const dir = await runTool({ id: "g", name: "grep", arguments: JSON.stringify({ pattern: "greet", path: "src" }) }, { root });

@@ -63,7 +63,8 @@ export async function listProjectFiles(
   } else {
     paths = [];
     for await (const path of new Bun.Glob("**/*").scan({ cwd: root, dot: true, onlyFiles: true })) {
-      if (!path.split(sep).some((part) => IGNORED_DIRS.has(part))) paths.push(path.split(sep).join("/"));
+      if (path.split(sep).some((part) => IGNORED_DIRS.has(part)) || !isRegularFile(join(root, path))) continue;
+      paths.push(path.split(sep).join("/"));
     }
   }
   return paths.sort();
