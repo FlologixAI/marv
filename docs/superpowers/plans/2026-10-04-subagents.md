@@ -1881,7 +1881,7 @@ export const agent: Tool<typeof input> = {
   name: "agent",
   description:
     "Hand a self-contained task to a subagent: a separate agent with a fresh context and its own tools, which does the task and returns only its final report. " +
-    "Several agent calls in one reply run in parallel. The available types are listed in the system prompt.",
+    "Several agent calls in a row run in parallel (up to 4 at once). The available types are listed in the system prompt.",
   input,
   kind: "execute",
   parallel: true,
