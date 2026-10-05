@@ -48,7 +48,7 @@ describe("implicit feedback from the user's next message", () => {
     ["Perfect. But the tests fail now.", -1], // a correction later in the message still counts
     ["it still doesn’t work", -1], // curly apostrophe
     ["this isn’t working", -1],
-  ])("praise, then the next task: %p", (text, score) => {
+  ] as [string, 1 | -1][])("praise, then the next task: %p", (text, score) => {
     expect(classifyReply(text)?.score).toBe(score);
   });
 
