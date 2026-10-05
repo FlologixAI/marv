@@ -193,7 +193,10 @@ function Blocks({ tokens, depth, gap = 1 }: { tokens: Token[]; depth: number; ga
 }
 
 const lex = (text: string) => marked.lexer(text, { gfm: true });
-const FENCE = /^ {0,3}(```|~~~)/;
+/** A fence line: its run of ``` or ~~~ (3 or more), then the rest (a language, or nothing when it closes). */
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+/** A list item's first line: "- ", "* ", "+ ", "1. " or "1) ". */
+const LIST_ITEM = /^ {0,3}([-*+]|\d{1,9}[.)])(\s|$)/;
 
 /**
  * Parses a reply as it streams in without re-parsing all of it each time:
@@ -216,15 +219,32 @@ export function createStreamLexer() {
       done = "";
       doneTokens = [];
     }
-    // Find the last block boundary after the parsed prefix.
+    // Find the last block boundary after the parsed prefix: a blank line outside any fence or HTML comment,
+    // before a line that starts a new block (not an indented continuation, and not another item of a list: a
+    // loose list split there would render as separate lists, and jump when the reply is parsed whole).
     let boundary = done.length;
-    let inFence = false;
+    let fence: { char: string; length: number } | null = null;
+    let inComment = false;
     let lineStart = done.length;
     for (let nl = text.indexOf("\n", lineStart); nl !== -1; nl = text.indexOf("\n", lineStart)) {
       const line = text.slice(lineStart, nl);
-      if (FENCE.test(line)) inFence = !inFence;
-      const next = text[nl + 1];
-      if (line.trim() === "" && !inFence && next !== undefined && !/\s/.test(next)) boundary = nl + 1;
+      const marker = FENCE.exec(line);
+      if (fence) {
+        // Closed only by the same character, at least as long, with nothing after it (```sh inside ````markdown,
+        // or ```js after ```js, doesn't close it).
+        if (marker && marker[1]![0] === fence.char && marker[1]!.length >= fence.length && marker[2]!.trim() === "") fence = null;
+      } else if (inComment) {
+        if (line.includes("-->")) inComment = false;
+      } else if (marker && !(marker[1]![0] === "`" && marker[2]!.includes("`"))) {
+        // (A backtick fence's info string can't contain a backtick: "```x``` is…" is inline code, not a fence.)
+        fence = { char: marker[1]![0]!, length: marker[1]!.length };
+      } else if (/^ {0,3}<!--/.test(line) && !line.includes("-->")) {
+        inComment = true;
+      }
+      // Only a complete next line can decide (cuts are cached for good): "3" still arriving may become "3. third".
+      const nextEnd = text.indexOf("\n", nl + 1);
+      const next = nextEnd === -1 ? null : text.slice(nl + 1, nextEnd);
+      if (line.trim() === "" && !fence && !inComment && next && !/^\s/.test(next) && !LIST_ITEM.test(next)) boundary = nl + 1;
       lineStart = nl + 1;
     }
     if (boundary > done.length) {

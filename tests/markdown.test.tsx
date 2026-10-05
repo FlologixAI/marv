@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Box } from "ink";
 import { cleanup, render } from "ink-testing-library";
 import stripAnsi from "strip-ansi";
-import { marked } from "marked";
+import { marked, type Token } from "marked";
 import { createStreamLexer, Markdown } from "../src/ui/Markdown.tsx";
 
 afterEach(cleanup);
@@ -118,6 +118,41 @@ describe("createStreamLexer (parsing a reply as it streams in)", () => {
     const lists = stream(text).filter((t) => t.type === "list");
     expect(JSON.stringify(lists)).toContain("more about item one");
     expect(stream(text).some((t) => t.type === "code")).toBe(false); // not mistaken for an indented code block
+  });
+
+  test("while it streams, every partial reply parses like the same text parsed whole", () => {
+    // Random replies built from tricky blocks, streamed in random chunks. (Left out: a reference link whose
+    // definition comes later, which no incremental parse can know; finished replies are parsed whole anyway.)
+    const BLOCKS = [
+      "Some paragraph text with `code` and **bold**.",
+      "- item one\n- item two\n  - nested\n- item three",
+      "1. first\n\n2. second\n\n3. third", // a loose list: one list, not three
+      "- loose item\n\n  continued para\n\n- next",
+      "```ts\nconst a = 1;\n\nconst b = 2;\n```",
+      "~~~\nraw ``` inside\n\nmore\n~~~",
+      "```js\nconsole.log(1)\n```js\n\n# not a heading\n\nstill code\n```", // ```js doesn't close it
+      "````markdown\n## Install\n\n```sh\nbun install\n\nbun run dev\n```\n\n- list in md\n````", // a shorter fence inside
+      "| a | b |\n|---|---|\n| 1 | 2 |",
+      "## Heading",
+      "> quote line\n>\n> more quote",
+      "<!--\n\nhidden comment\n\n-->",
+      "```const x``` is inline code at line start",
+    ];
+    let seed = 777;
+    const random = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    const shape = (tokens: Token[]) =>
+      tokens
+        .filter((t) => t.type !== "space")
+        .map((t) => JSON.stringify({ type: t.type, text: (t as { text?: string }).text, items: (t as { items?: unknown[] }).items?.length }));
+    for (let doc = 0; doc < 120; doc++) {
+      const text = Array.from({ length: 2 + Math.floor(random() * 4) }, () => BLOCKS[Math.floor(random() * BLOCKS.length)]).join("\n\n");
+      const lex = createStreamLexer();
+      for (let at = 0; at < text.length; ) {
+        at = Math.min(text.length, at + 1 + Math.floor(random() * 12));
+        const prefix = text.slice(0, at);
+        expect({ prefix, tokens: shape(lex(prefix)) }).toEqual({ prefix, tokens: shape(marked.lexer(prefix)) });
+      }
+    }
   });
 
   test("starts over when the text is replaced (a new reply)", () => {
