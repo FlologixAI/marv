@@ -30,7 +30,8 @@ export interface SubagentInput {
 
 const STOPPED: Record<string, string> = {
   aborted: "Interrupted by the user before it finished.",
-  max_steps: `It hit its ${SUBAGENT_MAX_STEPS}-step limit before finishing.`,
+  // Its history is gone once it ends, so "continue" can't resume it (runAgent's own message says to).
+  max_steps: `It hit its ${SUBAGENT_MAX_STEPS}-step limit before finishing. To go on, start a new subagent with what remains.`,
   length: "Its last reply was cut off by the model's output limit.",
   error: "It stopped on an error:",
 };
@@ -169,6 +170,8 @@ export async function runSubagent(input: SubagentInput, ctx: ToolContext): Promi
           break;
         case "done":
           reason = event.reason;
+          // The loop's step-limit message is written for the main agent ("say continue"); STOPPED has the right one.
+          if (reason === "max_steps") error = undefined;
           break;
       }
     }

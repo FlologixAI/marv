@@ -8,7 +8,7 @@ import { GENERAL_PURPOSE, type AgentType } from "../src/agents.ts";
 import type { MemoryPaths } from "../src/memory.ts";
 import type { AgentEvent, ChatTurn, Provider, StreamOptions, ToolCall, Usage } from "../src/provider/types.ts";
 import { sandboxAvailable } from "../src/sandbox.ts";
-import { subagentContext } from "../src/subagent.ts";
+import { SUBAGENT_MAX_STEPS, subagentContext } from "../src/subagent.ts";
 import { isParallelCall, runTool } from "../src/tools/index.ts";
 import type { AgentHost, AgentProgress, ApprovalRequest, Decision, ToolContext } from "../src/tools/types.ts";
 import * as worktreeModule from "../src/worktree.ts";
@@ -121,6 +121,15 @@ describe("the agent tool", () => {
     expect(result.output).toStartWith("Partial findings.");
     expect(result.output).toContain("[Marv: It stopped on an error: Rate limited]");
     expect(result.summary).toStartWith("stopped ·");
+  });
+
+  test("a subagent at its step limit says to start a new one, not to say \"continue\" (its history is gone)", async () => {
+    const steps = Array.from({ length: SUBAGENT_MAX_STEPS }, (_, i) => useTool(`r${i}`, "read_file", { path: "notes.txt" }));
+    const { host } = makeHost(new ScriptedProvider(steps));
+    const result = await runTool(agentCall({ description: "endless", prompt: "p" }), ctxWith(host).ctx);
+    expect(result.output).toContain(`It hit its ${SUBAGENT_MAX_STEPS}-step limit before finishing`);
+    expect(result.output).toContain("start a new subagent");
+    expect(result.output).not.toContain("continue");
   });
 
   test("a type's model gets its own provider", async () => {
