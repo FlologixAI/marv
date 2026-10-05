@@ -120,6 +120,8 @@ describe("sandboxArgs", () => {
       expect(joined).toContain(`--ro-bind /dev/null ${secret}`);
       // After the toolchain mounts, so /dev/null sits on top of the real file.
       expect(args.lastIndexOf(secret)).toBeGreaterThan(Math.max(args.lastIndexOf("/home/me/.cargo"), args.lastIndexOf("/home/me/.config/git")));
+      // After every other mount too (project, extra read-only folders), so no later mount can show the file again.
+      expect(args.lastIndexOf(secret)).toBeGreaterThan(args.findIndex((arg, i) => arg === "--bind" && args[i + 1] === base.root));
     }
     // Ones that don't exist aren't mounted (bwrap would have to create them).
     expect(sandboxArgs({ ...base, exists: (p) => p.endsWith(".cargo"), stat: () => null, network: false }).join(" ")).not.toContain("/dev/null");

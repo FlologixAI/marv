@@ -161,15 +161,15 @@ export function sandboxArgs({
   const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", home];
   const mounts = TOOLCHAINS.map((dir) => join(home, dir)).filter((full) => exists(full));
   for (const full of mounts) args.push("--ro-bind", full, full);
-  // On top of the toolchain mounts, so the empty file hides the real one.
-  const masks = new Set(CREDENTIALS.flatMap((file) => credentialMasks(join(home, file), mounts, stat, realpath)));
-  for (const mask of masks) args.push("--ro-bind", "/dev/null", mask);
   // Bind the resolved path (what was checked), at the path the caller gave. A folder around the project goes
   // first: mounted after it, it would cover the project and silently turn it read-only.
   const extras = readOnly.map((dir) => ({ dir, ...resolveExtra(dir, home, root) }));
   for (const { dir, real } of extras.filter((e) => e.around)) args.push("--ro-bind", real, dir);
   args.push("--bind", root, root);
   for (const { dir, real } of extras.filter((e) => !e.around)) args.push("--ro-bind", real, dir);
+  // Last, on top of every other mount, so the empty file hides the real one and no later mount shows it again.
+  const masks = new Set(CREDENTIALS.flatMap((file) => credentialMasks(join(home, file), mounts, stat, realpath)));
+  for (const mask of masks) args.push("--ro-bind", "/dev/null", mask);
   if (!network) args.push("--unshare-net");
   args.push(
     "--unshare-pid", // its processes can't see or signal ours, and all die with it
