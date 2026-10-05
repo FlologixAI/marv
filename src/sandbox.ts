@@ -50,6 +50,12 @@ interface SandboxOptions {
    * which stays writable).
    */
   readOnly?: string[];
+  /**
+   * Paths inside the project that don't exist yet and must stay that way: each gets an empty read-only folder
+   * mounted on it (a project without .git, so a command can't create a repository whose config git would run
+   * outside the sandbox). bwrap leaves the empty mount point behind; the caller removes it.
+   */
+  placeholders?: string[];
   /** The file system, injectable for tests: whether a path exists (following symlinks), */
   exists?: (path: string) => boolean;
   /** what the path itself is (not following a final symlink), */
@@ -154,6 +160,7 @@ export function sandboxArgs({
   network,
   path,
   readOnly = [],
+  placeholders = [],
   exists = existsSync,
   stat = lstatKind,
   realpath = realpathSync,
@@ -167,6 +174,7 @@ export function sandboxArgs({
   for (const { dir, real } of extras.filter((e) => e.around)) args.push("--ro-bind", real, dir);
   args.push("--bind", root, root);
   for (const { dir, real } of extras.filter((e) => !e.around)) args.push("--ro-bind", real, dir);
+  for (const path of placeholders) args.push("--tmpfs", path, "--remount-ro", path);
   // Last, on top of every other mount, so the empty file hides the real one and no later mount shows it again.
   const masks = new Set(CREDENTIALS.flatMap((file) => credentialMasks(join(home, file), mounts, stat, realpath)));
   for (const mask of masks) args.push("--ro-bind", "/dev/null", mask);

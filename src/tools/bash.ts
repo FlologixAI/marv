@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { lstatSync } from "node:fs";
+import { rmdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -6,6 +7,15 @@ import { sandboxArgs, sandboxAvailable } from "../sandbox.ts";
 import type { Tool } from "./types.ts";
 
 const DEFAULT_TIMEOUT_S = 120;
+/** Whether anything is at `path`, a dangling symlink included. */
+const lexists = (path: string) => {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
 /** Appended when a confined command fails on the read-only .git, so the model learns how to do it. */
 const GIT_HINT = "Marv: .git is read-only for commands that run without asking. To change the repository, run the command again with git_write: true (the user is asked).";
 const MAX_TIMEOUT_S = 600;
@@ -32,6 +42,7 @@ interface RunOptions {
   timeoutMs: number;
   signal?: AbortSignal;
   readOnly?: string[];
+  placeholders?: string[];
   /** The home folder the sandbox hides (default: the user's); tests pass a fake one. */
   home?: string;
 }
@@ -43,11 +54,11 @@ const hasSetsid = Bun.which("setsid") !== null;
  * Sandboxed: inside bwrap (see src/sandbox.ts). Not sandboxed: still with a
  * minimal environment, so API keys don't leak into commands.
  */
-export async function runCommand({ command, root, sandbox, network, timeoutMs, signal, readOnly, home = homedir() }: RunOptions): Promise<CommandResult> {
+export async function runCommand({ command, root, sandbox, network, timeoutMs, signal, readOnly, placeholders, home = homedir() }: RunOptions): Promise<CommandResult> {
   const path = process.env.PATH ?? "/usr/bin:/bin";
   const script = `exec 2>&1\n${command}`; // stderr into stdout, so the output stays in order
   const argv = sandbox
-    ? ["bwrap", ...sandboxArgs({ root, home, network, path, readOnly }), "--", "bash", "-c", script]
+    ? ["bwrap", ...sandboxArgs({ root, home, network, path, readOnly, placeholders }), "--", "bash", "-c", script]
     : // setsid: its own process group, so killing it also kills everything it started.
       [...(hasSetsid ? ["setsid"] : []), "bash", "-c", script];
 
@@ -165,19 +176,19 @@ export const bash: Tool<typeof input> = {
 
   async run({ command, network = false, timeout = DEFAULT_TIMEOUT_S }, { root, signal, sandbox = true, readOnly = [], confined }) {
     // A command that runs without asking sees .git read-only: git runs hooks and config from it outside any sandbox
-    // (the user's next commit, their editor), so a planted hook would escape. Without .git, there's nothing to protect.
+    // (the user's next commit, their editor), so a planted hook would escape. Without a .git, it can't create one
+    // either (an empty read-only placeholder sits there), or `git status` in that folder would run its config.
     const gitDir = join(root, ".git");
-    const lockGit = confined && existsSync(gitDir);
-    const result = await runCommand({
-      command,
-      root,
-      sandbox: sandbox && sandboxAvailable(),
-      network,
-      timeoutMs: timeout * 1000,
-      signal,
-      readOnly: lockGit ? [...readOnly, gitDir] : readOnly,
-    });
-    if (lockGit && result.exitCode !== 0 && result.output.includes("Read-only file system")) result.output += `\n${GIT_HINT}\n`;
+    const hadGit = lexists(gitDir);
+    const guard = confined ? (hadGit ? { readOnly: [...readOnly, gitDir] } : { readOnly, placeholders: [gitDir] }) : { readOnly };
+    let result: CommandResult;
+    try {
+      result = await runCommand({ command, root, sandbox: sandbox && sandboxAvailable(), network, timeoutMs: timeout * 1000, signal, ...guard });
+    } finally {
+      // bwrap leaves the placeholder's empty mount point; rmdir only removes it while it's empty.
+      if (confined && !hadGit) await rmdir(gitDir).catch(() => {});
+    }
+    if (confined && /\.git\b.*Read-only file system/.test(result.output)) result.output += `\n${GIT_HINT}\n`;
     const lines = result.output.trimEnd() === "" ? 0 : result.output.trimEnd().split("\n").length;
     const summary = result.timedOut
       ? `timed out after ${timeout}s`

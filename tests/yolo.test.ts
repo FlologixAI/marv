@@ -131,10 +131,21 @@ describe("bash", () => {
       expect(await readFile(join(root, ".git", "description"), "utf8")).toBe("ok\n");
     });
 
-    test("in a project without .git, commands still run", async () => {
+    test("in a project without .git, commands still run, and leave no .git behind", async () => {
       await rm(join(root, ".git"), { recursive: true });
       expect((await run("bash", { command: "echo fine" })).output).toContain("fine");
       expect(asked).toHaveLength(0);
+      expect(existsSync(join(root, ".git"))).toBe(false);
+    });
+
+    test("in a project without .git, a command that runs without asking can't create one (its config would run outside the sandbox)", async () => {
+      await rm(join(root, ".git"), { recursive: true });
+      const result = await run("bash", { command: "mkdir -p .git/hooks && echo evil > .git/config; git init -q; echo done" });
+      expect(existsSync(join(root, ".git"))).toBe(false);
+      expect(result.output).toContain("git_write: true");
+      // With git_write (which asks), it can.
+      await run("bash", { command: "git init -q && echo ok", git_write: true });
+      expect(existsSync(join(root, ".git", "HEAD"))).toBe(true);
     });
   });
 });
