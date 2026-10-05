@@ -123,6 +123,7 @@ export class OllamaProvider implements Provider {
 
     const calls: ToolCall[] = [];
     let reason: string | undefined;
+    let complete = false;
     try {
       for await (const line of parseNDJSON(response.body!)) {
         if (line.error) {
@@ -141,6 +142,7 @@ export class OllamaProvider implements Provider {
           });
         }
         if (line.done) {
+          complete = true;
           reason = line.done_reason;
           yield { type: "usage", usage: { promptTokens: line.prompt_eval_count ?? 0, completionTokens: line.eval_count ?? 0 } };
         }
@@ -151,6 +153,12 @@ export class OllamaProvider implements Provider {
       return;
     }
 
+    // Without its done line the reply is partial (a proxy closed the stream): don't pass it off as complete.
+    if (!complete) {
+      if (signal?.aborted) return;
+      yield { type: "error", message: `${LABEL}: the stream ended early, before the reply was complete. Try again.` };
+      return;
+    }
     for (const call of calls) yield { type: "tool_call", call };
     yield { type: "done", reason };
   }

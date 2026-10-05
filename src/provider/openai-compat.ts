@@ -122,9 +122,15 @@ export class OpenAICompatProvider implements Provider {
     // Tool calls arrive in fragments keyed by index; they're only complete at the end.
     const pending = new Map<number, ToolCall>();
     let reason: string | undefined;
+    // Whether the server said the reply was complete ([DONE] or a finish_reason). A proxy can close the stream
+    // cleanly halfway: then the text is partial and a tool call's arguments are cut off.
+    let complete = false;
     try {
       for await (const data of parseSSE(response.body!)) {
-        if (data === "[DONE]") break;
+        if (data === "[DONE]") {
+          complete = true;
+          break;
+        }
         const chunk = JSON.parse(data) as Chunk;
         // Errors can also arrive mid-stream, after the 200 status was already sent.
         if (chunk.error) {
@@ -144,7 +150,10 @@ export class OpenAICompatProvider implements Provider {
           };
         }
         const choice = chunk.choices?.[0];
-        if (choice?.finish_reason) reason = choice.finish_reason;
+        if (choice?.finish_reason) {
+          reason = choice.finish_reason;
+          complete = true;
+        }
         const delta = choice?.delta;
         const thinking = delta?.reasoning ?? delta?.reasoning_content;
         if (thinking) yield { type: "thinking_delta", text: thinking };
@@ -164,6 +173,11 @@ export class OpenAICompatProvider implements Provider {
       return;
     }
 
+    if (!complete) {
+      if (signal?.aborted) return;
+      yield { type: "error", message: `${label}: the stream ended early, before the reply was complete. Try again.` };
+      return;
+    }
     for (const [index, call] of [...pending].sort(([a], [b]) => a - b)) {
       yield { type: "tool_call", call: { ...call, id: call.id || `call_${index}` } };
     }

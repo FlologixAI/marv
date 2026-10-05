@@ -111,4 +111,9 @@ describe("OllamaProvider", () => {
   test("exposes its context size", () => {
     expect(provider("http://localhost:11434").contextLength).toBe(32768);
   });
+  test("a stream that ends without its done line is an error, not a finished reply", async () => {
+    const url = serve(() => ndjson(msg({ content: "Writing the fi" })));
+    const events = await collect(provider(url).stream([{ role: "user", text: "hi" }]));
+    expect(events.map((e) => e.type)).toEqual(["text_delta", "error"]);
+  });
 });

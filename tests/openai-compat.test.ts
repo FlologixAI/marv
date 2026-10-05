@@ -187,6 +187,14 @@ describe("OpenAICompatProvider", () => {
     expect(message.length).toBeLessThan(200);
   });
 
+  test("a stream that ends before the reply is complete is an error, not a finished reply", async () => {
+    const toolFragment = { choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "write_file", arguments: '{"path":"a.ts","con' } }] } }] };
+    const url = serve(() => sse(delta("Writing the fi"), toolFragment)); // a proxy closed it: no finish_reason, no [DONE]
+    const events = await collect(provider(url).stream([{ role: "user", text: "hi" }]));
+    expect(events.map((e) => e.type)).toEqual(["text_delta", "error"]); // the cut-off call never runs
+    expect(events.at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("ended early") });
+  });
+
   test("explains when the server can't be reached", async () => {
     const events = await collect(provider("http://localhost:1/v1").stream([{ role: "user", text: "hi" }]));
     expect(events).toEqual([{ type: "error", message: expect.stringContaining("Can't reach TestRouter at http://localhost:1") }]);
