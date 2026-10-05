@@ -11,6 +11,7 @@ Marv is written in TypeScript on [Bun](https://bun.sh), with an [Ink](https://gi
 - **Sandboxed commands.** On Linux, commands run in [bubblewrap](https://github.com/containers/bubblewrap): only the project folder is writable, your home folder (keys, SSH, Marv's own config) is hidden, there's no network unless a command asks for it, and API keys never reach the command.
 - **Any model.** OpenRouter or a local Ollama model, with a searchable model picker showing prices. Switch with `/model`.
 - **Skills.** Drop a `SKILL.md` into `.marv/skills/` (or `~/.marv/skills/`) and Marv loads it when a task matches, or run it yourself with `/<skill-name>`.
+- **Subagents.** Marv can hand a task to a fresh agent with its own context, which reports back when it's done, so the files it read don't fill up the conversation. Several can run in parallel, each in its own git worktree if they change files. Agent types are Markdown files, compatible with Claude Code's.
 - **Memory.** Marv remembers your preferences and project facts across sessions. Every change it makes to its memory needs your approval.
 - **Sessions.** Every conversation is saved; `marv -c` continues the last one, `/resume` picks an earlier one.
 - **Long conversations.** When the context window fills up, Marv summarizes the conversation and carries on (`/compact` does it on demand). Requests reuse the provider's prompt cache wherever possible.
@@ -63,6 +64,7 @@ Type what you want in plain language, for example:
 | `/config` | Show the current configuration |
 | `/think` | Let thinking models reason before answering (`/think on`, `/think off`) |
 | `/skills` | List available skills; run one with `/<skill-name> <request>` |
+| `/agents` | List the subagent types Marv can start |
 | `/memory` | Show what Marv remembers |
 | `/remember` | Save a note to memory (`/remember <note>`, or `/remember project: <note>`) |
 | `/forget` | Remove a memory (`/forget <text from it>`) |
@@ -81,6 +83,7 @@ Type `/` to open the command menu: ↑/↓ to choose, Enter to run, Tab or → t
 |---|---|
 | Esc | Stop a reply or a running tool |
 | ctrl+c | Stop / clear the input / press twice to quit |
+| ctrl+o | Show or hide what subagents did (their last steps) |
 | PgUp / PgDn, mouse wheel | Scroll the conversation |
 | Drag with the mouse | Select text; it's copied when you let go (drag past the edge to scroll) |
 | ↑ / ↓ | Previous inputs |
@@ -99,10 +102,11 @@ marv --help       show the help
 
 Marv is built so that you stay in control of what changes on your machine:
 
-1. **Reading is free; changing needs approval.** Reading and searching files never asks. Editing or writing a file, running a command, and changing memory always show you exactly what will happen first. "Don't ask again" covers the rest of the session only: all file edits, or one exact command.
+1. **Reading is free; changing needs approval.** Reading and searching files never asks. Editing or writing a file, running a command, and changing memory always show you exactly what will happen first (the one exception is a subagent in its own worktree; see 5). "Don't ask again" covers the rest of the session only: all file edits, or one exact command.
 2. **Paths are confined to the project.** Tools refuse anything outside the folder Marv was started in, including through symlinks.
 3. **Commands run in a sandbox.** The system is read-only and the home folder is hidden (toolchains like `~/.bun` and your git config are mounted read-only). The project folder is the only writable place, and there's no network unless the command asks for it, which the approval prompt shows. The environment starts empty, so API keys can't leak into commands.
 4. **Memory changes are approved too.** Memory comes back in every future session, so an instruction planted by a malicious file and saved there would be a persistent prompt injection. You see every memory before it's saved.
+5. **Subagents ask like Marv does, or work in a worktree.** A subagent in the project folder asks before each change, and the prompt says which one is asking. One in its own git worktree is approved once when it starts; inside its sandboxed worktree its edits and commands then run without asking, except commands that want the network (and with the sandbox off, everything asks). It can't touch the repository's `.git` (it's read-only in the sandbox, so no commits, branch moves, hooks or config), and when it's done, Marv commits its changes to its branch, without running any of the repository's hooks. Its work comes back as a branch you (or Marv, with your approval) review and merge. Esc at an approval prompt declines everything waiting and stops the run.
 
 ## Skills
 
@@ -120,6 +124,23 @@ description: How to write release notes for this project. Use when asked for rel
 
 Put it in `.marv/skills/<name>/` (this project) or `~/.marv/skills/<name>/` (all projects). Only each skill's name and description go into the system prompt; Marv loads the full instructions when a request matches. A skill folder can also hold scripts and reference files. Write descriptions that name the task and when to use it: that's how the model decides.
 
+## Agents
+
+An agent type is a Markdown file, in the same format as Claude Code's agent files:
+
+```markdown
+---
+name: code-reviewer
+description: Reviews a change for bugs and missing tests. Use after implementing a task, before merging it.
+tools: read_file, grep, glob, bash   # optional; Claude Code names (Read, Grep, Edit…) work too
+model: inherit                       # optional; or a model id on the same provider
+---
+
+You are a careful code reviewer. Read the diff, then the code around it…
+```
+
+Put it in `.marv/agents/<name>.md` (this project) or `~/.marv/agents/<name>.md` (all projects); there's also a built-in `general-purpose` agent with every tool. A subagent starts with a fresh conversation that holds only the task it was given, and never gets the `agent` or `memory` tools. Only names and descriptions go into the system prompt, so write descriptions that say when to use the agent. A reference like `superpowers:code-reviewer` finds `code-reviewer`, so skills written for Claude Code work unchanged. `/agents` lists what loaded, and why any file didn't.
+
 ## Files and settings
 
 | Path | Contents |
@@ -130,6 +151,9 @@ Put it in `.marv/skills/<name>/` (this project) or `~/.marv/skills/<name>/` (all
 | `~/.marv/memory/projects/<project>.md` | Memory for one project (never stored in the repo) |
 | `~/.marv/skills/` | Your personal skills |
 | `.marv/skills/` | The project's skills |
+| `~/.marv/agents/` | Your personal agent types |
+| `.marv/agents/` | The project's agent types |
+| `~/.marv/worktrees/<project>/` | Subagents' worktrees while they run (removed when each finishes; its branch stays) |
 | `AGENTS.md` | Project instructions, read into the system prompt at startup |
 
 | Environment variable | Effect |
@@ -152,9 +176,10 @@ bun run typecheck    # tsc --noEmit
 
 The architecture and conventions are documented in [`CLAUDE.md`](CLAUDE.md) (also available as `AGENTS.md`): the provider seam, the agent loop, the tool registry, the prompt-cache rules, and how the TUI renders.
 
-Two dependencies are patched (in [`patches/`](patches/), applied by `bun install`):
+Three dependencies are patched (in [`patches/`](patches/), applied by `bun install`):
 
 - **ink**: adds a `transformOutput` hook and `repaint()` (for drawing the mouse-selection highlight), skips drawing off-screen nodes, and skips a whole-tree search for `<Static>` on every update. Long sessions would otherwise slow every frame.
 - **string-width**: caches results and skips a costly emoji regex for characters that can't be emoji, which was the biggest cost while scrolling.
+- **ink-text-input**: ignores every ctrl+letter, so shortcuts like ctrl+o don't type the letter into the prompt.
 
 Edit a patch with `bun patch <package>`, change the files in `node_modules/<package>`, then run `bun patch --commit node_modules/<package>`.

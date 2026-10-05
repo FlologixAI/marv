@@ -1,7 +1,7 @@
 # Subagents (Milestone 9) — design
 
 Date: 2026-10-04
-Status: approved in brainstorming, awaiting spec review
+Status: implemented (branch `milestone-9-subagents`); notes below updated where the implementation differs
 
 ## Goal
 
@@ -62,15 +62,16 @@ Modeled on `src/skills.ts`.
   name: code-reviewer            # required; lowercase letters, digits, dashes
   description: Use when …        # required; how the model knows when to use it
   tools: read_file, grep, glob   # optional; comma string or YAML list; default = all subagent tools
-  model: inherit                 # optional; "inherit" (default) or a model id on the same provider
+  model: inherit                 # optional; "inherit" (default; Claude Code's sonnet/opus/haiku mean the same) or a model id on the same provider
   ---
   You are a Senior Code Reviewer…
   ```
 
   `tools` also accepts Claude Code's names, mapped to Marv's:
-  `Read`→`read_file`, `Grep`→`grep`, `Glob`→`glob`, `Edit`→`edit_file`,
-  `Write`→`write_file`, `Bash`→`bash`. An unknown tool name makes the file a
-  reported problem (not silently dropped). Asking for `agent` or `memory` is
+  `Read`→`read_file`, `Grep`→`grep`, `Glob`→`glob`, `Edit`/`MultiEdit`→`edit_file`,
+  `Write`→`write_file`, `LS`→`glob`, `Bash`→`bash`, `Skill`→`skill`. An
+  unreadable file is reported like a broken one. An unknown tool name makes
+  the file a reported problem (not silently dropped). Asking for `agent` or `memory` is
   also a problem: subagents never get those.
 - **Built-in `general-purpose`:** always available, every subagent tool, no extra body.
   A file named `general-purpose` overrides it.
@@ -78,13 +79,15 @@ Modeled on `src/skills.ts`.
   exist), `edit_file`, `write_file`, `bash`. Never `agent` (no nesting) or
   `memory` (memory persists across sessions; only the main agent changes it,
   with approval).
-- **Subagent system prompt:** a shared preamble (working directory, date, tool
+- **Subagent system prompt:** the agent file's body (or "You are a general-purpose
+  coding agent."), then a shared preamble (working directory, date, tool
   guidance, the project's `AGENTS.md`, the skills list when there are skills,
   and: "your final message is your report to the agent that called you; be
   complete, the user won't see your steps"; for worktree runs also: "you are in
   a fresh git worktree on branch X; gitignored files such as node_modules and
   build output are absent, so install dependencies (bash with network: true)
-  before building; you can't commit, Marv commits your changes when you finish") followed by the agent file's body. No
+  before building; you can't commit, Marv commits your changes when you finish"; also: start
+  with a one-line summary, nobody can answer questions, start narrow). No
   Memory section.
 - **Lookup:** exact name first; if not found and the name has a `prefix:`,
   retry without it (`superpowers:code-reviewer` → `code-reviewer`), so
@@ -113,20 +116,23 @@ agent({
 
 1. Resolve the type; build the subagent's system prompt and tool specs
    (deterministic: the same type produces the same bytes all day, so repeated
-   dispatches of one type hit the cache). Provider: the parent's, or
-   `createProvider({ ...config, model })` when the type sets a model.
+   dispatches of one type hit the cache). Provider: `AgentHost.providerFor(model)`,
+   the parent's, or a new one when the type sets a model.
 2. If `isolation: "worktree"`, create the worktree (section 3).
 3. `runAgent()` with history `[{ role: "user", text: prompt }]`,
    `maxSteps: 50`, the parent's abort signal, and a `runTool` whose context has
    the subagent's `root`, `approve` (section 4) and tools.
 4. Consume events: count tool calls, track the current action, add usage to
-   the session totals, and report each change through `ctx.onProgress`.
+   the session totals, and report each change through `AgentHost.onProgress`.
 5. Finish the worktree if any (section 3).
 6. Return `output` = the last assistant message (+ the branch line for
-   worktrees). Summary: `done · 6 tools · 41.2k tokens`. If the subagent ended
+   worktrees). Marv's own lines in the output (why it stopped, the branch) are
+   prefixed `Marv:`, so the subagent's text can't pass for them. Summary:
+   `done · 6 tools · 41.2k tokens · "<first line>"`. If the subagent ended
    with `error`, `max_steps`, `aborted` or `length`, return whatever text it
    had plus a note saying why, with `isError: true`. If it ended `declined`,
-   set `declined: true` (section 4).
+   set `declined: true` (section 4), unless the run was also aborted (Esc
+   declines what's waiting, then stops): that's reported as the interrupt.
 
 New `ToolContext` fields: `callId` (set by `runTool`), `readOnly` (extra
 folders bash may read, e.g. a worktree's `.git`), and `agentHost?: AgentHost` (agent types,
@@ -139,8 +145,10 @@ subagents. A subagent's approval requests carry `ApprovalRequest.agent` (who ask
 - `Tool` gains `parallel?: true` (set only on `agent`). `runAgent` receives a
   predicate `isParallel(call)`.
 - A **run of consecutive parallel calls** in one reply starts together, at most
-  4 running at once (`MAX_PARALLEL_AGENTS`), the rest queued. `tool_start` is
-  yielded for each as it starts; `tool_end` as each finishes.
+  4 running at once (`MAX_PARALLEL`), the rest queued. `tool_start` is
+  yielded for each as it starts; `tool_end` as each finishes. A call runs only
+  after its `tool_start` has been delivered, and none starts after an abort or
+  a "no" (queued calls get a "not run" result).
 - Results are appended to history **in call order**, after the whole run
   finishes, so history (and therefore every request) is deterministic.
 - Abort: the signal reaches every subagent; queued calls get the existing
@@ -150,7 +158,7 @@ subagents. A subagent's approval requests carry `ApprovalRequest.agent` (who ask
 
 ## 3. Worktrees
 
-- **Location:** `~/.marv/worktrees/<project>/<id>/`, outside the project, so it
+- **Location:** `~/.marv/worktrees/<project>/<slug>-<id>/`, outside the project, so it
   doesn't appear in the parent's `git ls-files` and isn't writable by the
   parent's sandbox.
 - **Preview (before approval):** not a git repo → `ToolError` ("dispatch without
@@ -169,31 +177,41 @@ subagents. A subagent's approval requests carry `ApprovalRequest.agent` (who ask
   per-worktree config, submodules), so the repository stays out of reach.
 - **Finish** (always, including error and abort): Marv commits the
   subagent's changes itself (`git add -A && git commit -m "marv:
-  <description>"`, `(interrupted)` appended after an abort or error), outside
-  the sandbox, with every git path pinned through `GIT_DIR`/`GIT_COMMON_DIR`/
-  `GIT_WORK_TREE` (never trusting the worktree's `.git` file), inherited
-  `GIT_*` variables dropped, and `-c core.hooksPath=/dev/null -c
-  core.fsmonitor=false`. If the worktree contains another `.git` (e.g. a
-  submodule folder the subagent filled), it doesn't commit: git would use that
+  <description>"`, `(interrupted)` appended whenever it didn't end with a
+  plain answer), outside the sandbox, through a temporary git dir Marv writes
+  itself: `HEAD` → the branch, `commondir` → the real `.git`, and a copy of
+  the worktree's index (required: without it, `add -A` would drop force-added
+  and skip-worktree files, so nothing is committed). Neither the worktree's
+  `.git` file nor its record in `.git/worktrees` is trusted (git follows that
+  record's `commondir`, HEAD and `config.worktree` even with `GIT_DIR` pinned).
+  Inherited `GIT_*` variables are dropped, `-c core.hooksPath=/dev/null -c
+  core.fsmonitor=false` and `commit.gpgSign=false` are set (a pinentry prompt
+  can't show in the TUI), stdin is ignored, and every git call has a timeout
+  (`runGit`, `src/git.ts`). Known limits: split-index and reftable
+  repositories can't be committed this way; git fails and the folder is kept.
+  If the worktree contains another `.git` (e.g. a submodule folder the subagent filled), it doesn't commit: git would use that
   repository's config. Then it deletes the folder and this worktree's own
   record in `.git/worktrees` (not `git worktree prune`, which would also drop
   the user's worktrees whose folders are missing). The branch stays (one
   commit per subagent). If anything can't be committed, the folder is kept and
   its path reported.
 - **File listing:** `glob`/`grep` list files with `git ls-files` outside the
-  sandbox and without approval, so it always passes the same `-c` flags, and a
+  sandbox and without approval, so it goes through the same `runGit` (no
+  programs, clean environment, timeout), and a
   worktree subagent's tools pin git's paths (`ToolContext.gitEnv`). Accepted: hooks
   kept in the repo's own files (e.g. `.husky/`) can be changed like any code,
   and arrive with the merge; the parent reviews the diff before merging.
-- **Result line:** `Branch marv/task-2-parser-errors-a3f9: 2 commits on abc1234`
-  (or `no changes` and the branch is deleted when there were no commits).
+- **Result line:** `Branch marv/task-2-parser-errors-a3f9: 2 commits on abc1234. Review it with …, then merge it.`
+  (or `No changes (branch … removed).` when there were no commits).
   The parent inspects and merges with ordinary, approved `bash` git commands,
   and deletes merged branches itself.
-- **Dependencies (verify in implementation):** a fresh worktree lacks
-  gitignored files. `~/.bun` is mounted read-only in the sandbox, so
-  `bun install` may fail to write its cache. An integration test runs
-  `bun install && bun test` in a worktree subagent under bwrap; if it fails,
-  mount `~/.bun/install/cache` writable when `network: true`.
+- **Dependencies:** a fresh worktree lacks gitignored files. Every sandboxed
+  command gets a throwaway bun cache in the sandbox's private `/tmp`
+  (`BUN_INSTALL_CACHE_DIR`), never the user's: a shared cache would let one
+  command's install scripts plant packages for another. `tests/worktree-sandbox.test.ts`
+  runs `bun install && bun test` in a worktree under bwrap (installing a real
+  dependency, which needs the network, only with
+  `MARV_NETWORK_TESTS=1`).
 
 ## 4. Approvals
 
@@ -202,9 +220,9 @@ subagents. A subagent's approval requests carry `ApprovalRequest.agent` (who ask
   Preview: type, description, the start of the prompt, base commit,
   uncommitted-changes warning, and "edits and sandboxed commands run without
   asking inside its worktree". Scope: `{ key: "agent:worktree", description:
-  "worktree subagents" }`.
+  "subagents in their own worktrees" }`.
 - **Shared-folder subagent:** each write/execute action asks like the parent,
-  with the label prefixed `[<type> · <description>] `. Session "don't ask
+  with a `[<type> · <description>]` line above the prompt's title. Session "don't ask
   again" grants are shared both ways.
 - **Worktree subagent:** its `approve` answers "yes" automatically, except it
   defers to the real prompt (labeled as above) for:
@@ -233,7 +251,7 @@ subagents. A subagent's approval requests carry `ApprovalRequest.agent` (who ask
     ⎿ worktree marv/task-2-parser-errors-a3f9 · 14 tools · edit_file src/parser.ts
   ```
 
-  Running: isolation/branch (or `shared`), tool count, current action (tool
+  Running: isolation/branch (or `shared folder`), tool count, current action (tool
   label or `thinking…`). Finished: `done · 6 tools · 41.2k tokens · "<first
   line of report>"`, error color for errors/interrupts.
 - **Render budget:** `onProgress` updates are merged into `App.send()`'s
