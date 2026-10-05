@@ -48,7 +48,7 @@ beforeAll(() => {
         case "/repos/acme/empty": return Response.json({ full_name: "acme/empty", description: null, default_branch: "main" });
         case "/repos/acme/empty/git/trees/main": return Response.json({ message: "Git Repository is empty." }, { status: 409 });
         case "/repos/acme/subm": return Response.json({ full_name: "acme/subm", description: null, default_branch: "main" });
-        case "/repos/acme/subm/git/trees/main": return Response.json({ tree: [{ path: "a.txt", type: "blob" }, { path: "vendor/lib", type: "commit" }], truncated: false });
+        case "/repos/acme/subm/git/trees/main": return Response.json({ tree: [{ path: "a.txt", type: "blob", mode: "100644" }, { path: "link", type: "blob", mode: "120000" }, { path: "vendor/lib", type: "commit" }], truncated: false });
         case "/repos/acme/longreadme": return Response.json({ full_name: "acme/longreadme", description: null, default_branch: "main" });
         case "/repos/acme/longreadme/readme": return raw("x".repeat(13_000));
         case "/repos/acme/longreadme/git/trees/main": return Response.json({ tree: [{ path: "docs/readme.txt", type: "blob" }, { path: "readme.markdown", type: "blob" }], truncated: false });
@@ -89,20 +89,27 @@ describe("parseGithub", () => {
     expect(parseGithub(new URL("https://github.com/acme/tool/tree/%E0%A4%A"))).toBeNull(); // not valid UTF-8 / escape
   });
 
+  test("real names with ? # _ in them are accepted", () => {
+    expect(parseGithub(new URL("https://github.com/acme/tool/tree/main/C%23"))).toMatchObject({ dir: "C#" });
+    expect(parseGithub(new URL("https://github.com/acme/tool/blob/main/docs/what%3F.md"))).toMatchObject({ path: "docs/what?.md" });
+    expect(parseGithub(new URL("https://github.com/acme/tool/tree/fix%2312"))).toMatchObject({ ref: "fix#12" });
+    expect(parseGithub(new URL("https://github.com/acme/tool/tree/x..y"))).toMatchObject({ ref: "x..y" });
+    expect(parseGithub(new URL("https://github.com/octo_acme/tool"))).toEqual({ kind: "repo", owner: "octo_acme", repo: "tool" });
+  });
+
   test("names that could reach another endpoint are refused", () => {
     for (const url of [
       "https://github.com/x%2F..%2F..%2Fuser%2Femails%3F/r", // owner
       "https://github.com/acme%20x/tool",
       "https://github.com/acme/to%6Fl%3Fx", // repo with ?
       "https://github.com/acme/tool/blob/main/a%2Fb",
-      "https://github.com/acme/tool/blob/main/a%3Fb",
-      "https://github.com/acme/tool/tree/main/x%23y",
       "https://github.com/acme/tool/blob/main/a%00b",
-      "https://github.com/acme/tool/tree/x..y",
-      "https://github.com/acme/tool/tree/a%3Fb",
-      "https://github.com/acme/tool/tree/a%23b",
       "https://github.com/acme/tool/tree/a%0Ab",
       "https://github.com/acme/tool/tree/%2Fx",
+      "https://github.com/acme/tool/tree/a%2F%2Fb",
+      "https://github.com/acme/tool/tree/a%2F.%2Fb",
+      "https://github.com/acme/tool/tree/.%2Fx",
+      "https://github.com/acme/tool/tree/a%2F..%2Fb",
     ]) {
       expect(parseGithub(new URL(url))).toBeNull();
     }
@@ -134,9 +141,14 @@ describe("fetchGithub", () => {
     expect(page.text).not.toContain("## Files");
   });
 
+  test("symlinks are marked", async () => {
+    const page = await fetchGithub(link("https://github.com/acme/subm"), opts());
+    expect(page.text).toContain("a.txt\nlink (symlink)\nvendor/lib (submodule)");
+  });
+
   test("submodules are marked", async () => {
     const page = await fetchGithub(link("https://github.com/acme/subm"), opts());
-    expect(page.text).toContain("a.txt\nvendor/lib (submodule)");
+    expect(page.text).toContain("a.txt\nlink (symlink)\nvendor/lib (submodule)");
   });
 
   test("a truncated tree falls back to the top level", async () => {

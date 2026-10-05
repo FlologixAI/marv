@@ -26,7 +26,7 @@ interface RepoInfo {
   archived?: boolean;
 }
 interface Tree {
-  tree: { path: string; type: string }[];
+  tree: { path: string; type: string; mode?: string }[];
   truncated?: boolean;
 }
 /** One entry of the contents API's folder listing. */
@@ -51,16 +51,16 @@ const SLASH_HINT = " If the branch name has a slash in it, the link is ambiguous
 const CONTROL = /[\u0000-\u001f\u007f]/;
 // Names go into API paths carrying the user's token, so only what GitHub itself allows gets through: an
 // owner or repo like "x%2F..%2Fuser%2Femails%3F" would otherwise steer the token to another endpoint.
-const OWNER = /^[A-Za-z0-9-]{1,39}$/;
+const OWNER = /^[A-Za-z0-9_-]{1,39}$/;
 const REPO = /^[A-Za-z0-9._-]{1,100}$/;
 
 /** Each segment of a path percent-encoded, the slashes kept. */
 const enc = (path: string) => path.split("/").map(encodeURIComponent).join("/");
 
-/** A decoded path or folder segment we're willing to put in a URL. */
-const safeSegment = (seg: string) => seg !== "" && seg !== "." && seg !== ".." && !/[/?#]/.test(seg) && !CONTROL.test(seg);
+/** A decoded path or folder segment we're willing to put in a URL. `?` and `#` are fine: `enc` escapes them. */
+const safeSegment = (seg: string) => seg !== "" && seg !== "." && seg !== ".." && !seg.includes("/") && !CONTROL.test(seg);
 /** A decoded branch, tag or commit: a slash is fine (`feature%2Fx`), it's encoded back when used. */
-const safeRef = (ref: string) => !ref.includes("..") && !/[?#]/.test(ref) && !CONTROL.test(ref) && !ref.startsWith("/") && !ref.endsWith("/") && !ref.includes("//");
+const safeRef = (ref: string) => ref.split("/").every(safeSegment);
 
 /** The repository, folder or file a github.com link points to; null for anything else (issues, PRs…: read as a web page). */
 export function parseGithub(url: URL): GithubLink | null {
@@ -118,7 +118,7 @@ async function overview({ owner, repo }: { owner: string; repo: string }, option
   else if (listed) {
     const entries = listed.tree.filter((e) => e.type === "blob" || e.type === "commit");
     pickReadme(entries.filter((e) => e.type === "blob").map((e) => e.path));
-    files = listing(entries.map((e) => mark(e.path, e.type)), name, branch);
+    files = listing(entries.map((e) => mark(e.path, e.type, e.mode)), name, branch);
   } else {
     const top = await entriesOf(await api(`${base}/contents?ref=${encodeURIComponent(branch)}`, options));
     pickReadme(top.filter((e) => e.type === "file").map((e) => e.path));
@@ -237,10 +237,10 @@ const notFound = (what: string, { token }: GithubOptions, hint = "") =>
   new ToolError(`Not found on GitHub: ${what}.${hint}${token ? "" : " If it's a private repository, set GITHUB_TOKEN."}`);
 
 /** How `ls` would show an entry: folders with a slash, the odd ones named. */
-function mark(path: string, type: string): string {
+function mark(path: string, type: string, mode?: string): string {
   if (type === "dir" || type === "tree") return `${path}/`;
   if (type === "submodule" || type === "commit") return `${path} (submodule)`;
-  if (type === "symlink") return `${path} (symlink)`;
+  if (type === "symlink" || mode === "120000") return `${path} (symlink)`;
   return path;
 }
 
