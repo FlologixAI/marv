@@ -212,11 +212,14 @@ subagents. A subagent's approval requests carry `ApprovalRequest.agent` (who ask
      not what it can send out);
   2. everything, when the sandbox is off or bwrap is unavailable.
 - **Queue (`src/app.tsx`):** the single approval slot becomes a FIFO queue. The
-  prompt shows the head and `1 of N waiting` when N > 1. A decision resolves
-  the head and shows the next. "Always" also resolves any queued requests with
-  the same scope key. Esc / ctrl+c resolves every queued request "no".
-  (Fixes a latent bug: today a second concurrent request overwrites the first,
-  whose promise never resolves.)
+  prompt shows the head, who is asking, and `N more waiting`. A decision
+  resolves the head and shows the next (a fresh prompt each time: the choice
+  cursor never carries over). "Always" also resolves any queued requests with
+  the same scope key. Esc or ctrl+c at an approval declines everything queued
+  **and** stops the run (like ctrl+c elsewhere), so running sibling subagents
+  don't keep asking after the user said stop. (Fixes a latent bug: today a
+  second concurrent request overwrites the first, whose promise never
+  resolves.)
 - **"No" inside a subagent:** the subagent stops (`declined`); its `agent`
   result has `declined: true`, so the parent stops after the current run of
   calls and the user can redirect.

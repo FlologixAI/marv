@@ -2223,7 +2223,7 @@ describe("subagents", () => {
     expect(lastFrame()).toContain("Both done.");
   });
 
-  test("Esc at a queued approval declines them all and stops", async () => {
+  test("Esc at a queued approval declines them all and stops the run", async () => {
     const { lastFrame, stdin } = renderAgents(twoWriters());
     await type(stdin, "make two files");
     await tick(200);
@@ -2231,8 +2231,22 @@ describe("subagents", () => {
     await tick(300);
     expect(existsSync(join(project, "one.txt"))).toBe(false);
     expect(existsSync(join(project, "two.txt"))).toBe(false);
-    expect(lastFrame()).toContain("Stopped. Tell Marv what to do instead.");
+    expect(lastFrame()).toContain("Interrupted.");
     expect(lastFrame()).not.toContain("Do you want to proceed?");
+  });
+
+  test("'always' answers the other queued requests in the same scope", async () => {
+    const { lastFrame, stdin } = renderAgents(twoWriters());
+    await type(stdin, "make two files");
+    await tick(200);
+    expect(lastFrame()).toContain("1 more waiting");
+    stdin.write(DOWN);
+    await tick();
+    stdin.write(ENTER); // Yes, and don't ask again for file changes
+    await tick(300);
+    expect(existsSync(join(project, "one.txt"))).toBe(true);
+    expect(existsSync(join(project, "two.txt"))).toBe(true); // no second prompt
+    expect(lastFrame()).toContain("Both done.");
   });
 });
 ```
