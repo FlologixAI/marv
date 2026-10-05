@@ -415,6 +415,19 @@ describe("App", () => {
       expect(lastFrame()).toContain("Both done.");
     });
 
+    test("Esc at the prompt declines and stops the run", async () => {
+      const model = new ScriptedProvider([writeCall("c1", "made.txt"), reply("should not get here")]);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "make a file");
+      await tick(150);
+      stdin.write("\x1b");
+      await tick(300);
+      expect(existsSync(join(project, "made.txt"))).toBe(false);
+      expect(lastFrame()).toContain("Interrupted.");
+      expect(lastFrame()).toContain("Type a message");
+      expect(model.requests).toHaveLength(1);
+    });
+
     test("ctrl+c at the prompt declines and stops", async () => {
       const model = new ScriptedProvider([writeCall("c1", "made.txt")]);
       const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);

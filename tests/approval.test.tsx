@@ -33,6 +33,17 @@ const COMMAND: ApprovalRequest = {
 };
 
 describe("Approval", () => {
+  test("a new key gives the next request a fresh prompt (cursor back on Yes)", async () => {
+    // The App renders each queued request with key={id}; without it React keeps Select's cursor.
+    const { stdin, lastFrame, rerender } = render(<Approval key={1} request={COMMAND} onDecide={() => {}} />);
+    stdin.write(DOWN);
+    await tick();
+    expect(lastFrame()).toMatch(/❯ Yes, and don't ask again/);
+    rerender(<Approval key={2} request={EDIT} onDecide={() => {}} />);
+    await tick();
+    expect(lastFrame()).toMatch(/❯ Yes\s+│/);
+  });
+
   test("says which subagent is asking, and how many more are waiting", () => {
     const frame = render(<Approval request={{ ...EDIT, agent: "implementer · Task 2" }} waiting={2} onDecide={() => {}} />).lastFrame()!;
     expect(frame).toContain("[implementer · Task 2]");

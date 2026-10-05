@@ -164,7 +164,8 @@ export function App({
   const [toolRunning, setToolRunning] = useState(false);
   // Tools waiting for the user's yes/no, oldest first (parallel subagents can
   // ask at the same time). The first one is shown in place of the prompt.
-  type Pending = { request: ApprovalRequest; resolve: (d: Decision) => void };
+  type Pending = { id: number; request: ApprovalRequest; resolve: (d: Decision) => void };
+  const nextApprovalId = useRef(1);
   const approvals = useRef<Pending[]>([]);
   const [approval, setApproval] = useState<{ head: Pending; waiting: number } | null>(null);
   const showApprovals = useCallback(() => {
@@ -179,7 +180,7 @@ export function App({
       alwaysAllowed.current.has(request.scope.key)
         ? Promise.resolve("yes")
         : new Promise((resolve) => {
-            approvals.current.push({ request, resolve });
+            approvals.current.push({ id: nextApprovalId.current++, request, resolve });
             showApprovals();
           }),
     [showApprovals],
@@ -202,13 +203,19 @@ export function App({
     },
     [showApprovals],
   );
-  /** Esc or ctrl+c at an approval: no to everything waiting. */
+  /** No to everything waiting (ctrl+c at an approval, and part of Esc). */
   const declineAll = useCallback(() => {
     const pending = approvals.current;
     approvals.current = [];
     showApprovals();
     for (const p of pending) p.resolve("no");
   }, [showApprovals]);
+  // Esc at an approval: decline everything and stop the run, like ctrl+c, so
+  // parallel subagents that are still running don't raise new prompts.
+  const cancelAll = useCallback(() => {
+    declineAll();
+    abortRef.current?.abort();
+  }, [declineAll]);
   // The model's reasoning while it thinks. Shown live, never sent back to the model.
   const [thinking, setThinking] = useState("");
   const [confirmExit, setConfirmExit] = useState(false);
@@ -560,11 +567,11 @@ export function App({
   // On first run there is nothing to go back to, so cancelling setup quits.
   const cancelSetup = () => (setupMode === "first-run" ? exit() : setSetupMode(null));
 
-  // Esc stops a running reply or tool. (At an approval prompt, Esc means "no",
-  // which the prompt handles, and which stops the run too.)
+  // Esc stops a running reply or tool. (At an approval prompt the Approval's own
+  // Esc handler also runs, declining what's queued; both end in an abort.)
   useInput(
     (_char, key) => {
-      if (key.escape && abortRef.current && approvals.current.length === 0) abortRef.current.abort();
+      if (key.escape && abortRef.current) abortRef.current.abort();
     },
     { isActive: phase === "main" && setupMode === null },
   );
@@ -739,7 +746,7 @@ export function App({
           <SessionPicker sessions={picker} onPick={(id) => void pickSession(id)} onCancel={() => setPicker(null)} />
         ) : approval && !setupMode ? (
           <>
-            <Approval request={approval.head.request} waiting={approval.waiting} onDecide={decide} onCancel={declineAll} />
+            <Approval key={approval.head.id} request={approval.head.request} waiting={approval.waiting} onDecide={decide} onCancel={cancelAll} />
             <StatusBar model={provider.name} cwd={cwd} confirmExit={false} notice={notice} busy />
           </>
         ) : setupMode ? (
