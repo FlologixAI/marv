@@ -182,6 +182,17 @@ describe("runAgent", () => {
     ]);
   });
 
+  test("calls answered without running (after a no or an interrupt) are reported too, so a trajectory has every result", async () => {
+    const provider = new ScriptedProvider([useTools(call("c1", "a.ts"), call("c2", "b.ts"), call("c3", "c.ts"))]);
+    const history: ChatTurn[] = [{ role: "user", text: "go" }];
+    const declineFirst = async (c: ToolCall) => ({ ...(await fakeTool(c)), declined: c.id === "c1" });
+    const events = await run(provider, history, { runTool: declineFirst });
+    expect(events.filter((e) => e.type === "tool_skipped")).toEqual([
+      { type: "tool_skipped", call: call("c2", "b.ts"), output: expect.stringContaining("Not run") },
+      { type: "tool_skipped", call: call("c3", "c.ts"), output: expect.stringContaining("Not run") },
+    ]);
+  });
+
   test("an interrupt mid-tools still answers every call, so the next request is valid", async () => {
     const controller = new AbortController();
     const provider = new ScriptedProvider([useTools(call("c1", "a.ts"), call("c2", "b.ts"))]);

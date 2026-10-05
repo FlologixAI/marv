@@ -116,6 +116,14 @@ describe("recording one agent's run", () => {
     expect(records[1]).toEqual({ type: "error", turn: "t1", agent: "main", message: "Rate limited" });
   });
 
+  test("a call answered without running is recorded with what the model got", () => {
+    const { rec, records } = recorder();
+    rec.event({ type: "tool_skipped", call, output: "Not run: the user declined an earlier action." });
+    expect(records).toEqual([
+      { type: "tool", turn: "t1", agent: "main", call, output: "Not run: the user declined an earlier action.", summary: "not run", isError: false, declined: true, approval: "none", ms: 0 },
+    ]);
+  });
+
   test("hitting the step limit is recorded, with the user's answer", () => {
     const { rec, records } = recorder();
     rec.event({ type: "step_limit", steps: 25, continued: true });

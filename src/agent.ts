@@ -52,6 +52,8 @@ export type LoopEvent =
   | { type: "assistant"; text: string }
   | { type: "tool_start"; call: ToolCall; label: string }
   | { type: "tool_end"; call: ToolCall; result: ToolResult & { label: string } }
+  /** A call answered without running (after a "no" or an interrupt): no tool_start came first. */
+  | { type: "tool_skipped"; call: ToolCall; output: string }
   | { type: "error"; message: string }
   /** It reached a multiple of maxSteps and asked (onLimit) whether to keep going. */
   | { type: "step_limit"; steps: number; continued: boolean }
@@ -293,7 +295,11 @@ export async function* runAgent({
         i = end;
         if (signal.aborted || declined) {
           // The abort first, as in runGroup: after Esc the model reads "Interrupted", not "the user declined".
-          for (const call of group) answer(call, signal.aborted ? NOT_RUN.aborted : NOT_RUN.declined);
+          for (const call of group) {
+            const output = signal.aborted ? NOT_RUN.aborted : NOT_RUN.declined;
+            answer(call, output);
+            yield { type: "tool_skipped", call, output };
+          }
           continue;
         }
         const results: Result[] = [];
@@ -303,6 +309,7 @@ export async function* runAgent({
           } else {
             results[event.index] = event.result;
             if (event.type === "end") yield { type: "tool_end", call: event.call, result: event.result };
+            else yield { type: "tool_skipped", call: group[event.index]!, output: event.result.output };
           }
         }
         // In call order, whatever order they finished in (prompt cache).

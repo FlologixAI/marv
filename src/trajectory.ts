@@ -167,6 +167,10 @@ export class AgentRecorder {
         this.stepStart = this.now();
         break;
       }
+      case "tool_skipped":
+        // Never ran, but the model got this as its result: a trajectory must hold every result it saw.
+        this.sink({ type: "tool", turn, agent, call: event.call, output: event.output, summary: "not run", isError: false, declined: true, approval: "none", ms: 0 });
+        break;
       case "error":
         this.sink({ type: "error", turn, agent, message: event.message });
         break;
