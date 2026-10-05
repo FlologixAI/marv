@@ -44,7 +44,7 @@ export type TrajectoryRecord =
       summary: string;
       isError: boolean;
       declined: boolean;
-      approval: "none" | "auto" | Decision;
+      approval: "none" | "auto" | "interrupted" | Decision;
       ms: number;
     })
   | (Who & { type: "error"; message: string })

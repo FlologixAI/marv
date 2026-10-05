@@ -68,7 +68,7 @@ export async function runTool(call: ToolCall, ctx: ToolContext, available: Tool[
       // as the interrupt it was; `declined` stops the loop like any other stop
       // (runAgent checks the abort first, so the model reads "Interrupted").
       if (ctx.signal?.aborted) {
-        return { output: NOT_RUN.aborted, summary: "interrupted", declined: true, label, approval: "no" };
+        return { output: NOT_RUN.aborted, summary: "interrupted", declined: true, label, approval: "interrupted" };
       }
       // Yolo: a call the tool vouches for runs without asking, confined (bash
       // then can't touch .git). It still went through the preview above, so
@@ -77,6 +77,11 @@ export async function runTool(call: ToolCall, ctx: ToolContext, available: Tool[
         return { ...(await tool.run(parsed.data, { ...ctx, callId: call.id, confined: true })), label, approval: "auto" };
       }
       const decision = await ctx.approve({ tool: call.name, label, preview, scope, ...network });
+      // Esc at the prompt answers "no" and then aborts the run: that's an interrupt, and the model should read it
+      // as one (like the calls queued behind it), not as "the user declined this, don't retry".
+      if (decision === "no" && ctx.signal?.aborted) {
+        return { output: NOT_RUN.aborted, summary: "interrupted", declined: true, label, approval: "interrupted" };
+      }
       if (decision === "no") {
         return {
           output: "The user declined this. Don't retry it: stop and wait for them to say how to proceed.",

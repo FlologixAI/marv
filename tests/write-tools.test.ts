@@ -134,6 +134,25 @@ describe("approval", () => {
     expect(asked[0]!.scope).toEqual({ key: "bash:echo hi", description: "this exact command" });
   });
 
+  test("Esc at an approval (no + abort) is an interrupt, not the user's \"no\"", async () => {
+    const controller = new AbortController();
+    const result = await runTool(call("write_file", { path: "x.ts", content: "x" }), {
+      root,
+      sandbox: false,
+      signal: controller.signal,
+      approve: async () => (controller.abort(), "no"),
+    });
+    expect(result).toMatchObject({ output: expect.stringContaining("Interrupted"), summary: "interrupted", declined: true, approval: "interrupted" });
+    expect(existsSync(join(root, "x.ts"))).toBe(false);
+  });
+
+  test("stopped while the preview was made: interrupted, never asked", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runTool(call("write_file", { path: "x.ts", content: "x" }), { root, sandbox: false, signal: controller.signal, approve: async () => "yes" });
+    expect(result).toMatchObject({ summary: "interrupted", approval: "interrupted" });
+  });
+
   test("without an approver, changes are refused", async () => {
     const result = await runTool(call("write_file", { path: "x.ts", content: "x" }), { root });
     expect(result.isError).toBe(true);

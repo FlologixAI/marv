@@ -85,9 +85,10 @@ export interface ToolResult {
   /**
    * How a call that needed approval got it (for trajectories): "auto" in yolo
    * mode, otherwise the answer (a "yes" may come from a session's "don't ask
-   * again", or a worktree's own rule). Absent: it needed none.
+   * again", or a worktree's own rule); "interrupted" when the run was stopped before an answer counted. Absent:
+   * it needed none.
    */
-  approval?: "auto" | Decision;
+  approval?: "auto" | "interrupted" | Decision;
 }
 
 /**
