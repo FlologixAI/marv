@@ -230,4 +230,76 @@ describe("the web_fetch tool", () => {
       api.stop(true);
     }
   });
+
+  test("reading on with the final URL of a redirect hits the cache: no second download, no second question", async () => {
+    let requests = 0;
+    const s: ReturnType<typeof Bun.serve> = Bun.serve({
+      port: 0,
+      fetch: (r) => {
+        requests++;
+        if (new URL(r.url).pathname === "/a") return new Response(null, { status: 301, headers: { location: `http://localhost:${s.port}/b` } });
+        return new Response("y".repeat(70_000), { headers: { "content-type": "text/plain" } });
+      },
+    });
+    try {
+      const tool = makeWebFetch({ allowPrivate: true, token: "" });
+      let asked = 0;
+      const approve = async () => (asked++, "yes" as const);
+      const first = await runTool(call(`http://localhost:${s.port}/a`), { root, approve }, [tool] as Tool[]);
+      expect(first.output).toStartWith(`Fetched http://localhost:${s.port}/b`);
+      const next = await runTool(call(`http://localhost:${s.port}/b`, 30_000), { root, approve }, [tool] as Tool[]);
+      expect(next.output).toContain("characters 30000-60000 of 70000");
+      expect(asked).toBe(1);
+      expect(requests).toBe(2); // /a and its redirect target /b, once
+    } finally {
+      s.stop(true);
+    }
+  });
+
+  test("a page that expires between the question and the read is still read from what was approved", async () => {
+    const s = Bun.serve({ port: 0, fetch: () => new Response("z".repeat(70_000), { headers: { "content-type": "text/plain" } }) });
+    const realNow = Date.now;
+    try {
+      const tool = makeWebFetch({ allowPrivate: true, token: "" });
+      const url = `http://localhost:${s.port}/z`;
+      await runTool(call(url), { root, approve: async () => "yes" as const }, [tool] as Tool[]);
+      const parsed = { url, offset: 30_000 };
+      expect(tool.needsApproval!(parsed)).toBe(false);
+      Date.now = () => realNow() + 60 * 60_000; // the entry expires now
+      s.stop(true); // and a fetch would fail: the read must use what was approved
+      const result = await tool.run(parsed, { root, signal: new AbortController().signal } as never);
+      expect(result.output).toContain("characters 30000-60000 of 70000");
+    } finally {
+      Date.now = realNow;
+      s.stop(true);
+    }
+  });
+
+  test("403 from a site says it may block automated readers", async () => {
+    const s = Bun.serve({ port: 0, fetch: () => new Response("no", { status: 403 }) });
+    try {
+      const tool = makeWebFetch({ allowPrivate: true, token: "" });
+      const result = await runTool(call(`http://localhost:${s.port}/`), { root, approve: async () => "yes" as const }, [tool] as Tool[]);
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("403");
+      expect(result.output).toContain("The site may block automated readers: ask the user to paste the content, or try another source.");
+    } finally {
+      s.stop(true);
+    }
+  });
+
+  test("a failed connection to an address typed without a scheme suggests http", async () => {
+    const s = Bun.serve({ port: 0, fetch: () => new Response("hi") }); // plain http: https to it fails
+    try {
+      const tool = makeWebFetch({ allowPrivate: true, token: "" });
+      const bare = await runTool(call(`localhost:${s.port}/`), { root, approve: async () => "yes" as const }, [tool] as Tool[]);
+      expect(bare.isError).toBe(true);
+      expect(bare.output).toContain("If the site only serves http, pass an http:// URL.");
+      const explicit = await runTool(call(`https://localhost:${s.port}/`), { root, approve: async () => "yes" as const }, [tool] as Tool[]);
+      expect(explicit.isError).toBe(true);
+      expect(explicit.output).not.toContain("only serves http");
+    } finally {
+      s.stop(true);
+    }
+  });
 });

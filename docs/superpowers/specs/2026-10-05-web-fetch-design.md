@@ -20,7 +20,7 @@ per-domain approval, and output marked as untrusted data.
 
 - **Input:** `url` (http/https only), optional `offset` (characters, for the next page of a long result).
 - **Label:** `web_fetch github.com/mixelpixx/Konnect` (scheme dropped).
-- **Kind:** `read`, but `needsApproval` always returns true (see Approval). No `autoSafe`: yolo never skips it.
+- **Kind:** `read`, but `needsApproval` returns true unless the call reads on from a page Marv still has cached (see Approval). No `autoSafe`: yolo never skips it.
 - **Flow:**
   1. `checkAddress(url)` (`web/address.ts`): resolve the host; refuse loopback, private (10/8, 172.16/12,
      192.168/16, fc00::/7), link-local (169.254/16, fe80::/10), unspecified and multicast addresses, and
@@ -44,8 +44,8 @@ per-domain approval, and output marked as untrusted data.
 | Link | Requests | Output |
 |---|---|---|
 | `github.com/o/r` | `GET /repos/o/r`, `GET /repos/o/r/readme` (`Accept: application/vnd.github.raw`), `GET /repos/o/r/git/trees/<default branch>?recursive=1` | description, default branch, README, file list (≤500 paths, `(truncated)` beyond) |
-| `github.com/o/r/tree/<ref>/<dir>` | `GET /repos/o/r/git/trees/<ref>?recursive=1` | that folder's files |
-| `github.com/o/r/blob/<ref>/<path>` | `GET raw.githubusercontent.com/o/r/<ref>/<path>` | the file, line-numbered like `read_file` |
+| `github.com/o/r/tree/<ref>/<dir>` | `GET /repos/o/r/contents/<dir>?ref=<ref>` | that folder's entries |
+| `github.com/o/r/blob/<ref>/<path>` | `GET raw.githubusercontent.com/o/r/<ref>/<path>`; with a token, `GET /repos/o/r/contents/<path>?ref=<ref>` (`Accept: application/vnd.github.raw`) | the file, line-numbered like `read_file` |
 | `raw.githubusercontent.com/...` | as is | plain text |
 | anything else on github.com (issues, PRs, gists) | the normal HTML path | Markdown |
 
@@ -64,7 +64,7 @@ per-domain approval, and output marked as untrusted data.
 - Scope `web:<domain>`: the host, lowercased, without `www.`; `raw.githubusercontent.com` and `api.github.com`
   map to `github.com`. Scope description: "fetching from github.com".
 - The preview shows the full URL including the query string (where data would be smuggled out), title
-  "Fetch a web page", note "GET · from Marv, not the sandbox".
+  "Fetch a web page", note "GET · fetched by Marv, not in the sandbox".
 - **Pasted links are pre-approved:** `send()` extracts `http(s)://` URLs from the user's own message and adds
   their scopes to `alwaysAllowed` (`src/app.tsx`), so `approve()`'s existing short-circuit answers "yes". Text
   from files, tools or the model never pre-approves anything.

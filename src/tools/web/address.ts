@@ -113,7 +113,10 @@ export async function checkAddress(
       addresses = await resolve(lookupName, signal, dnsTimeoutMs);
     } catch (error) {
       if (signal?.aborted || error instanceof ToolError) throw error;
-      throw new ToolError(`Couldn't resolve ${host}: check the address.`);
+      // Only "no such name" blames the address; a failing resolver (EAI_AGAIN, ECONNREFUSED...) is the network's fault.
+      const code = (error as { code?: string }).code;
+      if (code === "ENOTFOUND" || code === "ENODATA") throw new ToolError(`Couldn't resolve ${host}: check the address.`);
+      throw new ToolError(`Couldn't resolve ${host}: no network, or DNS isn't answering?`);
     }
     // No answer is no proof the name is public: fail closed.
     if (addresses.length === 0) throw new ToolError(`Couldn't resolve ${host}: check the address.`);

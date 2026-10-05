@@ -64,23 +64,41 @@ const input = z.object({
   offset: z.number().int().min(0).optional().describe("Where to start, in characters, for the next part of a long result (the result says what to pass). Default 0."),
 });
 
-export interface WebOptions {
-  /** Tests only: let a local server through. */
-  allowPrivate?: boolean;
-  apiBase?: string;
-  rawBase?: string;
-  /** Tests only: send the token over plain http too. */
-  allowHttp?: boolean;
-  /** Default: GITHUB_TOKEN, else GH_TOKEN, from the environment. */
+/** The network settings of the tool; all but `allowPrivate`/`allowHttp`/`apiBase`/`rawBase` (tests only) are the GitHub ones. */
+export type WebOptions = Pick<GithubOptions, "allowPrivate" | "allowHttp" | "apiBase" | "rawBase"> & {
+  /** Default: GITHUB_TOKEN, else GH_TOKEN, from the environment. Sent to GitHub only. */
   token?: string;
+};
+
+interface Cached {
+  page: Page;
+  at: number;
+  keys: string[];
 }
 
 /** The tool with its network settings (tests point it at a local server). */
 export function makeWebFetch(web: WebOptions = {}): Tool<typeof input> {
-  const recent = new Map<string, { page: Page; at: number }>();
+  // A page is kept under the URL asked for and the one it ended at (the header shows that one, after same-site
+  // redirects, and the model passes it back); both keys share one entry, which counts once toward the limit.
+  const recent = new Map<string, Cached>();
   const cachedPage = (url: string) => {
     const hit = recent.get(parseUrl(url).href);
     return hit && Date.now() - hit.at < CACHE_MS ? hit.page : undefined;
+  };
+  // What needsApproval found, for run: an entry expiring between the two mustn't turn a read we didn't ask about
+  // into a download. runTool passes both the same parsed input object.
+  const approvedReads = new WeakMap<object, Page>();
+  const remember = (keys: string[], page: Page) => {
+    for (const key of keys) {
+      const old = recent.get(key);
+      if (old) for (const k of old.keys) recent.delete(k);
+    }
+    const entry: Cached = { page, at: Date.now(), keys: [...new Set(keys)] };
+    for (const key of entry.keys) recent.set(key, entry); // a Map keeps insertion order: the oldest is first
+    while (new Set(recent.values()).size > CACHE_PAGES) {
+      const oldest = recent.values().next().value!;
+      for (const k of oldest.keys) recent.delete(k);
+    }
   };
   return {
     name: "web_fetch",
@@ -95,9 +113,11 @@ export function makeWebFetch(web: WebOptions = {}): Tool<typeof input> {
     // Asks once per site (the scope), and sites the user pasted are already allowed (the App adds their
     // scopes). No autoSafe, so yolo never skips it: the URL itself can carry data out (?k=<a secret>).
     // A read from the cache sends nothing out, so it doesn't ask again.
-    needsApproval: ({ url, offset }) => {
+    needsApproval: (input) => {
       try {
-        return !(offset && cachedPage(url));
+        const page = input.offset ? cachedPage(input.url) : undefined;
+        if (page) approvedReads.set(input, page);
+        return !page;
       } catch {
         return true;
       }
@@ -109,22 +129,35 @@ export function makeWebFetch(web: WebOptions = {}): Tool<typeof input> {
       await checkAddress(parsed, { ...web, signal }); // a private address fails here, so nobody is asked to approve it
       return { title: "Fetch a web page", text: parsed.href, note: "GET · fetched by Marv, not in the sandbox" };
     },
-    async run({ url, offset = 0 }, { signal }) {
+    async run(input, { signal }) {
+      const { url, offset = 0 } = input;
       const parsed = parseUrl(url);
       // Reading on (offset > 0) reuses the page fetched a moment ago instead of downloading and converting it
       // again; offset 0 always fetches fresh.
-      const cached = offset > 0 ? cachedPage(url) : undefined;
+      const cached = approvedReads.get(input) ?? (offset > 0 ? cachedPage(url) : undefined);
       if (cached) return paged(cached, offset);
       // A redirect to another site isn't followed: the URL (and its query) could carry data to a site the user
       // never approved. The model gets the target and calls again, which asks if that site is new.
       const followRedirect = (_from: URL, to: URL) => domainOf(to.href) === domainOf(parsed.href);
-      const options: GithubOptions = { ...web, signal, followRedirect, token: web.token ?? (process.env.GITHUB_TOKEN || process.env.GH_TOKEN || undefined) };
+      const options = { ...web, signal, followRedirect };
       const link = parseGithub(parsed);
-      const page = link ? await fetchGithub(link, options) : await fetchPage(parsed.href, options);
+      let page: Page;
+      if (link) {
+        page = await fetchGithub(link, { ...options, token: web.token ?? (process.env.GITHUB_TOKEN || process.env.GH_TOKEN || undefined) });
+      } else {
+        try {
+          page = await fetchPage(parsed.href, options);
+        } catch (error) {
+          // "example.com" got https from parseUrl; a site that only serves http fails to connect, and the model can't tell why.
+          const typedScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(url.trim());
+          if (!typedScheme && error instanceof ToolError && error.message.startsWith("Couldn't fetch ")) {
+            throw new ToolError(`${error.message} If the site only serves http, pass an http:// URL.`);
+          }
+          throw error;
+        }
+      }
       if (page.text.length > CACHE_MAX_CHARS) return paged(page, offset);
-      recent.delete(parsed.href); // re-inserted last: a Map keeps insertion order, so the oldest is first
-      recent.set(parsed.href, { page, at: Date.now() });
-      if (recent.size > CACHE_PAGES) recent.delete(recent.keys().next().value!);
+      remember([parsed.href, new URL(page.url).href], page);
       return paged(page, offset);
     },
   };

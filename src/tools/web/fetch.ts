@@ -2,16 +2,16 @@
 // again (a public page could redirect to a private address), with a time and a size limit, text only.
 import { brotliDecompressSync, constants, gunzipSync, inflateSync } from "node:zlib";
 import { looksBinary } from "../files.ts";
+import pkg from "../../../package.json";
 import { ToolError } from "../types.ts";
 import { checkAddress } from "./address.ts";
 import { convertHtml } from "./convert.ts";
 import type { FallbackReason } from "./html.ts";
-import { MAX_CHARS } from "./plain.ts";
 
 export const TIMEOUT_MS = 20_000;
 export const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
-const USER_AGENT = "Marv (a terminal coding agent)";
+const USER_AGENT = `Marv/${pkg.version} (terminal coding agent)`; // no repository URL: package.json has none public
 // Some sites send Markdown when asked for it, which beats converting their HTML.
 const ACCEPT = "text/markdown, text/html;q=0.9, text/plain;q=0.8, application/json;q=0.8, */*;q=0.5";
 const ERROR_BODY_BYTES = 64 * 1024; // an error page: enough for its message, never worth failing over
@@ -71,6 +71,13 @@ const FALLBACK_NOTES: Record<FallbackReason, string> = {
   error: "The page couldn't be converted: this is its plain text.",
 };
 
+/** Said when a redirect wasn't followed (`followRedirect` said no): where it leads, and what to do about it. Undefined for any other answer. */
+export function redirectNote(got: Got): string | undefined {
+  const location = got.headers.get("location");
+  if (got.status < 300 || got.status >= 400 || !location) return undefined;
+  return `${got.url} redirects to ${new URL(location, got.url).href}, on another site: call web_fetch with that URL to follow it (the user may be asked).`;
+}
+
 export const httpError = (got: Got) => new ToolError(`${got.status} ${got.statusText || "error"} at ${got.url}.`);
 
 /** Credentials go only where the user's URL pointed, and only over https: `URL.host` ignores the scheme, so a
@@ -88,7 +95,6 @@ export async function get(url: string, options: GetOptions = {}): Promise<Got> {
   try {
     for (let redirects = 0; ; redirects++) {
       await checkAddress(current, { ...options, signal }); // the lookup counts toward the time limit and stops on abort
-      if (current.protocol !== "http:" && current.protocol !== "https:") throw new ToolError(`Refused: ${current.href} is not an http(s) address.`);
       const headers = { "user-agent": USER_AGENT, accept: ACCEPT, "accept-encoding": "gzip, deflate, br", ...(sendsHeaders(first, current, options.allowHttp) ? options.headers : {}) };
       // Ours to abort once this response is dealt with. Merely leaving a body unread doesn't close the
       // connection (a server kept sending 27 GB until the timeout), so we cut it. It only ever happens after
@@ -130,19 +136,20 @@ export async function get(url: string, options: GetOptions = {}): Promise<Got> {
 /** A page as text: HTML converted to Markdown, other text as it is. */
 export async function fetchPage(url: string, options: GetOptions = {}): Promise<Page> {
   const got = await get(url, options);
-  const location = got.headers.get("location");
-  if (got.status >= 300 && got.status < 400 && location) {
-    // Only reachable when followRedirect said no. Not an error: the model can follow it with a new call.
-    const target = new URL(location, got.url).href;
-    return { url: got.url, text: `${got.url} redirects to ${target}, on another site: call web_fetch with that URL to follow it (the user may be asked).` };
+  // Only a redirect that followRedirect refused gets here. Not an error: the model can follow it with a new call.
+  const redirect = redirectNote(got);
+  if (redirect) return { url: got.url, text: redirect };
+  if (got.status < 200 || got.status >= 300) {
+    const error = httpError(got);
+    if (![403, 429, 503].includes(got.status)) throw error;
+    throw new ToolError(`${error.message} The site may block automated readers: ask the user to paste the content, or try another source.`);
   }
-  if (got.status < 200 || got.status >= 300) throw httpError(got);
   const type = (got.headers.get("content-type") ?? "").toLowerCase();
   if (type.includes("html") || (!type && /^\s*<(!doctype html|html)/i.test(got.body))) {
     // In a subprocess, with its own time limit: converting a big or hostile page can take seconds of CPU, which
     // on the main thread would freeze the whole UI (ctrl+c included).
     const { title, markdown, reason, truncated } = await convertHtml(got.body, got.url, { signal: options.signal });
-    const notes = [reason && FALLBACK_NOTES[reason], truncated && `Cut at ${MAX_CHARS.toLocaleString("en")} characters.`].filter(Boolean);
+    const notes = [reason && FALLBACK_NOTES[reason], truncated && "The page was cut (it's longer than web_fetch reads at once)."].filter(Boolean);
     return { url: got.url, title, text: markdown, ...(notes.length ? { note: notes.join(" ") } : {}) };
   }
   return { url: got.url, text: got.body };

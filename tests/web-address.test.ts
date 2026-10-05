@@ -60,8 +60,13 @@ describe("checkAddress", () => {
   });
 
   test("a name that doesn't resolve", async () => {
-    lookup = spyOn(dns, "lookup").mockRejectedValue(new Error("ENOTFOUND"));
+    lookup = spyOn(dns, "lookup").mockRejectedValue(Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" }));
     await expect(check("https://nope.invalid/")).rejects.toThrow("Couldn't resolve nope.invalid: check the address.");
+  });
+
+  test("a lookup that failed for another reason doesn't blame the address", async () => {
+    lookup = spyOn(dns, "lookup").mockRejectedValue(Object.assign(new Error("getaddrinfo EAI_AGAIN"), { code: "EAI_AGAIN" }));
+    await expect(check("https://example.com/")).rejects.toThrow("Couldn't resolve example.com: no network, or DNS isn't answering?");
   });
 
   test("a private address among the answers refuses, in any order", async () => {

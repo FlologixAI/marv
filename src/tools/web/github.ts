@@ -2,7 +2,7 @@
 // its description, README and file list, so the model can explore it like the project (glob, then read_file);
 // a file becomes its raw text. A token goes to the API host only.
 import { ToolError } from "../types.ts";
-import { get, httpError, type GetOptions, type Got, type Page } from "./fetch.ts";
+import { get, httpError, redirectNote, type GetOptions, type Got, type Page } from "./fetch.ts";
 
 export type GithubLink =
   | { kind: "repo"; owner: string; repo: string }
@@ -165,6 +165,7 @@ async function file({ owner, repo, ref, path }: { owner: string; repo: string; r
   const got = options.token
     ? await api(`/repos/${owner}/${repo}/contents/${enc(path)}?ref=${encodeURIComponent(ref)}`, options, "application/vnd.github.raw")
     : await get(`${options.rawBase ?? RAW}/${owner}/${repo}/${enc(ref)}/${enc(path)}`, { ...options, headers: undefined });
+  refuseRedirect(got);
   if (got.status === 404) throw notFound(`${path} at ${ref} in ${owner}/${repo}`, options, SLASH_HINT);
   if (got.status < 200 || got.status >= 300) throw httpError(got);
   // A folder answers with its listing (JSON) instead of raw text, even when raw was asked for.
@@ -180,6 +181,12 @@ async function file({ owner, repo, ref, path }: { owner: string; repo: string; r
   };
 }
 
+/** A redirect that wasn't followed says where it leads, like fetchPage's, instead of a bare "302 Found". */
+function refuseRedirect(got: Got): void {
+  const note = redirectNote(got);
+  if (note) throw new ToolError(note);
+}
+
 /**
  * A GitHub API request. A 404 (and any status in `allow`) is returned, since the caller knows what it means;
  * other errors are thrown.
@@ -188,6 +195,7 @@ async function api(path: string, options: GithubOptions, accept = "application/v
   const headers: Record<string, string> = { accept, "x-github-api-version": "2022-11-28" };
   if (options.token) headers.authorization = `Bearer ${options.token}`;
   const got = await get(`${options.apiBase ?? API}${path}`, { ...options, headers, ...(extra.maxBytes ? { maxBytes: extra.maxBytes } : {}) });
+  refuseRedirect(got);
   if (got.status === 403 || got.status === 429) {
     const wait = got.headers.get("retry-after");
     if (wait && /^\d+$/.test(wait)) throw new ToolError(`GitHub asks to wait ${wait} s (secondary rate limit).`);

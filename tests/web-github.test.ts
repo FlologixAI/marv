@@ -257,3 +257,15 @@ describe("fetchGithub", () => {
     await expect(fetchGithub({ kind: "repo", owner: "acme", repo: "proxy" }, opts())).rejects.toThrow("GitHub's API answered with something that isn't JSON (a proxy or captive portal?).");
   });
 });
+
+describe("a redirect that isn't followed", () => {
+  test("gets the same actionable text as a page, not a bare 302", async () => {
+    const redirecting = Bun.serve({ port: 0, fetch: () => new Response(null, { status: 302, headers: { location: "https://elsewhere.example/x" } }) });
+    try {
+      const o = { ...opts(), apiBase: `http://localhost:${redirecting.port}`, followRedirect: () => false };
+      await expect(fetchGithub(link("https://github.com/acme/tool"), o)).rejects.toThrow("redirects to https://elsewhere.example/x, on another site: call web_fetch with that URL");
+    } finally {
+      redirecting.stop(true);
+    }
+  });
+});
