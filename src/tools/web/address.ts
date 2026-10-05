@@ -12,13 +12,15 @@ export const dns = {
 };
 
 function privateV4(ip: string): boolean {
-  const [a = 0, b = 0] = ip.split(".").map(Number);
+  const [a = 0, b = 0, c = 0] = ip.split(".").map(Number);
   return (
     a === 0 || // "this network"
     a === 10 ||
     a === 127 || // loopback
     (a === 100 && b >= 64 && b <= 127) || // carrier-grade NAT
     (a === 169 && b === 254) || // link-local, incl. cloud metadata
+    (a === 192 && b === 0 && c === 0) || // IETF protocol assignments
+    (a === 198 && (b === 18 || b === 19)) || // benchmarking
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
     a >= 224 // multicast, reserved, broadcast
@@ -47,9 +49,12 @@ function privateV6(ip: string): boolean {
   const v4 = () => `${g[6]! >> 8}.${g[6]! & 255}.${g[7]! >> 8}.${g[7]! & 255}`;
   if (g.slice(0, 6).every((x) => x === 0)) return true; // ::, ::1, and the old IPv4-compatible form
   if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return privateV4(v4()); // ::ffff:127.0.0.1
+  if (g.slice(0, 4).every((x) => x === 0) && g[4] === 0xffff && g[5] === 0) return true; // ::ffff:0:0/96 (SIIT)
   if (first === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return privateV4(v4()); // NAT64
-  // unique local (fc00::/7), link-local (fe80::/10), multicast (ff00::/8)
-  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00;
+  if (first === 0x64 && g[1] === 0xff9b && g[2] === 1) return privateV4(v4()); // local-use NAT64 (64:ff9b:1::/48)
+  if (first === 0x2002) return privateV4(`${g[1]! >> 8}.${g[1]! & 255}.${g[2]! >> 8}.${g[2]! & 255}`); // 6to4 embeds the v4
+  // unique local (fc00::/7), link-local (fe80::/10), old site-local (fec0::/10), multicast (ff00::/8)
+  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xffc0) === 0xfec0 || (first & 0xff00) === 0xff00;
 }
 
 /** Whether an address is on the user's own machine or network. Not an address at all: refused rather than guessed. */
@@ -61,25 +66,57 @@ export function isPrivateAddress(address: string): boolean {
   return true;
 }
 
+/** How long to wait for a name to resolve: an unanswered lookup would otherwise hang the run. */
+export const DNS_TIMEOUT_MS = 10_000;
+
+/** A lookup that gives up when the caller's run is stopped (its reason is rethrown) or time runs out. */
+async function resolve(host: string, signal: AbortSignal | undefined, timeoutMs: number): Promise<string[]> {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const stop = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal?.aborted ? signal.reason : new ToolError(`Couldn't resolve ${host.replace(/\.$/, "")}: timed out.`));
+    if (stop.aborted) onAbort();
+    else stop.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([dns.lookup(host), aborted]);
+  } finally {
+    // Nothing keeps listening once we're done (the timeout's own timer doesn't hold the process open).
+    if (onAbort) stop.removeEventListener("abort", onAbort);
+    aborted.catch(() => {});
+  }
+}
+
 /**
  * Refuses a URL web_fetch mustn't fetch: anything but http(s), or a host that is, or resolves to, a private
  * address. `new URL` has already normalized odd spellings of an address (0x7f.1, 2130706433 → 127.0.0.1).
+ * `signal` is the run's: stopping it stops a slow lookup too. `dnsTimeoutMs` is for tests.
  */
-export async function checkAddress(url: URL, { allowPrivate = false }: { allowPrivate?: boolean } = {}): Promise<void> {
+export async function checkAddress(
+  url: URL,
+  { allowPrivate = false, signal, dnsTimeoutMs = DNS_TIMEOUT_MS }: { allowPrivate?: boolean; signal?: AbortSignal; dnsTimeoutMs?: number } = {},
+): Promise<void> {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new ToolError(`Only http and https links can be fetched, not ${url.protocol.replace(/:$/, "")}.`);
   }
   if (allowPrivate) return;
-  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  // Look up exactly the name fetch will resolve (a trailing dot is a different, absolute name); the
+  // dot-less lowercase form is only for comparing and for messages.
+  const lookupName = url.hostname.replace(/^\[|\]$/g, "");
+  const host = lookupName.replace(/\.$/, "").toLowerCase();
   let addresses: string[];
   if (isIP(host)) addresses = [host];
   else if (host === "localhost" || host.endsWith(".localhost")) addresses = ["127.0.0.1"];
   else {
     try {
-      addresses = await dns.lookup(host);
-    } catch {
+      addresses = await resolve(lookupName, signal, dnsTimeoutMs);
+    } catch (error) {
+      if (signal?.aborted || error instanceof ToolError) throw error;
       throw new ToolError(`Couldn't resolve ${host}: check the address.`);
     }
+    // No answer is no proof the name is public: fail closed.
+    if (addresses.length === 0) throw new ToolError(`Couldn't resolve ${host}: check the address.`);
   }
   const blocked = addresses.find(isPrivateAddress);
   if (blocked) {
