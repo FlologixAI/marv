@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { answerAllCalls, CUT_OFF_NOTE, NOT_RUN, runAgent, type LoopEvent } from "../src/agent.ts";
+import { answerAllCalls, CUT_OFF_NOTE, CUT_OFF_REASONING_NOTE, NOT_RUN, runAgent, type LoopEvent } from "../src/agent.ts";
 import type { AgentEvent, ChatTurn, Provider, ToolCall, ToolSpec } from "../src/provider/types.ts";
 import type { ToolResult } from "../src/tools/types.ts";
 import { ScriptedProvider } from "./fake-provider.ts";
@@ -263,6 +263,49 @@ describe("runAgent", () => {
         { type: "cut_off", continued: false },
       ]);
       expect(events.at(-1)).toEqual({ type: "done", reason: "length" });
+    });
+
+    test("only two in a row end the run: after a step that finished, a cut-off is forgiven again", async () => {
+      const provider = new ScriptedProvider([cutOff(), useTools(call("c1", "a.ts")), cutOff(), say("Done.")]);
+      const events = await run(provider, [{ role: "user", text: "go" }]);
+      expect(events.filter((e) => e.type === "cut_off")).toEqual([
+        { type: "cut_off", continued: true },
+        { type: "cut_off", continued: true },
+      ]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "end" });
+    });
+
+    test("a reply that was all reasoning is told to reason briefly (it never got to act)", async () => {
+      const provider = new ScriptedProvider([cutOff({ type: "thinking_delta", text: "Let me think about boids at length…" }), say("Done.")]);
+      await run(provider, [{ role: "user", text: "go" }]);
+      expect(provider.requests[1]!.history.at(-1)).toEqual({ role: "user", text: CUT_OFF_REASONING_NOTE });
+    });
+
+    test("a consumer that stops at the cut_off event still leaves every call answered", async () => {
+      const provider = new ScriptedProvider([cutOff({ type: "tool_call", call: call("c1", "a.ts") })]);
+      const history: ChatTurn[] = [{ role: "user", text: "go" }];
+      for await (const event of runAgent({ provider, history, system: "S", tools: SPECS, runTool: fakeTool, signal: new AbortController().signal })) {
+        if (event.type === "cut_off") break;
+      }
+      expect(answerAllCalls(history)).toEqual(history);
+      expect(history.at(-1)).toEqual({ role: "tool", callId: "c1", name: "read_file", text: NOT_RUN.cutOff });
+    });
+
+    test("cut off and interrupted: the calls are reported as interrupted, not cut off", async () => {
+      const stop = new AbortController();
+      const provider: Provider = {
+        name: "p",
+        async *stream() {
+          stop.abort();
+          yield { type: "tool_call", call: call("c1", "a.ts") };
+          yield { type: "done", reason: "length" };
+        },
+      };
+      const history: ChatTurn[] = [{ role: "user", text: "go" }];
+      const events = await run(provider, history, { signal: stop.signal });
+      expect(events.some((e) => e.type === "cut_off")).toBe(false);
+      expect(history.at(-1)).toEqual({ role: "tool", callId: "c1", name: "read_file", text: NOT_RUN.aborted });
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
     });
   });
 

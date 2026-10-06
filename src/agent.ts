@@ -34,7 +34,11 @@ export const NOT_RUN = {
  * was still writing), and would likely try the same thing again.
  */
 export const CUT_OFF_NOTE =
-  "Marv: your last reply hit the output limit and was cut off before it finished; nothing in it was run. Continue in smaller steps (for a big file: write_file the first part, then add the rest with edit_file).";
+  "(Automatic note from Marv, the program running you) Your last reply hit the output limit and was cut off before it finished; nothing in it was run. Continue in smaller steps (for a big file: write_file the first part, then add the rest with edit_file).";
+
+/** The same for a reply that was all reasoning (thinking models): it never got to act, so splitting isn't the fix. */
+export const CUT_OFF_REASONING_NOTE =
+  "(Automatic note from Marv, the program running you) Your last reply used up the output limit while you were still reasoning, so it did nothing. Reason briefly this time, then act.";
 
 /**
  * A copy of the history in which every tool call has a result: calls still waiting at the end (a run that was
@@ -224,7 +228,7 @@ export async function* runAgent({
 }: Options): AsyncGenerator<LoopEvent> {
   // Ids already in the conversation (a resumed session's too): a new call may not reuse one.
   const usedIds = new Set(history.flatMap((turn) => (turn.role === "assistant" ? (turn.toolCalls ?? []).map((c) => c.id) : [])));
-  // Replies cut off at the output limit so far in this run.
+  // Replies cut off at the output limit in a row.
   let cutOffs = 0;
   for (let step = 0; ; step++) {
     // The step limit guards against a model that never finishes. With
@@ -248,6 +252,8 @@ export async function* runAgent({
       }
     }
     let text = "";
+    // Whether this step's reply reasoned (thinking models): the reasoning isn't kept in the history.
+    let reasoned = false;
     const calls: ToolCall[] = [];
     let error: string | null = null;
     let stopReason: string | undefined;
@@ -259,6 +265,9 @@ export async function* runAgent({
           yield event;
           break;
         case "thinking_delta":
+          reasoned = true;
+          yield event;
+          break;
         case "usage":
           yield event;
           break;
@@ -300,24 +309,26 @@ export async function* runAgent({
     }
     // Cut off at the output limit: whatever the reply was doing is unfinished, so its calls aren't run (a
     // write_file whose content stops mid-line would break the file), and the model is told, so it can redo the
-    // work in smaller pieces. Once per run: a second cut-off ends it, rather than looping on a reply too big.
+    // work in smaller pieces. Two in a row end the run (a model stuck on a reply too big for the limit); after a
+    // step that finished, it may happen again (writing several big files in parts).
     if (stopReason === "length" && !signal.aborted) {
       const continued = ++cutOffs === 1;
+      // The history first, so it's valid even if the consumer stops at one of the events below.
+      for (const call of calls) history.push({ role: "tool", callId: call.id, name: call.name, text: NOT_RUN.cutOff });
+      // With calls, their results say it; with none, the model is told directly. Its reasoning isn't in the
+      // history, so a reply that was all reasoning gets told that, not to split a file it never started.
+      if (continued && calls.length === 0) history.push({ role: "user", text: reasoned && !text ? CUT_OFF_REASONING_NOTE : CUT_OFF_NOTE });
       yield { type: "cut_off", continued };
-      for (const call of calls) {
-        history.push({ role: "tool", callId: call.id, name: call.name, text: NOT_RUN.cutOff });
-        yield { type: "tool_skipped", call, output: NOT_RUN.cutOff };
-      }
+      for (const call of calls) yield { type: "tool_skipped", call, output: NOT_RUN.cutOff };
       if (!continued) {
         yield { type: "done", reason: "length" };
         return;
       }
-      // With calls, their results say it; with none, the model is told directly.
-      if (calls.length === 0) history.push({ role: "user", text: CUT_OFF_NOTE });
       continue;
     }
+    cutOffs = 0;
     if (calls.length === 0) {
-      yield { type: "done", reason: signal.aborted ? "aborted" : stopReason === "length" ? "length" : "end" };
+      yield { type: "done", reason: signal.aborted ? "aborted" : "end" };
       return;
     }
 
