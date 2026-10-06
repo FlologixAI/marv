@@ -3,7 +3,7 @@
 //
 // There's no `approve` here, so only what yolo mode vouches for runs (reading, edits outside .git, sandboxed
 // commands without network); anything else goes back to the model as refused, and it carries on.
-import { createSession } from "marv/sdk";
+import { createSession } from "@flologixai/marv/sdk";
 
 const apiKey = process.env.OPENROUTER_API_KEY;
 if (!apiKey) throw new Error("Set OPENROUTER_API_KEY first.");

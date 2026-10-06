@@ -9,6 +9,8 @@
 //   it in a separate process with a timeout: on the main thread it would freeze the UI, ctrl+c included.
 // - What the model gets is what a reader sees: hidden elements, form controls and scripts are removed, since
 //   text hidden from people is the classic way to plant instructions for an agent.
+// The reference is for SDK users: their tsconfig type-checks this file but doesn't include Marv's src/types.
+/// <reference path="../../types/turndown-plugin-gfm.d.ts" />
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";

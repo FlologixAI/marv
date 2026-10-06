@@ -4,8 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import * as sdk from "marv/sdk";
-import { createSession, type SessionEvent, type Tool } from "marv/sdk";
+import * as sdk from "@flologixai/marv/sdk";
+import { createSession, type SessionEvent, type Tool } from "@flologixai/marv/sdk";
 import { homeOrAbove } from "../src/paths.ts";
 import type { AgentEvent } from "../src/provider/types.ts";
 import { sandboxAvailable } from "../src/sandbox.ts";

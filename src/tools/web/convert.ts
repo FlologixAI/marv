@@ -7,6 +7,8 @@
 // download, and a fresh one carries nothing over from the last page, and gives all its memory back when it ends
 // (a 5 MB page can take a gigabyte while it's converted).
 import type { Subprocess } from "bun";
+import { existsSync } from "node:fs";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Markdown } from "./html.ts";
 import type { Reply, Request } from "./html-convert-cli.ts";
@@ -17,8 +19,13 @@ import { plainText } from "./plain.ts";
 export const CONVERT_TIMEOUT_MS = 15_000;
 
 // fileURLToPath, not `.pathname`: that keeps %20 for a space in the path, and the file wouldn't be found.
-const CONVERTER = fileURLToPath(new URL("./html-convert-cli.ts", import.meta.url));
-const CONVERTER_DIR = fileURLToPath(new URL(".", import.meta.url));
+// From source (and the SDK) the converter is the .ts beside this file; in the published CLI this code is bundled into
+// dist/cli.js, so import.meta.url is that file's, and the converter is bundled beside it (scripts/release.ts).
+const CONVERTER =
+  ["./html-convert-cli.ts", "./tools/web/html-convert-cli.js"]
+    .map((path) => fileURLToPath(new URL(path, import.meta.url)))
+    .find((path) => existsSync(path)) ?? fileURLToPath(new URL("./html-convert-cli.ts", import.meta.url));
+const CONVERTER_DIR = dirname(CONVERTER);
 
 export interface ConvertOptions {
   /** The call's abort signal (ctrl+c): the converter is killed and the promise rejects with the signal's reason. */

@@ -1,8 +1,12 @@
+<p align="center"><img src="docs/images/marv.svg" alt="Marv, a pixel-art martian" width="144"></p>
+
 # Marv
 
-A terminal coding agent, in the spirit of Claude Code. Marv reads your code, edits files and runs commands (sandboxed, and asking for your approval wherever the sandbox can't contain what it does), inside a full-screen terminal UI with a little martian for company.
+A terminal coding agent. Marv reads your code, edits files and runs commands (sandboxed, and asking for your approval wherever the sandbox can't contain what it does), inside a full-screen terminal UI with a little martian for company.
 
 Marv is written in TypeScript on [Bun](https://bun.sh), with an [Ink](https://github.com/vadimdemedes/ink) (React for the terminal) interface. It talks to models through [OpenRouter](https://openrouter.ai) (hundreds of cloud models with one API key) or [Ollama](https://ollama.com) (models running on your own machine).
+
+![Marv's welcome screen in the terminal](docs/images/screenshot.png)
 
 ## Features
 
@@ -30,6 +34,12 @@ Marv is written in TypeScript on [Bun](https://bun.sh), with an [Ink](https://gi
 - Linux with `bubblewrap` (`bwrap`) for the command sandbox. Without it, Marv still works, but every command prompt warns that it runs unsandboxed.
 
 ## Install
+
+```sh
+bun add -g @flologixai/marv    # or: npm install -g @flologixai/marv (Marv still runs on Bun)
+```
+
+Or from source, to hack on it:
 
 ```sh
 git clone https://github.com/FlologixAI/marv.git
@@ -181,11 +191,15 @@ Ollama's context window defaults to 32k tokens (`contextLength` in the config fi
 
 ## Using Marv from code
 
-Marv's engine is a library too: `marv/sdk` gives your Bun program the same agent the terminal runs (the
-tools, subagents, MCP servers, compaction, saved sessions), without the terminal.
+Marv's engine is a library too: `@flologixai/marv/sdk` gives your Bun program the same agent the terminal runs
+(the tools, subagents, MCP servers, compaction, saved sessions), without the terminal.
+
+```sh
+bun add @flologixai/marv
+```
 
 ```ts
-import { createSession } from "marv/sdk";
+import { createSession } from "@flologixai/marv/sdk";
 
 const session = await createSession({
   cwd: "/path/to/project",
@@ -244,11 +258,8 @@ await session.close();
   worktrees and MCP trust; personal skills and agents are still read from `~/.marv` in your home folder, as
   the CLI does. A repository's MCP servers can only be trusted with the CLI's `/mcp trust`. `onWarning`
   hears what doesn't fit a turn's events (a trajectory that can't be written).
-- **Bun only** (1.3 or newer). `marv/sdk` is TypeScript source, so your `tsconfig.json` needs
+- **Bun only** (1.3 or newer). The SDK is TypeScript source, so your `tsconfig.json` needs
   `"moduleResolution": "bundler"` and `"allowImportingTsExtensions": true` (`bun init`'s defaults have both).
-- **Installing from a path or tarball** (`bun add`) currently fails on Bun 1.3.11: it reads this package's
-  `patchedDependencies` (the CLI's patches) and looks for the patch files in *your* project. Shipping
-  `patches/` doesn't help; only removing that key from the packed `package.json` makes it install.
 
 `examples/sdk.ts` is a complete script.
 
@@ -271,3 +282,25 @@ Three dependencies are patched (in [`patches/`](patches/), applied by `bun insta
 - **ink-text-input**: ignores ctrl+letter (only letters: ctrl+arrows still move the cursor), so shortcuts like ctrl+o don't type the letter into the prompt.
 
 Edit a patch with `bun patch <package>`, change the files in `node_modules/<package>`, then run `bun patch --commit node_modules/<package>`.
+
+Patches only apply in a clone, so the published CLI is bundled with them: see Releasing.
+
+### Releasing
+
+```sh
+bun run release:build                        # builds the package into release/
+npm pack ./release                           # optional: the exact tarball, to install and try somewhere else
+npm publish ./release --access public        # needs `npm login`; scoped packages are private by default
+git tag v0.1.0 && git push origin v0.1.0
+gh release create v0.1.0 --generate-notes
+```
+
+Bump `version` in `package.json` first: a version number can only be published once. `release:build` bundles the CLI
+(with the patched dependencies inside, since Bun applies patches only in this repository) into `release/dist/`, copies
+`src/` for the SDK, and writes a `package.json` without `patchedDependencies`, the scripts or the devDependencies; the
+SDK's dependencies are the packages its files import. The repository's own `package.json` is `private`, so a
+`npm publish` from the root is refused.
+
+## License
+
+[MIT](LICENSE) © FlologixAI. "Marv" and the martian are FlologixAI's; forks are welcome under another name.

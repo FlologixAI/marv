@@ -1,4 +1,4 @@
-// The public entry point: `import { createSession } from "marv/sdk"`.
+// The public entry point: `import { createSession } from "@flologixai/marv/sdk"`.
 //
 // A session is Marv without its terminal: the agent loop, the tools, subagents, MCP servers, compaction, saved
 // sessions and trajectories, driven by your code. createSession() reads nothing from disk unless asked
