@@ -36,9 +36,12 @@ export const NOT_RUN = {
 export const CUT_OFF_NOTE =
   "(Automatic note from Marv, the program running you) Your last reply hit the output limit and was cut off before it finished; nothing in it was run. Continue in smaller steps (for a big file: write_file the first part, then add the rest with edit_file).";
 
-/** The same for a reply that was all reasoning (thinking models): it never got to act, so splitting isn't the fix. */
+/**
+ * The same for a reply that reasoned and left nothing (thinking models). It either reasoned until the limit or
+ * started a tool call that was cut off and dropped (Ollama drops an unfinished one): Marv can't tell which.
+ */
 export const CUT_OFF_REASONING_NOTE =
-  "(Automatic note from Marv, the program running you) Your last reply used up the output limit while you were still reasoning, so it did nothing. Reason briefly this time, then act.";
+  "(Automatic note from Marv, the program running you) Your last reply used up the output limit, while reasoning or while writing a tool call (an unfinished call is dropped), so it did nothing. Reason briefly, and write a big file in parts (write_file the first part, then add the rest with edit_file).";
 
 /**
  * A copy of the history in which every tool call has a result: calls still waiting at the end (a run that was
