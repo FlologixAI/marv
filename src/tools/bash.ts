@@ -171,6 +171,9 @@ export const bash: Tool<typeof input> = {
     "It runs in a sandbox: only the project folder is writable, the home folder is hidden, " +
     "and there's no network unless you set network: true. The user may be asked to approve a command; they always are for network: true or git_write: true. " +
     "Not interactive: commands can't prompt for input. " +
+    // A model that wrote files with heredocs put the terminator on the same line as `&& ...`, read bash's warning
+    // as "truncation", and retried for 10 steps (trajectory, 2026-10-05). The file tools have no such pitfall.
+    "Don't write files with it (no heredocs or echo >): use write_file or edit_file. " +
     "Output (stdout and stderr together) is cut in the middle if very long.",
   input,
   kind: "execute",
