@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { addedLines, diffText, MAX_SHOWN_DIFF, shownDiff } from "../src/tools/diff.ts";
+import { addedLines, diffText, MAX_SHOWN_DIFF, MAX_SHOWN_LINE_CHARS, shownDiff } from "../src/tools/diff.ts";
 
 test("diff lines carry line numbers: new for added and unchanged lines, old for removed ones, across hunks", () => {
   const before = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
@@ -29,4 +29,11 @@ test("what a result keeps is capped, and says how much it left out", () => {
   const many = addedLines(Array.from({ length: MAX_SHOWN_DIFF + 7 }, (_, i) => `l${i}`).join("\n"));
   expect(shownDiff(many)).toEqual({ lines: many.slice(0, MAX_SHOWN_DIFF), more: 7 });
   expect(shownDiff(many.slice(0, 3))).toEqual({ lines: many.slice(0, 3), more: 0 });
+});
+
+test("what a result keeps cuts each line short: a minified file's one huge line isn't stored whole", () => {
+  const long = "x".repeat(MAX_SHOWN_LINE_CHARS * 10);
+  const { lines } = shownDiff([{ kind: "add", text: long, newLine: 1 }, { kind: "ctx", text: "short", oldLine: 1, newLine: 2 }]);
+  expect(lines[0]).toEqual({ kind: "add", text: long.slice(0, MAX_SHOWN_LINE_CHARS), newLine: 1 });
+  expect(lines[1]).toEqual({ kind: "ctx", text: "short", oldLine: 1, newLine: 2 });
 });

@@ -81,7 +81,8 @@ export const MessageView = memo(function MessageView({
                 {printable(step)}
               </Text>
             ))}
-          {tool.diff && tool.diff.lines.length > 0 && (
+          {/* A saved session may have been edited by hand: a malformed diff mustn't take the App down. */}
+          {Array.isArray(tool.diff?.lines) && tool.diff.lines.length > 0 && (
             <DiffView
               lines={tool.diff.lines}
               more={tool.diff.more}

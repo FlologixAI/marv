@@ -97,6 +97,21 @@ describe("Approval", () => {
     expect(frame).toMatch(/… \d+ more lines/);
   });
 
+  test("a huge new file's preview draws its first lines without a stack overflow", () => {
+    const diff = Array.from({ length: 1_000_000 }, (_, i) => ({ kind: "add" as const, text: `l${i + 1}`, newLine: i + 1 }));
+    const frame = render(<Approval request={{ ...EDIT, preview: { title: "Create huge.ts", diff } }} onDecide={() => {}} />).lastFrame()!;
+    expect(frame).toContain("│       1 + l1");
+    expect(frame).toContain("… 999976 more lines");
+  });
+
+  test("a numbered diff counts exactly what it leaves out", () => {
+    const diff = Array.from({ length: 100 }, (_, i) => ({ kind: "add" as const, text: `line ${i + 1}`, newLine: i + 1 }));
+    const frame = render(<Approval request={{ ...EDIT, preview: { title: "Create big.ts", diff } }} onDecide={() => {}} />).lastFrame()!;
+    expect(frame).toContain("│   1 + line 1"); // a column wide enough for line 100, though it isn't shown
+    expect(frame).toContain("│  24 + line 24");
+    expect(frame).toContain("… 76 more lines");
+  });
+
   test.each([
     [[ENTER], "yes"],
     [[DOWN, ENTER], "always"],

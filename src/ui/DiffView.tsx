@@ -20,27 +20,31 @@ export function DiffView({
   max?: number;
   /** Lines left out before they got here (a result keeps at most MAX_SHOWN_DIFF). */
   more?: number;
-  /** How to see the rest, e.g. "ctrl+o". */
+  /** How to see the rest, e.g. "ctrl+o". Without one, `more` lines are said to be "not kept": nothing can show them. */
   hint?: string;
   indent?: number;
 }) {
   const shown = max === undefined ? lines : lines.slice(0, max);
   // "…" gap markers between hunks aren't lines of the file.
-  const hidden = lines.slice(shown.length).filter((l) => l.kind !== "gap").length + more;
-  // Removed lines show their old number, the others their new one; one column wide enough for all.
+  const hiddenHere = lines.slice(shown.length).filter((l) => l.kind !== "gap").length;
+  const hidden = hiddenHere + more;
+  // Removed lines show their old number, the others their new one; one column wide enough for all of them, shown
+  // or not, so the text doesn't shift when ctrl+o shows the rest.
   const number = (l: DiffLine) => (l.kind === "del" ? l.oldLine : l.newLine);
-  const width = Math.max(1, ...shown.map((l) => String(number(l) ?? "").length));
+  // A loop, not Math.max(...lines): a new file's preview holds all its lines, too many to spread as arguments.
+  let width = 1;
+  for (const l of lines) width = Math.max(width, String(number(l) ?? "").length);
   const pad = " ".repeat(width);
   return (
     <Box flexDirection="column" paddingLeft={indent}>
       {shown.map((line, i) => (
         <Text key={i} color={COLOR[line.kind]} wrap="truncate-end">
-          {line.kind === "gap" ? `${pad} ${MARK.gap}…` : `${String(number(line) ?? "").padStart(width)} ${MARK[line.kind]}${printable(line.text)}`}
+          {line.kind === "gap" ? `${pad} ${MARK.gap}…` : `${String(number(line) ?? "").padStart(width)} ${MARK[line.kind]}${printable(String(line.text ?? ""))}`}
         </Text>
       ))}
       {hidden > 0 && (
         <Text color={theme.dim}>
-          {`${pad} ${MARK.gap}… ${hidden} more line${hidden === 1 ? "" : "s"}${hint ? ` (${hint})` : ""}`}
+          {`${pad} ${MARK.gap}… ${hidden} more line${hidden === 1 ? "" : "s"}${hint ? ` (${hint})` : hiddenHere === 0 ? " not kept" : ""}`}
         </Text>
       )}
     </Box>

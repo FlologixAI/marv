@@ -203,7 +203,9 @@ await session.close();
   `turn_end` last, exactly once however it ends, with the model's text, tool calls (`tool_start`/`tool_end`),
   subagents' events (`subagent`, tagged with the call that started them), `status` (waiting for MCP servers,
   compacting, running), compaction, and `cut_off` (a reply hit the output limit, so nothing in it ran; the
-  model is told and goes on, and a second one in a row ends the turn) in between. Leaving the loop early interrupts the turn (and waits until
+  model is told and goes on, and a second one in a row ends the turn) in between. A file change's `tool_end`
+  (`edit_file`, `write_file`) carries `result.diff`: what changed, as numbered lines, for display; the model
+  never sees it. Leaving the loop early interrupts the turn (and waits until
   every tool call it started has its result); so do `interrupt()` and a `signal`. A turn you never read still
   runs to the end. One turn at a time: `send()` and `clear()` throw during one, `resume()` and `compact()`
   reject; the session is free again just before `turn_end`, so you can send the next message from there.

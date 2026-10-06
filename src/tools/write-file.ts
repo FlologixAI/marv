@@ -6,8 +6,6 @@ import { addedLines, changeSummary, diffText, shownDiff } from "./diff.ts";
 import { isDirectory, projectPath, refuseGit, requireRegularFile, resolveInProject, touchesGit } from "./files.ts";
 import { ToolError, type Tool, type ToolContext } from "./types.ts";
 
-const PREVIEW_LINES = 40;
-
 const input = z.object({
   path: z.string().describe("File to write, relative to the project root. Folders are created as needed."),
   content: z.string().describe("The complete contents of the file."),
@@ -39,14 +37,8 @@ export const writeFile: Tool<typeof input> = {
 
   async preview(args, ctx) {
     const { shown, before, content } = await plan(args, ctx);
-    if (before === null) {
-      const lines = content.replace(/\n$/, "").split("\n");
-      return {
-        title: `Create ${shown}`,
-        diff: addedLines(content).slice(0, PREVIEW_LINES),
-        note: lines.length > PREVIEW_LINES ? `${lines.length} lines (first ${PREVIEW_LINES} shown)` : undefined,
-      };
-    }
+    // All of it: the prompt shows what fits and counts the rest (a preview is never saved).
+    if (before === null) return { title: `Create ${shown}`, diff: addedLines(content) };
     return { title: `Overwrite ${shown}`, diff: diffText(before, content).lines };
   },
 

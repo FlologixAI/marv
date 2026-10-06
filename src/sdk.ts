@@ -171,7 +171,7 @@ export type { Session, SessionEvent, TurnEndReason, CompactResult, Resumed } fro
 export type { ProviderOption } from "./provider/factory.ts";
 export type { Source } from "./sources.ts";
 export { ToolError } from "./tools/types.ts";
-export type { AgentHost, AgentProgress, Tool, ToolContext, ToolResult, ApprovalRequest, Decision, Preview, Scope } from "./tools/types.ts";
+export type { AgentHost, AgentProgress, Tool, ToolContext, ToolResult, ApprovalRequest, Decision, Preview, Scope, DiffLine, DiffShown } from "./tools/types.ts";
 export type { Provider, AgentEvent, ChatTurn, StreamOptions, ToolCall, ToolSpec, Usage } from "./provider/types.ts";
 export { OllamaProvider } from "./provider/ollama.ts";
 export { OpenAICompatProvider } from "./provider/openai-compat.ts";

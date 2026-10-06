@@ -91,6 +91,14 @@ describe("write_file", () => {
     expect(asked[0]!.preview.title).toBe("Create src/deep/new.ts");
   });
 
+  test("a new file's preview carries all its lines (the prompt counts what it doesn't show), and no note", async () => {
+    const content = Array.from({ length: 100 }, (_, i) => `l${i + 1}`).join("\n") + "\n";
+    await run("write_file", { path: "big.ts", content });
+    expect(asked[0]!.preview.diff).toHaveLength(100);
+    expect(asked[0]!.preview.diff!.at(-1)).toEqual({ kind: "add", text: "l100", newLine: 100 });
+    expect(asked[0]!.preview.note).toBeUndefined();
+  });
+
   test("an absolute path inside the project is shown relative to it", async () => {
     const result = await run("write_file", { path: join(root, "abs.ts"), content: "x" });
     expect(result.label).toBe("abs.ts");

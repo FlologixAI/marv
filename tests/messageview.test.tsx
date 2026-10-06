@@ -133,8 +133,28 @@ describe("MessageView diffs", () => {
   test("expanded (ctrl+o): everything kept, and what the result left out", async () => {
     const out = (await renderAt(80, edit(30), true)).join("\n");
     expect(out).toContain("20 + row 20");
-    expect(out).toContain("… 30 more lines");
+    expect(out).toContain("… 30 more lines not kept");
     expect(out).not.toContain("(ctrl+o)");
+  });
+
+  test("the number column fits every line, so expanding past line 99 doesn't shift the text", async () => {
+    const many = Array.from({ length: 120 }, (_, i) => ({ kind: "add" as const, text: `row ${i + 1}`, newLine: i + 1 }));
+    const tool = { label: "a.txt", status: "done" as const, summary: "created · 120 lines", diff: { lines: many, more: 0 } };
+    const collapsed = (await renderAt(80, { role: "tool", text: "write_file", tool })).join("\n");
+    const expanded = (await renderAt(80, { role: "tool", text: "write_file", tool }, true)).join("\n");
+    expect(collapsed).toContain("      1 + row 1");
+    expect(expanded).toContain("      1 + row 1");
+    expect(expanded).toContain("    120 + row 120");
+  });
+
+  test("a malformed diff (a hand-edited session) doesn't break the entry", async () => {
+    const bad = (diff: unknown) => ({ role: "tool" as const, text: "edit_file", tool: { label: "a.txt", status: "done" as const, summary: "+1 −1", diff: diff as never } });
+    for (const diff of [{}, { lines: "oops", more: 0 }, { lines: [{ kind: "add", text: 42, newLine: 1 }, { kind: "add", newLine: 2 }], more: 0 }]) {
+      const out = (await renderAt(80, bad(diff))).join("\n");
+      expect(out).toContain("edit_file a.txt");
+      expect(out).toContain("+1 −1");
+    }
+    expect((await renderAt(80, bad({ lines: [{ kind: "add", text: 42, newLine: 1 }], more: 0 }))).join("\n")).toContain("1 + 42");
   });
 
   test("removed lines show their old number", async () => {

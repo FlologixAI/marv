@@ -46,6 +46,15 @@ export function addedLines(content: string): DiffLine[] {
 /** The most lines of one change a tool result keeps for the transcript (saved sessions hold them too). */
 export const MAX_SHOWN_DIFF = 400;
 
+/**
+ * The longest line it keeps: the screen truncates at the terminal's width anyway, and an edit to minified code would
+ * otherwise store a huge line (twice: removed and added) in every save of the session.
+ */
+export const MAX_SHOWN_LINE_CHARS = 500;
+
 export function shownDiff(lines: DiffLine[]): DiffShown {
-  return { lines: lines.slice(0, MAX_SHOWN_DIFF), more: Math.max(0, lines.length - MAX_SHOWN_DIFF) };
+  return {
+    lines: lines.slice(0, MAX_SHOWN_DIFF).map((l) => (l.text.length > MAX_SHOWN_LINE_CHARS ? { ...l, text: l.text.slice(0, MAX_SHOWN_LINE_CHARS) } : l)),
+    more: Math.max(0, lines.length - MAX_SHOWN_DIFF),
+  };
 }
