@@ -75,6 +75,8 @@ export type LoopEvent =
   | { type: "usage"; usage: Usage }
   /** One step's reply text is complete. */
   | { type: "assistant"; text: string }
+  /** A piece of a tool call still streaming (see AgentEvent): for showing it being written, nothing runs yet. */
+  | { type: "tool_call_delta"; index: number; name: string; text: string }
   | { type: "tool_start"; call: ToolCall; label: string }
   | { type: "tool_end"; call: ToolCall; result: ToolResult & { label: string } }
   /** A call answered without running (after a "no" or an interrupt): no tool_start came first. */
@@ -287,6 +289,9 @@ export async function* runAgent({
           yield event;
           break;
         case "usage":
+          yield event;
+          break;
+        case "tool_call_delta":
           yield event;
           break;
         case "tool_call":

@@ -13,8 +13,13 @@ export interface AgentLog {
   /** The reply streaming in, and any reasoning before it. */
   streaming: string;
   thinking: string;
+  /** A tool call still streaming in (the latest, when a reply has several), shown as it's written. */
+  draft?: { index: number; name: string; args: string };
   running: boolean;
 }
+
+/** Events after which a streaming tool call is done streaming (as in the App). */
+const STEP_ENDS = new Set<LoopEvent["type"]>(["assistant", "tool_start", "tool_skipped", "cut_off", "empty_reply", "error", "done"]);
 
 /** Mutable bookkeeping kept off the log's public shape. */
 const state = new WeakMap<AgentLog, { nextId: number; tools: Map<string, number>; thinkingSince: number | null }>();
@@ -48,7 +53,13 @@ export function applyEvent(log: AgentLog, event: LoopEvent, now = Date.now()): v
     log.streaming = "";
   };
 
+  if (STEP_ENDS.has(event.type)) delete log.draft;
   switch (event.type) {
+    case "tool_call_delta":
+      if (log.draft?.index !== event.index) log.draft = { index: event.index, name: event.name, args: "" };
+      log.draft.name = event.name || log.draft.name;
+      log.draft.args += event.text;
+      break;
     case "thinking_delta":
       s.thinkingSince ??= now;
       log.thinking += event.text;

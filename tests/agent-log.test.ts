@@ -71,3 +71,16 @@ describe("a subagent's log", () => {
     expect(log.running).toBe(false);
   });
 });
+
+describe("a tool call still streaming", () => {
+  test("is kept as a draft while it streams, and dropped when the call starts (or the step ends)", () => {
+    const log = createAgentLog({ title: "t", prompt: "p" });
+    applyEvent(log, { type: "tool_call_delta", index: 0, name: "write_file", text: '{"path":"a.js",' });
+    applyEvent(log, { type: "tool_call_delta", index: 0, name: "write_file", text: '"content":"x' });
+    expect(log.draft).toEqual({ index: 0, name: "write_file", args: '{"path":"a.js","content":"x' });
+    applyEvent(log, { type: "tool_call_delta", index: 1, name: "bash", text: "{" });
+    expect(log.draft).toEqual({ index: 1, name: "bash", args: "{" });
+    applyEvent(log, { type: "tool_start", call: { id: "c1", name: "write_file", arguments: "{}" }, label: "a.js" });
+    expect(log.draft).toBeUndefined();
+  });
+});

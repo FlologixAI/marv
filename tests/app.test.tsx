@@ -222,7 +222,7 @@ describe("App", () => {
     const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => thinker);
     await type(stdin, "hello");
     await tick(100);
-    expect(lastFrame()).toContain("Thinking… (9 words)");
+    expect(lastFrame()).toContain("Thinking… (~13 tokens)");
     expect(lastFrame()).toContain("Step 2: answer briefly.");
 
     release();
@@ -247,6 +247,38 @@ describe("App", () => {
     await tick(100);
     expect(await store.load()).toEqual({ provider: "ollama", model: "qwen3.5:9b", thinking: true });
     expect(lastFrame()).toContain("Thinking on");
+  });
+
+  test("a tool call shows as it streams: what it writes, and the code so far", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const writer: Provider = {
+      name: "writer",
+      async *stream(history) {
+        if (history.at(-1)?.role === "tool") {
+          yield { type: "text_delta", text: "Written." };
+          yield { type: "done" };
+          return;
+        }
+        yield { type: "text_delta", text: "I'll write it:" };
+        yield { type: "tool_call_delta", index: 0, name: "write_file", text: '{"path": "page.js", "content": "const a = 1;\\nfunction draw() {\\n  return a;' };
+        await gate;
+        yield { type: "tool_call", call: { id: "w1", name: "write_file", arguments: '{"path":"page.js","content":"const a = 1;\\n"}' } };
+        yield { type: "done" };
+      },
+    };
+    const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => writer);
+    await type(stdin, "write page.js");
+    await tick(150);
+    const frame = lastFrame()!;
+    expect(frame).toContain("I'll write it:"); // the text before the call stays
+    expect(frame).toContain("Writing page.js…");
+    expect(frame).toContain("tokens)");
+    expect(frame).toContain("    return a;"); // indentation kept: it's code
+    release();
+    await tick(200);
+    expect(lastFrame()).not.toContain("Writing page.js…");
+    expect(lastFrame()).toContain("Written.");
   });
 
   test("empty replies: a retry says nothing, a nudge and giving up are shown", async () => {

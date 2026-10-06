@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addUsage, costText, emptyTotals, estimateCost, usageReport } from "../src/usage.ts";
+import { addUsage, costText, emptyTotals, estimateCost, estimateTokens, usageReport } from "../src/usage.ts";
 
 describe("usage totals", () => {
   test("add up across requests, preferring the provider's reported cost", () => {
@@ -22,6 +22,14 @@ describe("usage totals", () => {
   test("without a cost or prices, the cost stays unknown", () => {
     const totals = addUsage(emptyTotals(), { promptTokens: 1000, completionTokens: 100 });
     expect(totals.cost).toBeUndefined();
+  });
+});
+
+describe("estimateTokens", () => {
+  test("about four characters a token, rounded up; nothing is 0", () => {
+    expect(estimateTokens("")).toBe(0);
+    expect(estimateTokens("abc")).toBe(1);
+    expect(estimateTokens("x".repeat(4800))).toBe(1200);
   });
 });
 

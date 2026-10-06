@@ -42,6 +42,12 @@ export type AgentEvent =
   | { type: "text_delta"; text: string }
   /** The model's private reasoning before it answers (thinking models only). */
   | { type: "thinking_delta"; text: string }
+  /**
+   * A piece of a tool call as it streams (`text` is the next part of its JSON arguments), so the screen can show
+   * a long write_file being written. For display only: the call itself still comes complete, as tool_call.
+   * Providers that only send whole calls (Ollama) never emit it.
+   */
+  | { type: "tool_call_delta"; index: number; name: string; text: string }
   /** Emitted once the call is complete (arguments can stream in pieces). */
   | { type: "tool_call"; call: ToolCall }
   | { type: "usage"; usage: Usage }

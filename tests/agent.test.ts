@@ -236,6 +236,15 @@ describe("runAgent", () => {
     ]);
   });
 
+  test("tool-call fragments are passed on as they stream, for the screen", async () => {
+    const provider = new ScriptedProvider([
+      [{ type: "tool_call_delta", index: 0, name: "read_file", text: '{"path":' }, { type: "tool_call", call: call("c1", "a.ts") }, { type: "done" }],
+      say("Done."),
+    ]);
+    const events = await run(provider, [{ role: "user", text: "go" }]);
+    expect(events).toContainEqual({ type: "tool_call_delta", index: 0, name: "read_file", text: '{"path":' });
+  });
+
   describe("an empty reply (no text, no tool calls)", () => {
     // Upstream hosts sometimes bill for a reply and send back nothing (OpenRouter's Novita and SiliconFlow for
     // qwen3-coder, gpt-oss-120b): the run ended as if the model had finished. A third of the failed eval runs.

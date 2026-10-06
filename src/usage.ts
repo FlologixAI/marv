@@ -47,6 +47,12 @@ export function addUsage(totals: Totals, usage: Usage, prices: Prices = {}): Tot
   };
 }
 
+/**
+ * Tokens in text that's still streaming, before the provider counts them (it reports usage only when the reply
+ * ends): about four characters a token, the usual rule of thumb for English and code.
+ */
+export const estimateTokens = (text: string) => Math.ceil(text.length / 4);
+
 export const tokens = (n: number) =>
   n < 1000 ? String(n) : n < 100_000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : n < 1_000_000 ? `${Math.round(n / 1000)}k` : `${+(n / 1_000_000).toFixed(1)}M`;
 

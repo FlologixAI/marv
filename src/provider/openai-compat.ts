@@ -161,10 +161,14 @@ export class OpenAICompatProvider implements Provider {
         for (const fragment of delta?.tool_calls ?? []) {
           const index = fragment.index ?? pending.size;
           const call = pending.get(index) ?? { id: "", name: "", arguments: "" };
+          // The first time a call's name is known, it's worth telling the screen even before any arguments.
+          const named = !call.name && Boolean(fragment.function?.name);
           if (fragment.id) call.id = fragment.id;
           if (fragment.function?.name) call.name = fragment.function.name;
-          call.arguments += fragment.function?.arguments ?? "";
+          const text = fragment.function?.arguments ?? "";
+          call.arguments += text;
           pending.set(index, call);
+          if (text || named) yield { type: "tool_call_delta", index, name: call.name, text };
         }
       }
     } catch (err) {

@@ -126,11 +126,20 @@ describe("OpenAICompatProvider", () => {
         "[DONE]",
       ),
     );
-    expect(await collect(provider(url).stream([{ role: "user", text: "go" }]))).toEqual([
+    const events = await collect(provider(url).stream([{ role: "user", text: "go" }]));
+    expect(events.filter((e) => e.type !== "tool_call_delta")).toEqual([
       { type: "usage", usage: { promptTokens: 1200, completionTokens: 30, cachedTokens: 1000, cost: 0.00042 } },
       { type: "tool_call", call: { id: "c1", name: "read_file", arguments: '{"path":"a.ts"}' } },
       { type: "tool_call", call: { id: "c2", name: "glob", arguments: '{"pattern":"*"}' } },
       { type: "done", reason: "tool_calls" },
+    ]);
+    // Each fragment is also reported as it arrives: a big write_file can take minutes to stream, and showing
+    // nothing until it's complete looked like a hang.
+    expect(events.filter((e) => e.type === "tool_call_delta")).toEqual([
+      { type: "tool_call_delta", index: 0, name: "read_file", text: "" },
+      { type: "tool_call_delta", index: 0, name: "read_file", text: '{"pa' },
+      { type: "tool_call_delta", index: 1, name: "glob", text: '{"pattern":"*"}' },
+      { type: "tool_call_delta", index: 0, name: "read_file", text: 'th":"a.ts"}' },
     ]);
   });
 
@@ -191,7 +200,8 @@ describe("OpenAICompatProvider", () => {
     const toolFragment = { choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "write_file", arguments: '{"path":"a.ts","con' } }] } }] };
     const url = serve(() => sse(delta("Writing the fi"), toolFragment)); // a proxy closed it: no finish_reason, no [DONE]
     const events = await collect(provider(url).stream([{ role: "user", text: "hi" }]));
-    expect(events.map((e) => e.type)).toEqual(["text_delta", "error"]); // the cut-off call never runs
+    // The fragment was shown as it streamed, but the cut-off call never becomes a tool_call, so it never runs.
+    expect(events.map((e) => e.type)).toEqual(["text_delta", "tool_call_delta", "error"]);
     expect(events.at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("ended early") });
   });
 

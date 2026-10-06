@@ -4,7 +4,7 @@ import type { AgentLog } from "../agent-log.ts";
 import { printable } from "../printable.ts";
 import { MessageView } from "./MessageView.tsx";
 import { theme } from "./theme.ts";
-import { ThinkingView } from "./ThinkingView.tsx";
+import { DraftView, ThinkingView } from "./ThinkingView.tsx";
 
 /** Pinned above a subagent's view: whose it is, and the way back. */
 export function AgentViewHeader({ log }: { log: AgentLog }) {
@@ -43,7 +43,8 @@ export const AgentView = memo(function AgentView({
         // Only entries with a diff get the flag, so ctrl+o re-renders just those.
         <MessageView key={message.id} message={message} showSteps={message.tool?.diff ? showSteps : false} />
       ))}
-      {log.streaming !== "" ? <MessageView message={{ role: "assistant", text: log.streaming }} streaming /> : waiting && <ThinkingView thought={log.thinking} />}
+      {log.streaming !== "" ? <MessageView message={{ role: "assistant", text: log.streaming }} streaming /> : waiting && !log.draft && <ThinkingView thought={log.thinking} />}
+      {log.running && log.draft && log.messages.at(-1)?.tool?.status !== "running" && <DraftView name={log.draft.name} args={log.draft.args} />}
     </>
   );
 });

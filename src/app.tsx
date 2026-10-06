@@ -42,7 +42,7 @@ import { ScrollView } from "./ui/ScrollView.tsx";
 import { Setup } from "./ui/Setup.tsx";
 import { Splash } from "./ui/Splash.tsx";
 import { formatUsage, StatusBar } from "./ui/StatusBar.tsx";
-import { ThinkingView } from "./ui/ThinkingView.tsx";
+import { DraftView, ThinkingView } from "./ui/ThinkingView.tsx";
 import { agentEntryAt, Transcript, type TranscriptItem } from "./ui/Transcript.tsx";
 
 const EXIT_CONFIRM_MS = 1500;
@@ -52,6 +52,8 @@ const NOTICE_MS = 2000;
  * anyway). Updating React on every token re-parsed the whole Markdown reply
  * for frames nobody would see.
  */
+/** Events after which a streaming tool call is done streaming: complete, cut off, or abandoned. */
+const STEP_ENDS = new Set(["assistant", "tool_start", "tool_skipped", "cut_off", "empty_reply", "error", "done"]);
 const STREAM_FLUSH_MS = 33;
 
 /** An untrusted project server, for the trust notice: what it runs, what it reads from your environment, and which project files. */
@@ -255,6 +257,8 @@ export function App({
   }, [declineAll]);
   // The model's reasoning while it thinks. Shown live, never sent back to the model.
   const [thinking, setThinking] = useState("");
+  // A tool call the model is still writing (its JSON so far), shown as it streams.
+  const [draft, setDraft] = useState<{ name: string; args: string } | null>(null);
   const [confirmExit, setConfirmExit] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // Set while the session works (a turn, or /compact): Esc and ctrl+c stop it through this.
@@ -406,6 +410,8 @@ export function App({
       let thought = "";
       let stepStarted = Date.now();
       let thoughtMs = 0;
+      // The tool call streaming in, if any: the latest one, when a reply has several.
+      let draft: { index: number; name: string; args: string } | null = null;
       const noteThought = () => {
         if (thought) {
           const seconds = Math.max(1, Math.round((thoughtMs || Date.now() - stepStarted) / 1000));
@@ -436,6 +442,7 @@ export function App({
         flushTimer = null;
         setStreaming(reply);
         setThinking(thought);
+        setDraft(draft && { name: draft.name, args: draft.args });
         if (logChanged) setLogVersion((v) => v + 1);
         logChanged = false;
         for (const [callId, p] of progress) {
@@ -451,6 +458,11 @@ export function App({
 
       try {
         for await (const event of session.send(text, { forModel })) {
+          // The step moved on: the call is complete (or never will be), so its draft goes.
+          if (draft && STEP_ENDS.has(event.type)) {
+            draft = null;
+            setDraft(null);
+          }
           switch (event.type) {
             case "status":
               setWaitingFor(event.status === "waiting_for_mcp" ? "Waiting for MCP servers to start…" : null);
@@ -487,6 +499,13 @@ export function App({
             case "text_delta":
               if (thought && !thoughtMs) thoughtMs = Date.now() - stepStarted;
               reply += event.text;
+              scheduleFlush();
+              break;
+            case "tool_call_delta":
+              if (thought && !thoughtMs) thoughtMs = Date.now() - stepStarted;
+              if (!draft || draft.index !== event.index) draft = { index: event.index, name: event.name, args: "" };
+              draft.name = event.name || draft.name;
+              draft.args += event.text;
               scheduleFlush();
               break;
             case "assistant":
@@ -577,6 +596,7 @@ export function App({
         for (const log of logs.values()) log.running = false;
         if ([...logs.values()].some(isViewed)) setLogVersion((v) => v + 1);
         noteThought();
+        setDraft(null);
         // Anything still queued belongs to this turn, which is over: declined.
         declineAll();
         abortRef.current = null;
@@ -1056,10 +1076,11 @@ export function App({
 
         {streaming !== null &&
           (streaming === "" ? (
-            toolsRunning === 0 && <ThinkingView thought={thinking} label={compacting ? "Compacting the conversation…" : (waitingFor ?? undefined)} />
+            toolsRunning === 0 && !draft && <ThinkingView thought={thinking} label={compacting ? "Compacting the conversation…" : (waitingFor ?? undefined)} />
           ) : (
             <MessageView message={{ role: "assistant", text: streaming }} streaming />
           ))}
+        {streaming !== null && draft && toolsRunning === 0 && <DraftView name={draft.name} args={draft.args} />}
       </ScrollView>
 
       {view && <AgentViewHeader log={view} />}
