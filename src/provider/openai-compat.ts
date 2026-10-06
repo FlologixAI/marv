@@ -107,9 +107,6 @@ export class OpenAICompatProvider implements Provider {
         },
         body: JSON.stringify(body),
         signal,
-        // Bun's fetch gives up after 300 s on its own; a model that thinks or writes a long tool call can go quiet
-        // longer than that. Esc stops a request (signal).
-        timeout: false,
       });
     } catch (err) {
       if (signal?.aborted) return;

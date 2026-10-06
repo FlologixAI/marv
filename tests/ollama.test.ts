@@ -71,7 +71,7 @@ describe("OllamaProvider", () => {
       model: "qwen3.5:9b",
       stream: true,
       think: true,
-      options: { num_ctx: 32768, num_predict: 8192, presence_penalty: 0 },
+      options: { num_ctx: 32768, num_predict: 16384, presence_penalty: 0 },
       messages: [
         { role: "system", content: "You are Marv." },
         { role: "user", content: "read it" },
@@ -86,6 +86,20 @@ describe("OllamaProvider", () => {
     const url = serve(() => ndjson(end));
     await collect(new OllamaProvider({ baseUrl: url, model: "m", contextLength: 8192, thinking: false }).stream([{ role: "user", text: "hi" }]));
     expect(lastRequest!.body.options).toEqual({ num_ctx: 8192, num_predict: 2048, presence_penalty: 0 });
+  });
+
+  test("with thinking on, a reply may be twice as long (the cap counts reasoning too)", async () => {
+    const url = serve(() => ndjson(end));
+    await collect(provider(url, true).stream([{ role: "user", text: "hi" }]));
+    expect(lastRequest!.body.options).toEqual({ num_ctx: 32768, num_predict: 16384, presence_penalty: 0 });
+  });
+
+  test("other server errors (out of memory, a failed load) aren't retried: a second try would only repeat them", async () => {
+    let requests = 0;
+    const url = serve(() => (++requests, Response.json({ error: "model requires more system memory" }, { status: 500 })));
+    const events = await collect(provider(url).stream([{ role: "user", text: "hi" }]));
+    expect(requests).toBe(1);
+    expect(events).toEqual([{ type: "error", message: expect.stringContaining("more system memory") }]);
   });
 
   test("a server error (an unparsable tool call) is retried once; a second one is reported", async () => {

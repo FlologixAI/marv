@@ -6,8 +6,10 @@ import { errorMessage, httpError, unreachable } from "./errors.ts";
 import type { AgentEvent, ChatTurn, Provider, StreamOptions, ToolCall } from "./types.ts";
 
 const LABEL = "Ollama";
-/** The most a reply may be (num_predict), whatever the context window. */
+/** The most a reply may be (num_predict), whatever the context window; twice that with thinking on. */
 const MAX_REPLY_TOKENS = 8192;
+/** How Ollama says it couldn't parse the tool call a model wrote ("qwen tool call parsing failed: XML syntax error…"). */
+const UNPARSABLE_CALL = /tool call|pars(e|ing)|XML syntax|unexpected EOF/i;
 
 interface Options {
   /** Where Ollama listens, e.g. http://localhost:11434 (a trailing /v1 is ignored). */
@@ -104,7 +106,8 @@ export class OllamaProvider implements Provider {
         // A cap on each reply. Without one, a model that loses its way can generate for minutes (11k tokens
         // were measured), and Ollama sends nothing while it writes a tool call. A quarter of the window leaves
         // room for the conversation and still fits a whole file (a complete boids page took ~3.5k tokens).
-        num_predict: Math.min(MAX_REPLY_TOKENS, Math.floor(contextLength / 4)),
+        // The cap counts reasoning too, so with thinking on a reply gets twice as much.
+        num_predict: thinking ? Math.min(2 * MAX_REPLY_TOKENS, Math.floor(contextLength / 2)) : Math.min(MAX_REPLY_TOKENS, Math.floor(contextLength / 4)),
         // Some models ship a presence penalty in their Modelfile (qwen3.5: 1.5). It punishes every token already
         // used, and code reuses tokens all the time: files came out garbled and cut off, and tool calls were left
         // unclosed. With 0 the same request wrote a complete file every time.
@@ -117,12 +120,15 @@ export class OllamaProvider implements Provider {
     });
 
     let response: Response;
-    // A 5xx is retried once: Ollama answers 500 when it can't parse the tool call the model wrote (an unclosed
-    // one), and a second sample usually comes out whole. Nothing was shown yet, so nothing is repeated.
+    // Ollama answers 500 when it can't parse the tool call the model wrote (an unclosed one), if the reply was
+    // only that call (with text or reasoning before it, the error comes in the stream instead). A second sample
+    // usually comes out whole, and nothing was shown yet, so it's retried once. Other 500s (out of memory, a
+    // model that won't load) would only fail again, more slowly.
     for (let attempt = 1; ; attempt++) {
       try {
         // timeout: false turns off Bun's own 300 s limit: Ollama sends nothing while the model writes a tool call,
-        // so a long one looked like a dead connection. num_predict bounds the wait, and Esc still stops it.
+        // so a long one looked like a dead connection. num_predict bounds the wait (minutes on a GPU, longer on a
+        // CPU), and Esc still stops it.
         response = await fetch(`${baseUrl}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, body, signal, timeout: false });
       } catch (err) {
         if (signal?.aborted) return;
@@ -130,11 +136,9 @@ export class OllamaProvider implements Provider {
         return;
       }
       if (response.ok) break;
-      if (response.status >= 500 && attempt < 2 && !signal?.aborted) {
-        await response.body?.cancel();
-        continue;
-      }
-      yield { type: "error", message: httpError(response.status, await errorMessage(response), LABEL, model) };
+      const detail = await errorMessage(response);
+      if (response.status >= 500 && UNPARSABLE_CALL.test(detail) && attempt < 2 && !signal?.aborted) continue;
+      yield { type: "error", message: httpError(response.status, detail, LABEL, model) };
       return;
     }
 
