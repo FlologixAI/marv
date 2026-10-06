@@ -44,6 +44,14 @@ export const CUT_OFF_REASONING_NOTE =
   "(Automatic note from Marv, the program running you) Your last reply used up the output limit, while reasoning or while writing a tool call (an unfinished call is dropped), so it did nothing. Reason briefly, and write a big file in parts (write_file the first part, then add the rest with edit_file).";
 
 /**
+ * Told to the model after a second empty reply in a row (no text, no tool calls). The first is asked for again
+ * unchanged: upstream hosts sometimes bill for a reply and send nothing (a dropped tool call), and a resample
+ * usually comes back whole. A second suggests the model itself stopped, so it's told what it did.
+ */
+export const EMPTY_REPLY_NOTE =
+  "(Automatic note from Marv, the program running you) Your last reply was empty: no text and no tool calls. If the task isn't finished, continue it with your tools; if it is, say what you did.";
+
+/**
  * A copy of the history in which every tool call has a result: calls still waiting at the end (a run that was
  * cut short, e.g. by quitting while it wound down) get "not run". Without one, the API rejects every request
  * made from this history, so a session saved this way couldn't be continued.
@@ -74,6 +82,11 @@ export type LoopEvent =
   | { type: "error"; message: string }
   /** It reached a multiple of maxSteps and asked (onLimit) whether to keep going. */
   | { type: "step_limit"; steps: number; continued: boolean }
+  /**
+   * A reply had no text and no tool calls. `next`: asked for again unchanged ("retry", the first time), with a note
+   * to the model ("nudge", the second), or the run ends as if it had answered ("stop", the third).
+   */
+  | { type: "empty_reply"; next: "retry" | "nudge" | "stop" }
   /** A reply hit the output limit: nothing in it ran. `continued`: the model was told and goes on (once per run). */
   | { type: "cut_off"; continued: boolean }
   | { type: "done"; reason: "end" | "length" | "aborted" | "declined" | "max_steps" | "error" };
@@ -233,6 +246,8 @@ export async function* runAgent({
   const usedIds = new Set(history.flatMap((turn) => (turn.role === "assistant" ? (turn.toolCalls ?? []).map((c) => c.id) : [])));
   // Replies cut off at the output limit in a row.
   let cutOffs = 0;
+  // Empty replies in a row (see EMPTY_REPLY_NOTE).
+  let empties = 0;
   for (let step = 0; ; step++) {
     // The step limit guards against a model that never finishes. With
     // onLimit, the user decides at each multiple whether it goes on.
@@ -300,6 +315,17 @@ export async function* runAgent({
       call.id = `${base}_${n}`;
       usedIds.add(call.id);
     }
+    // Nothing came back: no text (whitespace doesn't count) and nothing to run. Not after an error, a cut-off (handled
+    // below) or an interrupt. Nothing goes into the history for it, so a retry is the same request (cached).
+    if (!text.trim() && calls.length === 0 && !error && stopReason !== "length" && !signal.aborted) {
+      const next = (["retry", "nudge", "stop"] as const)[Math.min(empties++, 2)]!;
+      yield { type: "empty_reply", next };
+      if (next === "nudge") history.push({ role: "user", text: EMPTY_REPLY_NOTE });
+      if (next !== "stop") continue;
+      yield { type: "done", reason: "end" };
+      return;
+    }
+    empties = 0;
     if (text || calls.length > 0) {
       history.push(calls.length > 0 ? { role: "assistant", text, toolCalls: calls } : { role: "assistant", text });
     }

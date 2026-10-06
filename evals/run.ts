@@ -134,6 +134,10 @@ async function runOne({ model, task, rep }: { model: string; task: string; rep: 
           log.push({ error: event.message });
         }
         if (event.type === "done") result.reason = event.reason;
+        if (event.type === "empty_reply") {
+          result.emptyReplies = (result.emptyReplies ?? 0) + 1;
+          log.push({ emptyReply: event.next });
+        }
         if (event.type === "tool_end") {
           const name = event.call.name;
           const tool = (result.tools[name] ??= { calls: 0, errors: 0 });

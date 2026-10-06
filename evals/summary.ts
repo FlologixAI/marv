@@ -23,6 +23,8 @@ export interface RunResult {
   ms: number;
   /** Calls and failed calls, per tool. */
   tools: Record<string, { calls: number; errors: number }>;
+  /** Replies with no text and no tool calls (each retried, nudged or ending the run). */
+  emptyReplies?: number;
   /** The start of each failed edit_file result: what went wrong. */
   editErrors: string[];
   /** The tail of the check's output, for a failure. */

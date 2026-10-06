@@ -249,6 +249,18 @@ describe("App", () => {
     expect(lastFrame()).toContain("Thinking on");
   });
 
+  test("empty replies: a retry says nothing, a nudge and giving up are shown", async () => {
+    const empty = [{ type: "done" as const }];
+    const model = new ScriptedProvider([empty, empty, empty]);
+    const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+    await type(stdin, "hello?");
+    await tick(200);
+    const frame = lastFrame()!;
+    expect(model.requests).toHaveLength(3);
+    expect(frame).toContain("two empty replies in a row");
+    expect(frame).toContain("replies stayed empty");
+  });
+
   test("runs the tools the model asks for and shows them in the transcript", async () => {
     const model = new ScriptedProvider([
       [{ type: "tool_call", call: { id: "c1", name: "read_file", arguments: '{"path":"notes.txt"}' } }, { type: "done" }],

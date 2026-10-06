@@ -549,6 +549,11 @@ export function App({
               // The run ending here is said by done ("length"); going on, the user should know why the model changes tack.
               if (event.continued) addMessage({ role: "system", text: "✻ The reply hit the model's output limit, so nothing in it ran. Marv told the model to continue in smaller steps." });
               break;
+            case "empty_reply":
+              // A first empty reply is asked for again without a word: usually the provider dropped it.
+              if (event.next === "nudge") addMessage({ role: "system", text: "✻ The model sent two empty replies in a row, so Marv asked it to continue." });
+              if (event.next === "stop") addMessage({ role: "system", text: "The model's replies stayed empty, so the run ended. Say \"continue\" to try again." });
+              break;
             case "done":
               if (event.reason === "aborted") addMessage({ role: "system", text: "Interrupted." });
               if (event.reason === "declined") addMessage({ role: "system", text: "Stopped. Tell Marv what to do instead." });

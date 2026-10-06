@@ -142,6 +142,12 @@ describe("recording one agent's run", () => {
     expect(records).toEqual([{ type: "step_limit", turn: "t1", agent: "main", steps: 25, continued: true }]);
   });
 
+  test("an empty reply is recorded, with what Marv did next (a nudge adds a message the model saw)", () => {
+    const { rec, records } = recorder();
+    rec.event({ type: "empty_reply", next: "nudge" });
+    expect(records).toEqual([{ type: "empty_reply", turn: "t1", agent: "main", next: "nudge" }]);
+  });
+
   test("a reply cut off at the output limit is recorded (the model was told, so its next step makes sense)", () => {
     const { rec, records } = recorder();
     rec.event({ type: "cut_off", continued: true });

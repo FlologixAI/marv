@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { answerAllCalls, CUT_OFF_NOTE, CUT_OFF_REASONING_NOTE, NOT_RUN, runAgent, type LoopEvent } from "../src/agent.ts";
+import { answerAllCalls, CUT_OFF_NOTE, CUT_OFF_REASONING_NOTE, EMPTY_REPLY_NOTE, NOT_RUN, runAgent, type LoopEvent } from "../src/agent.ts";
 import type { AgentEvent, ChatTurn, Provider, ToolCall, ToolSpec } from "../src/provider/types.ts";
 import type { ToolResult } from "../src/tools/types.ts";
 import { ScriptedProvider } from "./fake-provider.ts";
@@ -234,6 +234,72 @@ describe("runAgent", () => {
       { type: "error", message: "Rate limited" },
       { type: "done", reason: "error" },
     ]);
+  });
+
+  describe("an empty reply (no text, no tool calls)", () => {
+    // Upstream hosts sometimes bill for a reply and send back nothing (OpenRouter's Novita and SiliconFlow for
+    // qwen3-coder, gpt-oss-120b): the run ended as if the model had finished. A third of the failed eval runs.
+    const empty: AgentEvent[] = [{ type: "done", reason: "stop" }];
+    const go = (): ChatTurn[] => [{ role: "user", text: "go" }];
+
+    test("is asked for again, unchanged (the prompt cache still hits), and the run goes on", async () => {
+      const provider = new ScriptedProvider([empty, useTools(call("c1", "a.ts")), say("Done.")]);
+      const events = await run(provider, go());
+      expect(provider.requests).toHaveLength(3);
+      expect(provider.requests[1]!.history).toEqual(provider.requests[0]!.history);
+      expect(events).toContainEqual({ type: "empty_reply", next: "retry" });
+      expect(events.at(-1)).toEqual({ type: "done", reason: "end" });
+    });
+
+    test("empty again: the model is told, once; empty a third time: the run ends", async () => {
+      const provider = new ScriptedProvider([empty, empty, empty, say("never asked")]);
+      const events = await run(provider, go());
+      expect(provider.requests).toHaveLength(3);
+      expect(provider.requests[2]!.history.at(-1)).toEqual({ role: "user", text: EMPTY_REPLY_NOTE });
+      expect(events.filter((e) => e.type === "empty_reply")).toEqual([
+        { type: "empty_reply", next: "retry" },
+        { type: "empty_reply", next: "nudge" },
+        { type: "empty_reply", next: "stop" },
+      ]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "end" });
+    });
+
+    test("whitespace only, or reasoning only, is empty too, and isn't put in the history", async () => {
+      const provider = new ScriptedProvider([
+        [{ type: "text_delta", text: "\n\n" }, { type: "done", reason: "stop" }],
+        [{ type: "thinking_delta", text: "Hmm." }, { type: "done", reason: "stop" }],
+        say("Done."),
+      ]);
+      const history = go();
+      await run(provider, history);
+      expect(history).toEqual([{ role: "user", text: "go" }, { role: "user", text: EMPTY_REPLY_NOTE }, { role: "assistant", text: "Done." }]);
+    });
+
+    test("each step gets its own retries: one that answered resets them", async () => {
+      const provider = new ScriptedProvider([empty, useTools(call("c1", "a.ts")), empty, say("Done.")]);
+      const events = await run(provider, go());
+      expect(events.filter((e) => e.type === "empty_reply")).toEqual([
+        { type: "empty_reply", next: "retry" },
+        { type: "empty_reply", next: "retry" },
+      ]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "end" });
+    });
+
+    test("not after an interrupt, or an error", async () => {
+      const stop = new AbortController();
+      const aborted: Provider = {
+        name: "p",
+        async *stream() {
+          stop.abort();
+          yield { type: "done", reason: "stop" };
+        },
+      };
+      const events = await run(aborted, go(), { signal: stop.signal });
+      expect(events).toEqual([{ type: "done", reason: "aborted" }]);
+      const failing = new ScriptedProvider([[{ type: "error", message: "Rate limited" }], say("never asked")]);
+      expect((await run(failing, go())).some((e) => e.type === "empty_reply")).toBe(false);
+      expect(failing.requests).toHaveLength(1);
+    });
   });
 
   describe("a reply cut off at the output limit", () => {

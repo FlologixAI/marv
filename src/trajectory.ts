@@ -52,6 +52,8 @@ export type TrajectoryRecord =
   | (Who & { type: "step_limit"; steps: number; continued: boolean })
   /** A reply hit the output limit, so nothing in it ran; `continued`: the model was told (CUT_OFF_NOTE) and went on. */
   | (Who & { type: "cut_off"; continued: boolean })
+  /** A reply had no text and no tool calls; `next`: asked again, nudged (EMPTY_REPLY_NOTE), or stopped there. */
+  | (Who & { type: "empty_reply"; next: "retry" | "nudge" | "stop" })
   /** `agent` started a subagent with the agent tool call `call`; its records follow with `agent: subagent`. */
   | (Who & { type: "subagent_start"; subagent: string; call: string; agentType: string; description: string; prompt: string; isolation?: string })
   /** How an agent's run ended (for "main", the turn). */
@@ -185,6 +187,9 @@ export class AgentRecorder {
         break;
       case "cut_off":
         this.sink({ type: "cut_off", turn, agent, continued: event.continued });
+        break;
+      case "empty_reply":
+        this.sink({ type: "empty_reply", turn, agent, next: event.next });
         break;
       case "done":
         this.finish(event.reason);
