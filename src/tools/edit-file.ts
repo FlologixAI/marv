@@ -3,6 +3,7 @@ import { z } from "zod";
 import { changeSummary, diffText, shownDiff } from "./diff.ts";
 import { applyEdit, closestLines, type Fuzzy } from "./edit-match.ts";
 import { numberedLine } from "./read-file.ts";
+import { brokenBy, syntaxNote } from "./syntax.ts";
 import { isDirectory, projectPath, refuseGit, requireRegularFile, resolveInProject, touchesGit } from "./files.ts";
 import { ToolError, type Tool, type ToolContext } from "./types.ts";
 
@@ -84,8 +85,11 @@ export const editFile: Tool<typeof input> = {
     const { absolute, shown, before, after, count, fuzzy } = await plan(args, ctx);
     await Bun.write(absolute, after);
     const diff = diffText(before, after);
+    const broken = await brokenBy(shown, before, after);
     return {
-      output: `Edited ${shown}: replaced ${count} occurrence${count === 1 ? "" : "s"} (${changeSummary(diff)} lines).${fuzzy ? ` ${FUZZY_NOTE[fuzzy]}` : ""}`,
+      output:
+        `Edited ${shown}: replaced ${count} occurrence${count === 1 ? "" : "s"} (${changeSummary(diff)} lines).${fuzzy ? ` ${FUZZY_NOTE[fuzzy]}` : ""}` +
+        (broken ? `\n\n${syntaxNote(shown, broken, after, true)}` : ""),
       summary: changeSummary(diff),
       diff: shownDiff(diff.lines),
     };

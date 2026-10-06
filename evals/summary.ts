@@ -25,6 +25,8 @@ export interface RunResult {
   tools: Record<string, { calls: number; errors: number }>;
   /** Replies with no text and no tool calls (each retried, nudged or ending the run). */
   emptyReplies?: number;
+  /** File changes after which Marv said the file no longer parses. */
+  syntaxNotes?: number;
   /** The start of each failed edit_file result: what went wrong. */
   editErrors: string[];
   /** The tail of the check's output, for a failure. */

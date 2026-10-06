@@ -144,6 +144,7 @@ async function runOne({ model, task, rep }: { model: string; task: string; rep: 
           tool.calls++;
           if (event.result.isError) tool.errors++;
           if (name === "edit_file" && event.result.isError) result.editErrors.push(short(event.result.output, 300));
+          if (/^Marv: .* doesn't parse/m.test(event.result.output)) result.syntaxNotes = (result.syntaxNotes ?? 0) + 1;
           log.push({ tool: name, args: event.call.arguments, isError: event.result.isError ?? false, output: short(event.result.output, 3000) });
         }
       }

@@ -25,6 +25,7 @@
     "eval": "bun evals/run.ts"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.9",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@mozilla/readability": "^0.6.0",
     "diff": "^9.0.0",

@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import { addedLines, changeSummary, diffText, shownDiff } from "./diff.ts";
 import { lineEnding, withLineEnding } from "./edit-match.ts";
+import { brokenBy, syntaxNote } from "./syntax.ts";
 import { isDirectory, projectPath, refuseGit, requireRegularFile, resolveInProject, touchesGit } from "./files.ts";
 import { ToolError, type Tool, type ToolContext } from "./types.ts";
 
@@ -49,11 +50,13 @@ export const writeFile: Tool<typeof input> = {
     const { absolute, shown, before, content, crlf } = await plan(args, ctx);
     await mkdir(dirname(absolute), { recursive: true });
     await Bun.write(absolute, content);
+    const broken = await brokenBy(shown, before, content);
+    const note = broken ? `\n\n${syntaxNote(shown, broken, content, before !== null)}` : "";
     if (before === null) {
       const n = lineCount(content);
-      return { output: `Created ${shown} (${n} lines).`, summary: `created · ${n} line${n === 1 ? "" : "s"}`, diff: shownDiff(addedLines(content)) };
+      return { output: `Created ${shown} (${n} lines).${note}`, summary: `created · ${n} line${n === 1 ? "" : "s"}`, diff: shownDiff(addedLines(content)) };
     }
     const diff = diffText(before, content);
-    return { output: `Wrote ${shown} (${changeSummary(diff)} lines${crlf ? "; kept its CRLF line endings" : ""}).`, summary: changeSummary(diff), diff: shownDiff(diff.lines) };
+    return { output: `Wrote ${shown} (${changeSummary(diff)} lines${crlf ? "; kept its CRLF line endings" : ""}).${note}`, summary: changeSummary(diff), diff: shownDiff(diff.lines) };
   },
 };

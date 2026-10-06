@@ -153,6 +153,28 @@ describe("write_file", () => {
   });
 });
 
+describe("a change that breaks the file's syntax", () => {
+  test("edit_file applies it, and says so with the line", async () => {
+    await writeFile(join(root, "a.js"), "export const a = 1;\nexport const b = 2;\n");
+    const result = await run("edit_file", { path: "a.js", old_string: "const b = 2;", new_string: "const b = ;" });
+    expect(result.isError).toBeFalsy();
+    expect(await read("a.js")).toContain("const b = ;");
+    expect(result.output).toContain("doesn't parse any more after this change");
+    expect(result.output).toContain("    2→export const b = ;");
+  });
+
+  test("write_file says so for a new file too", async () => {
+    const result = await run("write_file", { path: "b.ts", content: "export function f(x: number) {\n  return x +;\n}\n" });
+    expect(result.output).toContain("b.ts doesn't parse");
+  });
+
+  test("a file that was already broken isn't blamed on the change, and a fine change says nothing", async () => {
+    await writeFile(join(root, "c.js"), "const a = ;\nconst b = 1;\n");
+    expect((await run("edit_file", { path: "c.js", old_string: "const b = 1;", new_string: "const b = 2;" })).output).not.toContain("parse");
+    expect((await run("edit_file", { path: "greet.ts", old_string: "Hello", new_string: "Hi" })).output).not.toContain("parse");
+  });
+});
+
 describe("approval", () => {
   test("read-only tools never ask", async () => {
     await run("read_file", { path: "greet.ts" });
