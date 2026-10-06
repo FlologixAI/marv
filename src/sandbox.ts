@@ -22,7 +22,7 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 
 /** Folders from the hidden home folder a command may need, mounted read-only. */
-const TOOLCHAINS = [
+export const TOOLCHAINS = [
   ".bun",
   ".cargo",
   ".rustup",

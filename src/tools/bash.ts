@@ -3,7 +3,7 @@ import { rmdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
-import { sandboxArgs, sandboxAvailable } from "../sandbox.ts";
+import { sandboxArgs, sandboxAvailable, TOOLCHAINS } from "../sandbox.ts";
 import type { Tool } from "./types.ts";
 
 const DEFAULT_TIMEOUT_S = 120;
@@ -40,6 +40,34 @@ function gitGuard(root: string): { readOnly?: string[]; placeholders?: string[] 
 }
 /** Appended when a confined command fails on the read-only .git, so the model learns how to do it. */
 const GIT_HINT = "Marv: .git is read-only for commands that run without asking. To change the repository, run the command again with git_write: true (the user is asked).";
+/**
+ * Appended when a sandboxed command looks into the hidden home folder. The prompt said "hidden", but `ls ~/.marv`
+ * showed skills/ (mounted back in), so a model decided home was readable, took the missing config.json and
+ * trajectories for real, and searched for them for 21 steps (trajectory, 2026-10-05).
+ */
+const HOME_NOTE =
+  "Marv: in the sandbox the home folder is an empty stand-in: only toolchain folders (like ~/.bun), git config and ~/.marv/skills show through, read-only. " +
+  "Anything else there (Marv's own config, sessions and trajectories in ~/.marv included) is invisible, so a missing file or an empty folder under ~ says nothing about the real home folder.";
+
+const WORD_START = String.raw`(?:^|[\s=:'"(<>;|&])`;
+const WORD_END = String.raw`(?=$|[/\s'");|&<>])`;
+const PATH_REST = String.raw`([^\s'";|&<>()]*)`;
+const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** `~`, `$HOME` or the home folder's path, at the start of a word, and the path after it. */
+const homeRefs = (home: string) =>
+  new RegExp(`${WORD_START}(?:~|\\$HOME|\\$\\{HOME\\}|${escapeRegex(home)})${WORD_END}${PATH_REST}`, "g");
+
+/**
+ * Whether a command refers to a part of the home folder the sandbox hides: not the project (often inside the home
+ * folder) and not the toolchain folders it mounts. A guess from the command's text, for the note above only.
+ */
+export function touchesHiddenHome(command: string, root: string, home: string): boolean {
+  for (const [, rest = ""] of command.matchAll(homeRefs(home))) {
+    const path = join(home, rest);
+    if (!isInside(root, path) && !TOOLCHAINS.some((dir) => isInside(join(home, dir), path))) return true;
+  }
+  return false;
+}
 const MAX_TIMEOUT_S = 600;
 /** Kept in memory per command; anything beyond is dropped (the middle is cut for the model anyway). */
 const MAX_CAPTURE = 2_000_000;
@@ -168,7 +196,7 @@ export const bash: Tool<typeof input> = {
   name: "bash",
   description:
     "Run a shell command in the project folder, e.g. to run tests, a build, git status, or wc -l. " +
-    "It runs in a sandbox: only the project folder is writable, the home folder is hidden, " +
+    "It runs in a sandbox: only the project folder is writable, the home folder is an empty stand-in (toolchains like ~/.bun, git config and ~/.marv/skills show through, read-only; nothing else in it is visible), " +
     "and there's no network unless you set network: true. The user may be asked to approve a command; they always are for network: true or git_write: true. " +
     "Not interactive: commands can't prompt for input. " +
     // A model that wrote files with heredocs put the terminator on the same line as `&& ...`, read bash's warning
@@ -204,12 +232,13 @@ export const bash: Tool<typeof input> = {
     // (the user's next commit, their editor), so a planted hook would escape. Without a .git, it can't create one
     // either (an empty read-only placeholder sits there), or `git status` in that folder would run its config.
     const guard = confined ? gitGuard(root) : {};
+    const sandboxed = sandbox && sandboxAvailable();
     let result: CommandResult;
     try {
       result = await runCommand({
         command,
         root,
-        sandbox: sandbox && sandboxAvailable(),
+        sandbox: sandboxed,
         network,
         timeoutMs: timeout * 1000,
         signal,
@@ -227,6 +256,7 @@ export const bash: Tool<typeof input> = {
       : result.aborted
         ? "stopped"
         : `exit ${result.exitCode}${lines ? ` · ${lines} line${lines === 1 ? "" : "s"} of output` : ""}`;
+    if (sandboxed && touchesHiddenHome(command, root, homedir())) result.output += `\n${HOME_NOTE}\n`;
     return { output: formatOutput(result), summary };
   },
 };

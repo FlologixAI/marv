@@ -313,4 +313,12 @@ describe("special files can't hang Marv", () => {
     expect(named.isError).toBe(true);
     expect(named.output).toContain("not a regular file");
   });
+
+  test("grep on a path that doesn't exist says so, not that it's a special file", async () => {
+    // A model was told a missing file was "a pipe, socket or device" (trajectory, 2026-10-05).
+    const result = await runTool({ id: "g", name: "grep", arguments: JSON.stringify({ pattern: "x", path: "src/missing.ts" }) }, { root });
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("doesn't exist");
+    expect(result.output).not.toContain("not a regular file");
+  });
 });

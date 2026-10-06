@@ -3,7 +3,7 @@ import { mkdirSync, realpathSync, mkdtempSync, rmSync, symlinkSync } from "node:
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatOutput, runCommand } from "../src/tools/bash.ts";
+import { bash, formatOutput, runCommand, touchesHiddenHome } from "../src/tools/bash.ts";
 import { sandboxArgs, sandboxAvailable } from "../src/sandbox.ts";
 
 describe("sandboxArgs", () => {
@@ -271,6 +271,53 @@ describe("runCommand", () => {
       const offline = await sandboxed("bun -e 'await fetch(\"http://1.1.1.1\", { signal: AbortSignal.timeout(2000) })' 2>&1; echo exit=$?");
       expect(offline.output).toMatch(/exit=[1-9]/);
     });
+  });
+});
+
+describe("touchesHiddenHome", () => {
+  const home = "/home/me";
+  const root = "/home/me/proj";
+  const touches = (command: string) => touchesHiddenHome(command, root, home);
+
+  test("the home folder or anything hidden in it", () => {
+    expect(touches("ls -la ~/.marv/")).toBe(true);
+    expect(touches("find ~ -maxdepth 4 -name trajectories")).toBe(true);
+    expect(touches("cd ~ && ls")).toBe(true);
+    expect(touches('cat "$HOME/.ssh/config"')).toBe(true);
+    expect(touches("ls ${HOME}")).toBe(true);
+    expect(touches("ls /home/me/.config 2>/dev/null")).toBe(true);
+    expect(touches("echo x; ls ~/.marv/config.json|head")).toBe(true);
+  });
+
+  test("not the project, the folders the sandbox shows, or a ~ that isn't the home folder", () => {
+    expect(touches("ls -la ~/.bun/bin/ | grep marv")).toBe(false);
+    expect(touches("ls ~/.marv/skills/notes")).toBe(false);
+    expect(touches("cat ~/proj/src/a.ts")).toBe(false);
+    expect(touches("cat /home/me/proj/package.json")).toBe(false);
+    expect(touches("git log HEAD~1 && git diff main~2")).toBe(false);
+    expect(touches("ls /home/meow ~other")).toBe(false);
+    expect(touches("bun test")).toBe(false);
+  });
+});
+
+describe("bash's note about the hidden home folder", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "marv-bash-"));
+  });
+  afterEach(() => rm(root, { recursive: true, force: true }));
+  const run = (sandbox: boolean) => bash.run({ command: "echo ~/.marv" }, { root, sandbox });
+
+  test.if(sandboxAvailable())("is added in the sandbox, after the output, without counting as output", async () => {
+    const result = await run(true);
+    expect(result.output).toContain("Marv: ");
+    expect(result.output).toContain("stand-in");
+    expect(result.output.indexOf("/.marv")).toBeLessThan(result.output.indexOf("Marv: "));
+    expect(result.summary).toBe("exit 0 · 1 line of output");
+  });
+
+  test("isn't added without the sandbox, where the home folder is the real one", async () => {
+    expect((await run(false)).output).not.toContain("Marv: ");
   });
 });
 

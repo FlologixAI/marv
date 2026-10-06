@@ -119,6 +119,7 @@ export function isRegularFile(path: string): boolean {
 }
 
 export function requireRegularFile(path: string, shown: string): void {
+  if (!existsSync(path)) throw new ToolError(`"${shown}" doesn't exist.`);
   if (!isRegularFile(path)) throw new ToolError(`"${shown}" is not a regular file (a pipe, socket or device), so it can't be read.`);
 }
 
