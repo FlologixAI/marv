@@ -533,4 +533,10 @@ describe("runAgent", () => {
       ]);
     });
   });
+  test("a tool's diff is for the transcript: the model gets only the output", async () => {
+    const provider = new ScriptedProvider([useTools(call("c1", "a.ts")), say("Done.")]);
+    const withDiff = async (c: ToolCall) => ({ ...(await fakeTool(c)), diff: { lines: [{ kind: "add" as const, text: "SECRET", newLine: 1 }], more: 0 } });
+    await run(provider, [{ role: "user", text: "go" }], { runTool: withDiff });
+    expect(JSON.stringify(provider.requests[1]!.history)).not.toContain("SECRET");
+  });
 });

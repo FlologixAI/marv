@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { z } from "zod";
-import { changeSummary, diffText } from "./diff.ts";
+import { changeSummary, diffText, shownDiff } from "./diff.ts";
 import { isDirectory, projectPath, refuseGit, requireRegularFile, resolveInProject, touchesGit } from "./files.ts";
 import { ToolError, type Tool, type ToolContext } from "./types.ts";
 
@@ -63,6 +63,7 @@ export const editFile: Tool<typeof input> = {
     return {
       output: `Edited ${shown}: replaced ${count} occurrence${count === 1 ? "" : "s"} (${changeSummary(diff)} lines).`,
       summary: changeSummary(diff),
+      diff: shownDiff(diff.lines),
     };
   },
 };

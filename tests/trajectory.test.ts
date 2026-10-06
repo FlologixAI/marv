@@ -155,4 +155,12 @@ describe("recording one agent's run", () => {
     rec.finish("error");
     expect(records).toEqual([{ type: "agent_end", turn: "t1", agent: "main", reason: "error", steps: 0, tools: 0, ms: 0 }]);
   });
+
+  test("a tool's diff isn't written to the trajectory (it's for the screen; the output is what the model saw)", () => {
+    const { rec, records } = recorder();
+    const call = { id: "c1", name: "edit_file", arguments: "{}" };
+    rec.event({ type: "tool_start", call, label: "a.txt" });
+    rec.event({ type: "tool_end", call, result: { output: "Edited a.txt", summary: "+1 −1", label: "a.txt", diff: { lines: [{ kind: "add", text: "SECRET", newLine: 1 }], more: 0 } } });
+    expect(JSON.stringify(records)).not.toContain("SECRET");
+  });
 });

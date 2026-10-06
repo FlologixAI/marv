@@ -9,6 +9,16 @@ import type { Skill } from "../skills.ts";
 export interface DiffLine {
   kind: "add" | "del" | "ctx" | "gap";
   text: string;
+  /** The line's number before the change (removed and unchanged lines). */
+  oldLine?: number;
+  /** The line's number after the change (added and unchanged lines). */
+  newLine?: number;
+}
+
+/** A change as the transcript shows it: at most MAX_SHOWN_DIFF lines, and how many more there were. */
+export interface DiffShown {
+  lines: DiffLine[];
+  more: number;
 }
 
 /** What the approval prompt shows before a tool changes something. */
@@ -79,6 +89,11 @@ export interface ToolResult {
   output: string;
   /** A few words for the transcript, e.g. "42 lines". */
   summary: string;
+  /**
+   * What a file change did, for the transcript only: never sent to the model (runAgent appends `output`) or
+   * written to trajectories (they record named fields).
+   */
+  diff?: DiffShown;
   isError?: boolean;
   /** The user said no: the agent stops so they can say what to do instead. */
   declined?: boolean;

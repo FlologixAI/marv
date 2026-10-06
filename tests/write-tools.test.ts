@@ -46,8 +46,8 @@ describe("edit_file", () => {
     expect(result.summary).toBe("+1 −1");
     expect(asked).toHaveLength(1);
     expect(asked[0]!.preview.title).toBe("Edit greet.ts");
-    expect(asked[0]!.preview.diff).toContainEqual({ kind: "del", text: "  return `Hello, ${name}!`;" });
-    expect(asked[0]!.preview.diff).toContainEqual({ kind: "add", text: "  return `Hi, ${name}!`;" });
+    expect(asked[0]!.preview.diff).toContainEqual({ kind: "del", text: "  return `Hello, ${name}!`;", oldLine: 2 });
+    expect(asked[0]!.preview.diff).toContainEqual({ kind: "add", text: "  return `Hi, ${name}!`;", newLine: 2 });
   });
 
   test("doesn't ask when the text isn't there, and tells the model how to fix it", async () => {
@@ -164,4 +164,37 @@ test("a folder in the way is reported, not overwritten", async () => {
   await mkdir(join(root, "dir"));
   const result = await run("write_file", { path: "dir", content: "x" });
   expect(result).toMatchObject({ isError: true, output: expect.stringContaining("is a directory") });
+});
+
+describe("the diff a change carries (for the transcript)", () => {
+  test("edit_file: the change with line numbers", async () => {
+    await writeFile(join(root, "a.txt"), "one\ntwo\nthree\n");
+    const result = await run("edit_file", { path: "a.txt", old_string: "two", new_string: "TWO" });
+    expect(result.diff).toEqual({
+      lines: [
+        { kind: "ctx", text: "one", oldLine: 1, newLine: 1 },
+        { kind: "del", text: "two", oldLine: 2 },
+        { kind: "add", text: "TWO", newLine: 2 },
+        { kind: "ctx", text: "three", oldLine: 3, newLine: 3 },
+      ],
+      more: 0,
+    });
+  });
+
+  test("write_file: a new file is its lines as additions, capped", async () => {
+    const content = Array.from({ length: 450 }, (_, i) => `l${i + 1}`).join("\n") + "\n";
+    const result = await run("write_file", { path: "big.txt", content });
+    expect(result.diff!.lines[0]).toEqual({ kind: "add", text: "l1", newLine: 1 });
+    expect(result.diff!.lines).toHaveLength(400);
+    expect(result.diff!.more).toBe(50);
+  });
+
+  test("write_file: overwriting shows what changed", async () => {
+    await writeFile(join(root, "b.txt"), "old\n");
+    const result = await run("write_file", { path: "b.txt", content: "new\n" });
+    expect(result.diff!.lines).toEqual([
+      { kind: "del", text: "old", oldLine: 1 },
+      { kind: "add", text: "new", newLine: 1 },
+    ]);
+  });
 });

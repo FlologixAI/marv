@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
-import { changeSummary, diffText } from "./diff.ts";
+import { addedLines, changeSummary, diffText, shownDiff } from "./diff.ts";
 import { isDirectory, projectPath, refuseGit, requireRegularFile, resolveInProject, touchesGit } from "./files.ts";
 import { ToolError, type Tool, type ToolContext } from "./types.ts";
 
@@ -43,7 +43,7 @@ export const writeFile: Tool<typeof input> = {
       const lines = content.replace(/\n$/, "").split("\n");
       return {
         title: `Create ${shown}`,
-        diff: lines.slice(0, PREVIEW_LINES).map((text) => ({ kind: "add" as const, text })),
+        diff: addedLines(content).slice(0, PREVIEW_LINES),
         note: lines.length > PREVIEW_LINES ? `${lines.length} lines (first ${PREVIEW_LINES} shown)` : undefined,
       };
     }
@@ -56,9 +56,9 @@ export const writeFile: Tool<typeof input> = {
     await Bun.write(absolute, content);
     if (before === null) {
       const n = lineCount(content);
-      return { output: `Created ${shown} (${n} lines).`, summary: `created · ${n} line${n === 1 ? "" : "s"}` };
+      return { output: `Created ${shown} (${n} lines).`, summary: `created · ${n} line${n === 1 ? "" : "s"}`, diff: shownDiff(addedLines(content)) };
     }
     const diff = diffText(before, content);
-    return { output: `Wrote ${shown} (${changeSummary(diff)} lines).`, summary: changeSummary(diff) };
+    return { output: `Wrote ${shown} (${changeSummary(diff)} lines).`, summary: changeSummary(diff), diff: shownDiff(diff.lines) };
   },
 };
