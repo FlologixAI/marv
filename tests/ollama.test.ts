@@ -71,7 +71,7 @@ describe("OllamaProvider", () => {
       model: "qwen3.5:9b",
       stream: true,
       think: true,
-      options: { num_ctx: 32768 },
+      options: { num_ctx: 32768, num_predict: 8192, presence_penalty: 0 },
       messages: [
         { role: "system", content: "You are Marv." },
         { role: "user", content: "read it" },
@@ -80,6 +80,28 @@ describe("OllamaProvider", () => {
       ],
       tools: [{ type: "function", function: tools[0] }],
     });
+  });
+
+  test("caps each reply at a quarter of a small context window", async () => {
+    const url = serve(() => ndjson(end));
+    await collect(new OllamaProvider({ baseUrl: url, model: "m", contextLength: 8192, thinking: false }).stream([{ role: "user", text: "hi" }]));
+    expect(lastRequest!.body.options).toEqual({ num_ctx: 8192, num_predict: 2048, presence_penalty: 0 });
+  });
+
+  test("a server error (an unparsable tool call) is retried once; a second one is reported", async () => {
+    let requests = 0;
+    let url = serve(() =>
+      ++requests === 1 ? Response.json({ error: "XML syntax error on line 181: unexpected EOF" }, { status: 500 }) : ndjson(msg({ content: "ok" }), end),
+    );
+    expect(await collect(provider(url).stream([{ role: "user", text: "hi" }]))).toContainEqual({ type: "text_delta", text: "ok" });
+    expect(requests).toBe(2);
+    server!.stop(true);
+
+    requests = 0;
+    url = serve(() => (++requests, Response.json({ error: "XML syntax error on line 9: unexpected EOF" }, { status: 500 })));
+    const events = await collect(provider(url).stream([{ role: "user", text: "hi" }]));
+    expect(requests).toBe(2);
+    expect(events).toEqual([{ type: "error", message: expect.stringContaining("XML syntax error") }]);
   });
 
   test("accepts a base URL with a trailing /v1 (older configs)", async () => {

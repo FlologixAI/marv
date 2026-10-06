@@ -6,6 +6,8 @@ import { errorMessage, httpError, unreachable } from "./errors.ts";
 import type { AgentEvent, ChatTurn, Provider, StreamOptions, ToolCall } from "./types.ts";
 
 const LABEL = "Ollama";
+/** The most a reply may be (num_predict), whatever the context window. */
+const MAX_REPLY_TOKENS = 8192;
 
 interface Options {
   /** Where Ollama listens, e.g. http://localhost:11434 (a trailing /v1 is ignored). */
@@ -92,31 +94,46 @@ export class OllamaProvider implements Provider {
     const { model, contextLength, thinking } = this.options;
     const baseUrl = this.options.baseUrl.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
 
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl}/api/chat`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          model,
-          stream: true,
-          think: thinking,
-          // Must stay the same for the whole session: a different num_ctx reloads the model.
-          options: { num_ctx: contextLength },
-          messages: toMessages(history, system),
-          ...(tools?.length
-            ? { tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } })) }
-            : {}),
-        }),
-        signal,
-      });
-    } catch (err) {
-      if (signal?.aborted) return;
-      yield { type: "error", message: unreachable(LABEL, baseUrl, err, "Is Ollama running? Start it with `ollama serve`.") };
-      return;
-    }
+    const body = JSON.stringify({
+      model,
+      stream: true,
+      think: thinking,
+      options: {
+        // Must stay the same for the whole session: a different num_ctx reloads the model.
+        num_ctx: contextLength,
+        // A cap on each reply. Without one, a model that loses its way can generate for minutes (11k tokens
+        // were measured), and Ollama sends nothing while it writes a tool call. A quarter of the window leaves
+        // room for the conversation and still fits a whole file (a complete boids page took ~3.5k tokens).
+        num_predict: Math.min(MAX_REPLY_TOKENS, Math.floor(contextLength / 4)),
+        // Some models ship a presence penalty in their Modelfile (qwen3.5: 1.5). It punishes every token already
+        // used, and code reuses tokens all the time: files came out garbled and cut off, and tool calls were left
+        // unclosed. With 0 the same request wrote a complete file every time.
+        presence_penalty: 0,
+      },
+      messages: toMessages(history, system),
+      ...(tools?.length
+        ? { tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } })) }
+        : {}),
+    });
 
-    if (!response.ok) {
+    let response: Response;
+    // A 5xx is retried once: Ollama answers 500 when it can't parse the tool call the model wrote (an unclosed
+    // one), and a second sample usually comes out whole. Nothing was shown yet, so nothing is repeated.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        // timeout: false turns off Bun's own 300 s limit: Ollama sends nothing while the model writes a tool call,
+        // so a long one looked like a dead connection. num_predict bounds the wait, and Esc still stops it.
+        response = await fetch(`${baseUrl}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, body, signal, timeout: false });
+      } catch (err) {
+        if (signal?.aborted) return;
+        yield { type: "error", message: unreachable(LABEL, baseUrl, err, "Is Ollama running? Start it with `ollama serve`.") };
+        return;
+      }
+      if (response.ok) break;
+      if (response.status >= 500 && attempt < 2 && !signal?.aborted) {
+        await response.body?.cancel();
+        continue;
+      }
       yield { type: "error", message: httpError(response.status, await errorMessage(response), LABEL, model) };
       return;
     }
