@@ -1,3 +1,5 @@
+import type { DiffShown } from "./tools/types.ts";
+
 // A single entry in the transcript the user sees.
 // "system" is for Marv's own notices (help text, errors) — not the LLM system prompt.
 // "tool" is a tool call the agent made, shown with its outcome.
@@ -11,6 +13,8 @@ export interface ToolStatus {
   summary?: string;
   /** A subagent's finished tool calls, shown with ctrl+o. */
   steps?: string[];
+  /** What a file change did (edit_file, write_file), drawn under the entry: collapsed, all of it with ctrl+o. */
+  diff?: DiffShown;
 }
 
 export interface Message {

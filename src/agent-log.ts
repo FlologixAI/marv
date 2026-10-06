@@ -74,7 +74,7 @@ export function applyEvent(log: AgentLog, event: LoopEvent, now = Date.now()): v
       // Same rule as the main transcript: a plain failure shows its message.
       const summary = result.isError && result.summary === "error" ? result.output.split("\n")[0] : result.summary;
       const status = result.declined ? "declined" : result.isError ? "error" : "done";
-      log.messages[index] = { ...log.messages[index]!, tool: { label: result.label, status, summary } };
+      log.messages[index] = { ...log.messages[index]!, tool: { label: result.label, status, summary, diff: result.diff } };
       s.tools.delete(event.call.id);
       break;
     }

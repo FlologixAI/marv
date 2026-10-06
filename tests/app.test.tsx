@@ -421,6 +421,23 @@ describe("App", () => {
       expect(lastFrame()).toContain("Created it.");
     });
 
+    test("an edit that runs unasked shows its diff; ctrl+o shows all of it", async () => {
+      await writeFile(join(project, "a.txt"), Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n") + "\n");
+      const content = Array.from({ length: 30 }, (_, i) => `LINE ${i + 1}`).join("\n") + "\n";
+      const model = new ScriptedProvider([
+        [{ type: "tool_call", call: { id: "w1", name: "write_file", arguments: JSON.stringify({ path: "a.txt", content }) } }, { type: "done" }],
+        [{ type: "text_delta", text: "Done." }, { type: "done" }],
+      ]);
+      const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);
+      await type(stdin, "shout the file");
+      await until(() => lastFrame()!.includes("Done."));
+      expect(lastFrame()).toContain("1 - line 1");
+      expect(lastFrame()).toContain("… 45 more lines (ctrl+o)");
+      stdin.write("\x0f"); // ctrl+o
+      await until(() => lastFrame()!.includes("30 + LINE 30"));
+      expect(lastFrame()).not.toContain("(ctrl+o)");
+    });
+
     test("/yolo off turns it off and saves it; then changes ask", async () => {
       const model = new ScriptedProvider([writeCall("c1", "made.txt"), reply("Created it.")]);
       const { lastFrame, stdin } = renderApp(LOCAL, 0, undefined, () => model);

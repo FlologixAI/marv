@@ -27,12 +27,21 @@ export function AgentViewHeader({ log }: { log: AgentLog }) {
  * tool calls, live while it runs. The log is updated in place; `version`
  * changes when it did (memo would otherwise skip the render).
  */
-export const AgentView = memo(function AgentView({ log }: { log: AgentLog; version: number }) {
+export const AgentView = memo(function AgentView({
+  log,
+  showSteps = false,
+}: {
+  log: AgentLog;
+  version: number;
+  /** ctrl+o: whole diffs. */
+  showSteps?: boolean;
+}) {
   const waiting = log.running && log.streaming === "" && log.messages.at(-1)?.tool?.status !== "running";
   return (
     <>
       {log.messages.map((message) => (
-        <MessageView key={message.id} message={message} />
+        // Only entries with a diff get the flag, so ctrl+o re-renders just those.
+        <MessageView key={message.id} message={message} showSteps={message.tool?.diff ? showSteps : false} />
       ))}
       {log.streaming !== "" ? <MessageView message={{ role: "assistant", text: log.streaming }} streaming /> : waiting && <ThinkingView thought={log.thinking} />}
     </>

@@ -181,7 +181,7 @@ export function App({
   // progress, so no "Thinking…".
   const [toolsRunning, setToolsRunning] = useState(0);
   const [agentsRunning, setAgentsRunning] = useState(0);
-  // ctrl+o: show subagents' steps under their entries.
+  // ctrl+o: show subagents' steps and whole diffs under their entries.
   const [showSteps, setShowSteps] = useState(false);
   // Each subagent's own transcript, by its entry's id (`msg-12`), for the view
   // a click on the entry opens. Only this session's runs: sessions don't save them.
@@ -526,7 +526,7 @@ export function App({
               // A plain failure shows its message; a subagent that stopped shows its own summary.
               const summary = result.isError && result.summary === "error" ? result.output.split("\n")[0] : result.summary;
               const status = result.declined ? "declined" : result.isError ? "error" : "done";
-              if (entry) updateMessage(entry.line, { tool: { label: result.label, status, summary, steps: callSteps } });
+              if (entry) updateMessage(entry.line, { tool: { label: result.label, status, summary, steps: callSteps, diff: result.diff } });
               const log = logs.get(event.call.id);
               if (log) {
                 // It may have ended before its loop started (a failed check): either way it's over now.
@@ -794,7 +794,7 @@ export function App({
     { isActive: phase === "main" && setupMode === null },
   );
 
-  // ctrl+o: show or hide what subagents did, under their entries.
+  // ctrl+o: show or hide details under their entries: subagents' steps and whole diffs.
   useInput(
     (char, key) => {
       if (key.ctrl && char === "o") setShowSteps((s) => !s);
@@ -1060,7 +1060,7 @@ export function App({
       {view && <AgentViewHeader log={view} />}
       {view && (
         <ScrollView key={viewing} isActive={setupMode === null} onViewport={selection.setViewport}>
-          <AgentView log={view} version={logVersion} />
+          <AgentView log={view} version={logVersion} showSteps={showSteps} />
         </ScrollView>
       )}
 

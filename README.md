@@ -91,7 +91,7 @@ Type `/` to open the command menu: ↑/↓ to choose, Enter to run, Tab or → t
 |---|---|
 | Esc | Stop a reply or a running tool (in a subagent's view: go back) |
 | ctrl+c | Stop / clear the input / press twice to quit |
-| ctrl+o | Show or hide what subagents did (their last steps) |
+| ctrl+o | Show or hide details: what subagents did, and whole diffs |
 | Click a subagent | Open its own transcript, live |
 | PgUp / PgDn, mouse wheel | Scroll the conversation |
 | Drag with the mouse | Select text; it's copied when you let go (drag past the edge to scroll) |

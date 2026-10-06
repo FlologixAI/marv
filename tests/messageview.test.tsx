@@ -29,11 +29,11 @@ class FakeKeyboard extends EventEmitter {
   unref() {}
 }
 
-async function renderAt(width: number, message: Pick<Message, "role" | "text" | "tool" | "markdown">) {
+async function renderAt(width: number, message: Pick<Message, "role" | "text" | "tool" | "markdown">, showSteps = false) {
   const stdout = new FakeTerminal(width);
   const { unmount } = render(
     <Box width={width} flexDirection="column">
-      <MessageView message={message} />
+      <MessageView message={message} showSteps={showSteps} />
     </Box>,
     { stdout: stdout as unknown as NodeJS.WriteStream, stdin: new FakeKeyboard() as unknown as NodeJS.ReadStream, interactive: true },
   );
@@ -112,4 +112,34 @@ describe("MessageView terminal control sequences", () => {
       expect(plain).not.toContain("\x07");
     });
   }
+});
+
+describe("MessageView diffs", () => {
+  const lines = Array.from({ length: 20 }, (_, i) => ({ kind: "add" as const, text: `row ${i + 1}`, newLine: i + 1 }));
+  const edit = (more = 0): Pick<Message, "role" | "text" | "tool"> => ({
+    role: "tool",
+    text: "write_file",
+    tool: { label: "a.txt", status: "done", summary: "created · 20 lines", diff: { lines, more } },
+  });
+
+  test("collapsed: the first 15 lines, numbered, then how many more and how to see them", async () => {
+    const out = (await renderAt(80, edit())).join("\n");
+    expect(out).toContain(" 1 + row 1");
+    expect(out).toContain("15 + row 15");
+    expect(out).not.toContain("row 16");
+    expect(out).toContain("… 5 more lines (ctrl+o)");
+  });
+
+  test("expanded (ctrl+o): everything kept, and what the result left out", async () => {
+    const out = (await renderAt(80, edit(30), true)).join("\n");
+    expect(out).toContain("20 + row 20");
+    expect(out).toContain("… 30 more lines");
+    expect(out).not.toContain("(ctrl+o)");
+  });
+
+  test("removed lines show their old number", async () => {
+    const out = (await renderAt(80, { role: "tool", text: "edit_file", tool: { label: "a.txt", status: "done", summary: "+1 −1", diff: { lines: [{ kind: "del", text: "old", oldLine: 7 }, { kind: "add", text: "new", newLine: 7 }], more: 0 } } })).join("\n");
+    expect(out).toContain("7 - old");
+    expect(out).toContain("7 + new");
+  });
 });

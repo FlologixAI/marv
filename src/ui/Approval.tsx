@@ -1,13 +1,11 @@
 import { Box, Text, useInput } from "ink";
-import type { ApprovalRequest, Decision, DiffLine } from "../tools/types.ts";
+import type { ApprovalRequest, Decision } from "../tools/types.ts";
 import { printable } from "../printable.ts";
+import { DiffView } from "./DiffView.tsx";
 import { Select } from "./Select.tsx";
 import { theme } from "./theme.ts";
 
 const MAX_DIFF_LINES = 24;
-
-const MARK: Record<DiffLine["kind"], string> = { add: "+ ", del: "- ", ctx: "  ", gap: "  " };
-const COLOR: Record<DiffLine["kind"], string> = { add: theme.diffAdd, del: theme.diffDel, ctx: theme.dim, gap: theme.dim };
 
 /**
  * Asks before a tool changes something: what it will do (a diff, or the
@@ -37,15 +35,13 @@ export function Approval({
   });
 
   const diff = preview.diff ?? [];
-  const shown = diff.slice(0, MAX_DIFF_LINES);
-  const hidden = diff.length - shown.length;
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={preview.warning ? theme.warning : theme.accent} paddingX={1}>
       {request.agent && <Text color={theme.dim}>[{printable(request.agent)}]</Text>}
       <Text bold>{printable(preview.title)}</Text>
 
-      {(shown.length > 0 || preview.command || preview.text) && (
+      {(diff.length > 0 || preview.command || preview.text) && (
         <Box flexDirection="column" marginTop={1}>
           {preview.command && (
             <Text color={theme.code}>
@@ -54,12 +50,7 @@ export function Approval({
             </Text>
           )}
           {preview.text && <Text>{printable(preview.text)}</Text>}
-          {shown.map((line, i) => (
-            <Text key={i} color={COLOR[line.kind]} wrap="truncate-end">
-              {line.kind === "gap" ? "  …" : MARK[line.kind] + printable(line.text)}
-            </Text>
-          ))}
-          {hidden > 0 && <Text color={theme.dim}>  … {hidden} more lines</Text>}
+          {diff.length > 0 && <DiffView lines={diff} max={MAX_DIFF_LINES} />}
         </Box>
       )}
 

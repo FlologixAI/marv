@@ -18,7 +18,7 @@ interface Props {
   memories?: number;
   /** How many MCP servers are configured. */
   mcpServers?: number;
-  /** ctrl+o: show subagents' steps under their entries. */
+  /** ctrl+o: details (subagents' steps, whole diffs) under their entries. */
   showSteps?: boolean;
   /** Told where each subagent's entry is drawn (null when it goes), so a click can find it. Keep it stable (memo). */
   onAgentRef?: (id: string, element: DOMElement | null) => void;
@@ -51,8 +51,8 @@ export const Transcript = memo(function Transcript({ items, version, cwd, instru
     if (item.kind === "welcome") {
       return <Welcome key={item.id} version={version} cwd={cwd} instructions={instructions} skills={skills} memories={memories} mcpServers={mcpServers} />;
     }
-    // Only entries with steps get the flag, so ctrl+o re-renders just those.
-    const view = <MessageView key={item.id} message={item.message} showSteps={item.message.tool?.steps ? showSteps : false} />;
+    // Only entries with steps or a diff get the flag, so ctrl+o re-renders just those.
+    const view = <MessageView key={item.id} message={item.message} showSteps={item.message.tool?.steps || item.message.tool?.diff ? showSteps : false} />;
     return item.message.role === "tool" && item.message.text === "agent" && onAgentRef ? (
       <AgentEntry key={item.id} id={item.id} onRef={onAgentRef}>
         {view}

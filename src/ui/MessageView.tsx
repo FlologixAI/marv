@@ -2,8 +2,12 @@ import { memo } from "react";
 import { Box, Text } from "ink";
 import type { Message } from "../types.ts";
 import { printable } from "../printable.ts";
+import { DiffView } from "./DiffView.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { theme } from "./theme.ts";
+
+/** A change's diff under its entry: enough to see what changed; ctrl+o shows the rest. */
+const COLLAPSED_DIFF_LINES = 15;
 
 /**
  * The 2-column marker in front of a message ("● ", "> "). A fixed-width box
@@ -31,7 +35,7 @@ export const MessageView = memo(function MessageView({
   message: Pick<Message, "role" | "text" | "isError" | "tool" | "markdown">;
   /** The assistant reply still coming in (parsed incrementally). */
   streaming?: boolean;
-  /** ctrl+o: show subagents' steps under their entry. */
+  /** ctrl+o: details (subagents' steps, whole diffs). */
   showSteps?: boolean;
 }) {
   switch (message.role) {
@@ -77,6 +81,15 @@ export const MessageView = memo(function MessageView({
                 {printable(step)}
               </Text>
             ))}
+          {tool.diff && tool.diff.lines.length > 0 && (
+            <DiffView
+              lines={tool.diff.lines}
+              more={tool.diff.more}
+              max={showSteps ? undefined : COLLAPSED_DIFF_LINES}
+              hint={showSteps ? undefined : "ctrl+o"}
+              indent={4}
+            />
+          )}
         </Box>
       );
     }

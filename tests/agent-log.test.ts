@@ -49,6 +49,15 @@ describe("a subagent's log", () => {
     expect(log.messages.at(-1)).toMatchObject({ tool: { status: "declined" } });
   });
 
+  test("a subagent's edit keeps its diff for its view", () => {
+    const log = createAgentLog({ title: "t", prompt: "p" });
+    const call = { id: "c1", name: "edit_file", arguments: "{}" };
+    const diff = { lines: [{ kind: "add" as const, text: "x", newLine: 1 }], more: 0 };
+    applyEvent(log, { type: "tool_start", call, label: "a.txt" });
+    applyEvent(log, { type: "tool_end", call, result: { output: "ok", summary: "+1 −0", label: "a.txt", diff } });
+    expect(log.messages.at(-1)!.tool!.diff).toEqual(diff);
+  });
+
   test("errors and how it stopped are shown", () => {
     const log = createAgentLog({ title: "t", prompt: "p" });
     applyEvent(log, { type: "text_delta", text: "half a rep" });
