@@ -63,6 +63,9 @@ export const MessageView = memo(function MessageView({
       const tool = message.tool!;
       const failed = tool.status === "error";
       const declined = tool.status === "declined";
+      // A saved session may have been edited by hand: a malformed diff (or a line in it) is skipped rather than
+      // taking the App down on resume.
+      const diffLines = Array.isArray(tool.diff?.lines) ? tool.diff.lines.filter((line) => line !== null && typeof line === "object") : [];
       return (
         <Box flexDirection="column" marginBottom={1}>
           <Text wrap="truncate-end">
@@ -81,11 +84,10 @@ export const MessageView = memo(function MessageView({
                 {printable(step)}
               </Text>
             ))}
-          {/* A saved session may have been edited by hand: a malformed diff mustn't take the App down. */}
-          {Array.isArray(tool.diff?.lines) && tool.diff.lines.length > 0 && (
+          {diffLines.length > 0 && (
             <DiffView
-              lines={tool.diff.lines}
-              more={tool.diff.more}
+              lines={diffLines}
+              more={typeof tool.diff?.more === "number" ? tool.diff.more : 0}
               max={showSteps ? undefined : COLLAPSED_DIFF_LINES}
               hint={showSteps ? undefined : "ctrl+o"}
               indent={4}

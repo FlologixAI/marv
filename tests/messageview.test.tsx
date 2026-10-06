@@ -149,7 +149,12 @@ describe("MessageView diffs", () => {
 
   test("a malformed diff (a hand-edited session) doesn't break the entry", async () => {
     const bad = (diff: unknown) => ({ role: "tool" as const, text: "edit_file", tool: { label: "a.txt", status: "done" as const, summary: "+1 −1", diff: diff as never } });
-    for (const diff of [{}, { lines: "oops", more: 0 }, { lines: [{ kind: "add", text: 42, newLine: 1 }, { kind: "add", newLine: 2 }], more: 0 }]) {
+    for (const diff of [
+      {},
+      { lines: "oops", more: 0 },
+      { lines: [{ kind: "add", text: 42, newLine: 1 }, { kind: "add", newLine: 2 }], more: 0 },
+      { lines: [null, "x", { kind: "add", text: "ok", newLine: 1 }], more: "lots" },
+    ]) {
       const out = (await renderAt(80, bad(diff))).join("\n");
       expect(out).toContain("edit_file a.txt");
       expect(out).toContain("+1 −1");
