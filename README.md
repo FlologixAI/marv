@@ -31,7 +31,8 @@ Marv is written in TypeScript on [Bun](https://bun.sh), with an [Ink](https://gi
 - One of:
   - an [OpenRouter API key](https://openrouter.ai/settings/keys), or
   - [Ollama](https://ollama.com) running locally, with a model that supports tool calling (e.g. `ollama pull qwen3.5:9b`).
-- Linux with `bubblewrap` (`bwrap`) for the command sandbox. Without it, Marv still works, but every command prompt warns that it runs unsandboxed.
+- Linux or macOS. **On Windows, use [WSL](https://learn.microsoft.com/windows/wsl/install)**: install Bun and Marv inside your WSL distribution (e.g. Ubuntu) and run `marv` there. Native Windows isn't supported yet (the `marv` launcher and the shell tool need `bash`).
+- For the command sandbox: Linux (WSL included) with `bubblewrap` (`bwrap`; e.g. `sudo apt install bubblewrap`). Without it, macOS included, Marv still works, but every command asks first and warns that it runs unsandboxed.
 
 ## Install
 
