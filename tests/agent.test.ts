@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { answerAllCalls, runAgent, type LoopEvent } from "../src/agent.ts";
+import { answerAllCalls, CUT_OFF_NOTE, NOT_RUN, runAgent, type LoopEvent } from "../src/agent.ts";
 import type { AgentEvent, ChatTurn, Provider, ToolCall, ToolSpec } from "../src/provider/types.ts";
 import type { ToolResult } from "../src/tools/types.ts";
 import { ScriptedProvider } from "./fake-provider.ts";
@@ -234,6 +234,36 @@ describe("runAgent", () => {
       { type: "error", message: "Rate limited" },
       { type: "done", reason: "error" },
     ]);
+  });
+
+  describe("a reply cut off at the output limit", () => {
+    const cutOff = (...events: AgentEvent[]): AgentEvent[] => [...events, { type: "done", reason: "length" }];
+
+    test("its tool calls aren't run (they may be incomplete); each gets a result saying so, and the run goes on", async () => {
+      const provider = new ScriptedProvider([cutOff({ type: "tool_call", call: call("c1", "a.ts") }), say("Smaller steps, then.")]);
+      const ran: string[] = [];
+      const events = await run(provider, [{ role: "user", text: "go" }], { runTool: async (c) => (ran.push(c.id), fakeTool(c)) });
+      expect(ran).toEqual([]);
+      expect(events).toContainEqual({ type: "cut_off", continued: true });
+      expect(events).toContainEqual({ type: "tool_skipped", call: call("c1", "a.ts"), output: NOT_RUN.cutOff });
+      expect(provider.requests[1]!.history.at(-1)).toEqual({ role: "tool", callId: "c1", name: "read_file", text: NOT_RUN.cutOff });
+      expect(events.at(-1)).toEqual({ type: "done", reason: "end" });
+    });
+
+    test("with nothing to run, the model is told once and goes on; a second cut-off ends the run", async () => {
+      const provider = new ScriptedProvider([cutOff({ type: "text_delta", text: "Here is the fi" }), cutOff()]);
+      const events = await run(provider, [{ role: "user", text: "go" }]);
+      expect(provider.requests).toHaveLength(2);
+      expect(provider.requests[1]!.history.slice(-2)).toEqual([
+        { role: "assistant", text: "Here is the fi" },
+        { role: "user", text: CUT_OFF_NOTE },
+      ]);
+      expect(events.filter((e) => e.type === "cut_off")).toEqual([
+        { type: "cut_off", continued: true },
+        { type: "cut_off", continued: false },
+      ]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "length" });
+    });
   });
 
   describe("parallel calls", () => {

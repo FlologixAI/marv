@@ -24,7 +24,17 @@ export const MAX_PARALLEL = 4;
 export const NOT_RUN = {
   aborted: "Interrupted by the user before this tool ran.",
   declined: "Not run: the user declined an earlier action.",
+  cutOff:
+    "Not run: your reply hit the output limit before it finished, so this call may be incomplete. Redo it in smaller steps (for a big file: write_file the first part, then add the rest with edit_file).",
 };
+
+/**
+ * Told to the model (as a user message from Marv) when a reply with nothing to run was cut off at the output
+ * limit: without it, the model would only see its own unfinished reply, or nothing (Ollama drops a tool call it
+ * was still writing), and would likely try the same thing again.
+ */
+export const CUT_OFF_NOTE =
+  "Marv: your last reply hit the output limit and was cut off before it finished; nothing in it was run. Continue in smaller steps (for a big file: write_file the first part, then add the rest with edit_file).";
 
 /**
  * A copy of the history in which every tool call has a result: calls still waiting at the end (a run that was
@@ -57,6 +67,8 @@ export type LoopEvent =
   | { type: "error"; message: string }
   /** It reached a multiple of maxSteps and asked (onLimit) whether to keep going. */
   | { type: "step_limit"; steps: number; continued: boolean }
+  /** A reply hit the output limit: nothing in it ran. `continued`: the model was told and goes on (once per run). */
+  | { type: "cut_off"; continued: boolean }
   | { type: "done"; reason: "end" | "length" | "aborted" | "declined" | "max_steps" | "error" };
 
 interface Options {
@@ -212,6 +224,8 @@ export async function* runAgent({
 }: Options): AsyncGenerator<LoopEvent> {
   // Ids already in the conversation (a resumed session's too): a new call may not reuse one.
   const usedIds = new Set(history.flatMap((turn) => (turn.role === "assistant" ? (turn.toolCalls ?? []).map((c) => c.id) : [])));
+  // Replies cut off at the output limit so far in this run.
+  let cutOffs = 0;
   for (let step = 0; ; step++) {
     // The step limit guards against a model that never finishes. With
     // onLimit, the user decides at each multiple whether it goes on.
@@ -283,6 +297,24 @@ export async function* runAgent({
       yield { type: "error", message: error };
       yield { type: "done", reason: "error" };
       return;
+    }
+    // Cut off at the output limit: whatever the reply was doing is unfinished, so its calls aren't run (a
+    // write_file whose content stops mid-line would break the file), and the model is told, so it can redo the
+    // work in smaller pieces. Once per run: a second cut-off ends it, rather than looping on a reply too big.
+    if (stopReason === "length" && !signal.aborted) {
+      const continued = ++cutOffs === 1;
+      yield { type: "cut_off", continued };
+      for (const call of calls) {
+        history.push({ role: "tool", callId: call.id, name: call.name, text: NOT_RUN.cutOff });
+        yield { type: "tool_skipped", call, output: NOT_RUN.cutOff };
+      }
+      if (!continued) {
+        yield { type: "done", reason: "length" };
+        return;
+      }
+      // With calls, their results say it; with none, the model is told directly.
+      if (calls.length === 0) history.push({ role: "user", text: CUT_OFF_NOTE });
+      continue;
     }
     if (calls.length === 0) {
       yield { type: "done", reason: signal.aborted ? "aborted" : stopReason === "length" ? "length" : "end" };

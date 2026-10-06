@@ -545,6 +545,10 @@ export function App({
             case "error":
               addMessage({ role: "system", text: event.message, isError: true });
               break;
+            case "cut_off":
+              // The run ending here is said by done ("length"); going on, the user should know why the model changes tack.
+              if (event.continued) addMessage({ role: "system", text: "✻ The reply hit the model's output limit, so nothing in it ran. Marv told the model to continue in smaller steps." });
+              break;
             case "done":
               if (event.reason === "aborted") addMessage({ role: "system", text: "Interrupted." });
               if (event.reason === "declined") addMessage({ role: "system", text: "Stopped. Tell Marv what to do instead." });

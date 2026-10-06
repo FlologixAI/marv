@@ -142,6 +142,12 @@ describe("recording one agent's run", () => {
     expect(records).toEqual([{ type: "step_limit", turn: "t1", agent: "main", steps: 25, continued: true }]);
   });
 
+  test("a reply cut off at the output limit is recorded (the model was told, so its next step makes sense)", () => {
+    const { rec, records } = recorder();
+    rec.event({ type: "cut_off", continued: true });
+    expect(records).toEqual([{ type: "cut_off", turn: "t1", agent: "main", continued: true }]);
+  });
+
   test("finish() closes a run that never sent done (it threw), once", () => {
     const { rec, records } = recorder();
     rec.finish("error");
