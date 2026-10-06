@@ -21,7 +21,8 @@
     "dev": "bun src/cli.tsx",
     "test": "bun test",
     "stats": "bun scripts/trajectory-stats.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "eval": "bun evals/run.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.0",

@@ -14,5 +14,5 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true
   },
-  "include": ["src", "tests", "scripts", "examples"]
+  "include": ["src", "tests", "scripts", "examples", "evals/*.ts"]
 }
