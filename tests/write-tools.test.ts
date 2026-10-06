@@ -75,6 +75,31 @@ describe("edit_file", () => {
     expect(await read("greet.ts")).toContain("Hello");
   });
 
+  test("an old_string with the wrong indentation still applies, re-indented in the file's style, and says so", async () => {
+    await writeFile(join(root, "tabs.js"), "function f() {\n\tif (x) {\n\t\treturn 1;\n\t}\n}\n");
+    const result = await run("edit_file", { path: "tabs.js", old_string: "    if (x) {\n        return 1;\n    }", new_string: "    if (x) {\n        return 2;\n    }" });
+    expect(result.isError).toBeFalsy();
+    expect(await read("tabs.js")).toBe("function f() {\n\tif (x) {\n\t\treturn 2;\n\t}\n}\n");
+    expect(result.output).toContain("indentation");
+    expect(asked[0]!.preview.diff).toContainEqual({ kind: "add", text: "\t\treturn 2;", newLine: 3 });
+  });
+
+  test("when nothing matches, the error shows the closest lines as they are now", async () => {
+    const result = await run("edit_file", { path: "greet.ts", old_string: "  return `Hi, ${name}!!`;", new_string: "x" });
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("closest");
+    expect(result.output).toContain("    2→  return `Hello, ${name}!`;");
+  });
+
+  test("a CRLF file keeps its line endings, from edit_file and write_file", async () => {
+    await writeFile(join(root, "win.js"), "a();\r\nb();\r\n");
+    await run("edit_file", { path: "win.js", old_string: "a();", new_string: "a();\nc();" });
+    expect(await read("win.js")).toBe("a();\r\nc();\r\nb();\r\n");
+    const written = await run("write_file", { path: "win.js", content: "x();\ny();\n" });
+    expect(await read("win.js")).toBe("x();\r\ny();\r\n");
+    expect(written.output).toContain("CRLF");
+  });
+
   test("all file changes share one 'don't ask again' scope", async () => {
     await run("edit_file", { path: "greet.ts", old_string: "Hello", new_string: "Hi" });
     await run("write_file", { path: "new.ts", content: "x" });

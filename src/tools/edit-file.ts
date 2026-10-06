@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { z } from "zod";
 import { changeSummary, diffText, shownDiff } from "./diff.ts";
+import { applyEdit, closestLines, type Fuzzy } from "./edit-match.ts";
+import { numberedLine } from "./read-file.ts";
 import { isDirectory, projectPath, refuseGit, requireRegularFile, resolveInProject, touchesGit } from "./files.ts";
 import { ToolError, type Tool, type ToolContext } from "./types.ts";
 
@@ -23,20 +25,42 @@ async function plan({ path, old_string, new_string, replace_all }: Input, { root
   const file = Bun.file(absolute);
   const before = await file.text();
 
-  const count = before.split(old_string).length - 1;
-  if (count === 0) {
+  const result = applyEdit(before, old_string, new_string, Boolean(replace_all));
+  if ("error" in result && result.error === "ambiguous") {
     throw new ToolError(
-      `old_string was not found in ${shown}. It must match the file exactly, including whitespace and indentation. Use read_file to see the current text, then try again.`,
+      `old_string appears ${result.count} times in ${shown}. Include more of the surrounding lines so it matches exactly once, or set replace_all to change all ${result.count}.`,
     );
   }
-  if (count > 1 && !replace_all) {
-    throw new ToolError(
-      `old_string appears ${count} times in ${shown}. Include more of the surrounding lines so it matches exactly once, or set replace_all to change all ${count}.`,
-    );
-  }
-  const after = replace_all ? before.replaceAll(old_string, new_string) : before.replace(old_string, () => new_string);
-  return { absolute, shown, before, after, count: replace_all ? count : 1 };
+  if ("error" in result) throw new ToolError(notFound(shown, before, old_string));
+  return { absolute, shown, before, after: result.text, count: result.count, fuzzy: result.fuzzy };
 }
+
+const MAX_CLOSEST_LINES = 30;
+const MAX_CLOSEST_CHARS = 500;
+
+/**
+ * Not found: with the file's closest lines as they are now (numbered like read_file), so the model can copy the
+ * real text in its next call instead of reading the file again or guessing once more.
+ */
+function notFound(shown: string, text: string, oldString: string): string {
+  const head = `old_string was not found in ${shown}, not even ignoring differences in whitespace and indentation.`;
+  const closest = closestLines(text, oldString);
+  if (!closest) return `${head} It must match the file exactly. Use read_file to see the current text, then try again.`;
+  const end = Math.min(closest.end, closest.start + MAX_CLOSEST_LINES - 1);
+  const lines = text
+    .split(/\r?\n/)
+    .slice(closest.start - 1, end)
+    .map((line, i) => numberedLine(closest.start + i, line.length > MAX_CLOSEST_CHARS ? `${line.slice(0, MAX_CLOSEST_CHARS)}… (line truncated)` : line));
+  return (
+    `${head} The closest text is lines ${closest.start}-${closest.end}, as it is now:\n${lines.join("\n")}\n` +
+    "If that's the part you meant, copy old_string from these lines exactly (what follows each →). Otherwise use read_file to find it."
+  );
+}
+
+const FUZZY_NOTE: Record<Fuzzy, string> = {
+  "trailing-whitespace": "old_string matched once trailing whitespace was ignored.",
+  indentation: "old_string matched only with different indentation; new_string was re-indented to match the file.",
+};
 
 export const editFile: Tool<typeof input> = {
   name: "edit_file",
@@ -57,11 +81,11 @@ export const editFile: Tool<typeof input> = {
 
   async run(args, ctx) {
     // Planned again: the file may have changed while the user was deciding.
-    const { absolute, shown, before, after, count } = await plan(args, ctx);
+    const { absolute, shown, before, after, count, fuzzy } = await plan(args, ctx);
     await Bun.write(absolute, after);
     const diff = diffText(before, after);
     return {
-      output: `Edited ${shown}: replaced ${count} occurrence${count === 1 ? "" : "s"} (${changeSummary(diff)} lines).`,
+      output: `Edited ${shown}: replaced ${count} occurrence${count === 1 ? "" : "s"} (${changeSummary(diff)} lines).${fuzzy ? ` ${FUZZY_NOTE[fuzzy]}` : ""}`,
       summary: changeSummary(diff),
       diff: shownDiff(diff.lines),
     };

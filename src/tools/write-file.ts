@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { addedLines, changeSummary, diffText, shownDiff } from "./diff.ts";
+import { lineEnding, withLineEnding } from "./edit-match.ts";
 import { isDirectory, projectPath, refuseGit, requireRegularFile, resolveInProject, touchesGit } from "./files.ts";
 import { ToolError, type Tool, type ToolContext } from "./types.ts";
 
@@ -19,7 +20,9 @@ async function plan({ path, content }: z.infer<typeof input>, { root, confined }
   const exists = existsSync(absolute);
   if (exists) requireRegularFile(absolute, shown);
   const before = exists ? await Bun.file(absolute).text() : null;
-  return { absolute, shown, before, content };
+  // A model writes \n: rewriting a CRLF file would otherwise change every line, and its line endings with them.
+  const crlf = before !== null && lineEnding(before) === "\r\n";
+  return { absolute, shown, before, content: crlf ? withLineEnding(content, "\r\n") : content, crlf };
 }
 
 const lineCount = (text: string) => (text === "" ? 0 : text.replace(/\n$/, "").split("\n").length);
@@ -43,7 +46,7 @@ export const writeFile: Tool<typeof input> = {
   },
 
   async run(args, ctx) {
-    const { absolute, shown, before, content } = await plan(args, ctx);
+    const { absolute, shown, before, content, crlf } = await plan(args, ctx);
     await mkdir(dirname(absolute), { recursive: true });
     await Bun.write(absolute, content);
     if (before === null) {
@@ -51,6 +54,6 @@ export const writeFile: Tool<typeof input> = {
       return { output: `Created ${shown} (${n} lines).`, summary: `created · ${n} line${n === 1 ? "" : "s"}`, diff: shownDiff(addedLines(content)) };
     }
     const diff = diffText(before, content);
-    return { output: `Wrote ${shown} (${changeSummary(diff)} lines).`, summary: changeSummary(diff), diff: shownDiff(diff.lines) };
+    return { output: `Wrote ${shown} (${changeSummary(diff)} lines${crlf ? "; kept its CRLF line endings" : ""}).`, summary: changeSummary(diff), diff: shownDiff(diff.lines) };
   },
 };

@@ -47,7 +47,7 @@ describe("read_file", () => {
   test("returns numbered lines and a summary", async () => {
     const result = await run("read_file", { path: "src/greet.ts" });
     expect(result.isError).toBeFalsy();
-    expect(result.output).toBe("    1\texport function greet(name: string) {\n    2\t  return `Hello, ${name}!`;\n    3\t}");
+    expect(result.output).toBe("    1→export function greet(name: string) {\n    2→  return `Hello, ${name}!`;\n    3→}");
     expect(result.summary).toBe("3 lines");
     expect(result.label).toBe("src/greet.ts");
   });
@@ -56,7 +56,7 @@ describe("read_file", () => {
     const lines = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n");
     await files({ "long.txt": lines });
     const result = await run("read_file", { path: "long.txt", offset: 10, limit: 3 });
-    expect(result.output).toStartWith("   10\tline 10\n   11\tline 11\n   12\tline 12");
+    expect(result.output).toStartWith("   10→line 10\n   11→line 11\n   12→line 12");
     expect(result.output).toContain("lines 10-12 of 50");
     expect(result.output).toContain("offset=13");
     expect(result.summary).toBe("lines 10-12 of 50");

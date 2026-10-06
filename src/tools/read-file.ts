@@ -12,10 +12,17 @@ const input = z.object({
   limit: z.number().int().min(1).max(2000).optional().describe(`How many lines to read. Default ${DEFAULT_LIMIT}.`),
 });
 
+/**
+ * A line as read_file shows it: its number, →, then the line exactly as in the file. Not a tab, as cat -n uses:
+ * in a tab-indented file the separator and the file's own tab look the same, and models copied old_string with
+ * the first line's tab missing and one too many on every other line (eval, 2026-10-06).
+ */
+export const numberedLine = (n: number, line: string) => `${String(n).padStart(5)}→${line}`;
+
 export const readFile: Tool<typeof input> = {
   name: "read_file",
   description:
-    "Read a text file from the project. Returns lines prefixed with their line numbers. " +
+    "Read a text file from the project. Returns each line as its line number, →, then the line exactly as in the file (what to copy into edit_file's old_string starts after the →). " +
     `Reads up to ${DEFAULT_LIMIT} lines at a time; use offset and limit to page through longer files.`,
   input,
   label: ({ path }) => path,
@@ -42,7 +49,7 @@ export const readFile: Tool<typeof input> = {
       .slice(offset - 1, end)
       .map((line, i) => {
         const clipped = line.length > MAX_LINE_CHARS ? `${line.slice(0, MAX_LINE_CHARS)}… (line truncated)` : line;
-        return `${String(offset + i).padStart(5)}\t${clipped}`;
+        return numberedLine(offset + i, clipped);
       })
       .join("\n");
 

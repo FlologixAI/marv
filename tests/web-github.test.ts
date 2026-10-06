@@ -210,7 +210,7 @@ describe("fetchGithub", () => {
     expect(seen.map((r) => r.search)).toEqual(["?ref=feature%2Fx", "?ref=f%C3%BCr"]);
     const file = await fetchGithub(link("https://github.com/acme/tool/blob/main/my%20dir/a%20b.txt"), opts());
     expect(file.title).toBe("my dir/a b.txt");
-    expect(file.text).toBe("    1\tspaced");
+    expect(file.text).toBe("    1→spaced");
   });
 
   test("a file link to a folder lists it, with a token", async () => {
@@ -222,13 +222,13 @@ describe("fetchGithub", () => {
   test("a file, numbered like read_file, from raw without a token", async () => {
     const page = await fetchGithub(link("https://github.com/acme/tool/blob/main/src/server.js"), opts());
     expect(page.title).toBe("src/server.js");
-    expect(page.text).toBe("    1\tconst a = 1;\n    2\tconst b = 2;");
+    expect(page.text).toBe("    1→const a = 1;\n    2→const b = 2;");
     expect(seen.map((r) => [r.path, r.auth])).toEqual([["/raw/acme/tool/main/src/server.js", null]]);
   });
 
   test("with a token, files come through the API (private repositories work) and the token goes to the API only", async () => {
     const page = await fetchGithub(link("https://github.com/acme/tool/blob/main/src/server.js"), opts("t0k"));
-    expect(page.text).toBe("    1\tconst a = 1;\n    2\tconst b = 2;");
+    expect(page.text).toBe("    1→const a = 1;\n    2→const b = 2;");
     expect(seen.map((r) => [r.path, r.auth])).toEqual([["/repos/acme/tool/contents/src/server.js", "Bearer t0k"]]);
     await fetchGithub(link("https://github.com/acme/tool"), opts("t0k"));
     expect(seen.every((r) => r.auth === "Bearer t0k")).toBe(true);

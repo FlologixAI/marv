@@ -3,6 +3,7 @@
 // a file becomes its raw text. A token goes to the API host only.
 import { ToolError } from "../types.ts";
 import { get, httpError, redirectNote, type GetOptions, type Got, type Page } from "./fetch.ts";
+import { numberedLine } from "../read-file.ts";
 
 export type GithubLink =
   | { kind: "repo"; owner: string; repo: string }
@@ -177,7 +178,7 @@ async function file({ owner, repo, ref, path }: { owner: string; repo: string; r
   return {
     url: `https://github.com/${owner}/${repo}/blob/${encodeURIComponent(ref)}/${enc(path)}`,
     title: path,
-    text: lines.map((line, i) => `${String(i + 1).padStart(5)}\t${line}`).join("\n"),
+    text: lines.map((line, i) => numberedLine(i + 1, line)).join("\n"),
   };
 }
 
