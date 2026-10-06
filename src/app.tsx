@@ -552,7 +552,7 @@ export function App({
             case "done":
               if (event.reason === "aborted") addMessage({ role: "system", text: "Interrupted." });
               if (event.reason === "declined") addMessage({ role: "system", text: "Stopped. Tell Marv what to do instead." });
-              if (event.reason === "length") addMessage({ role: "system", text: "The reply was cut off: it hit the model's output limit." });
+              if (event.reason === "length") addMessage({ role: "system", text: "The reply was cut off at the model's output limit, so nothing in it ran." });
               break;
             case "turn_end":
               // Stopped before the loop began: while waiting for MCP servers (or compacting, which said so itself).

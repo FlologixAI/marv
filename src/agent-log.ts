@@ -28,7 +28,7 @@ export function createAgentLog({ title, prompt }: { title: string; prompt: strin
 const STOPPED: Partial<Record<Extract<LoopEvent, { type: "done" }>["reason"], string>> = {
   aborted: "Interrupted.",
   declined: "Stopped: the user declined.",
-  length: "The reply was cut off: it hit the model's output limit.",
+  length: "The reply was cut off at the model's output limit, so nothing in it ran.",
   max_steps: "It hit its step limit.",
 };
 
