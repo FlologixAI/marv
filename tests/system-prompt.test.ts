@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseMcpServers } from "../src/mcp/config.ts";
 import { loadInstructions, subagentPrompt, systemPrompt } from "../src/prompt.ts";
 import { bash } from "../src/tools/bash.ts";
 
@@ -49,6 +50,20 @@ describe("systemPrompt", () => {
     expect(prompt).toContain("# Memory");
     expect(prompt).toContain("- Prefers short answers.");
     expect(systemPrompt({ cwd: "~/proj", date: DATE, tools: [] })).not.toContain("# Memory");
+  });
+
+  test("always says how to connect an MCP server, with an example Marv's own parser accepts", () => {
+    // Asked for exactly when none is configured, and the sandbox hides ~/.marv: without this the model guessed the format.
+    const prompt = systemPrompt({ cwd: "~/proj", date: DATE, tools: [] });
+    expect(prompt).toContain("# MCP servers");
+    expect(prompt).toContain("~/.marv/mcp.json");
+    expect(prompt).toContain("/mcp trust");
+    const example = JSON.parse(prompt.match(/\{"mcpServers": .*?\}\}\}\}/)![0]) as { mcpServers: Record<string, unknown> };
+    const { servers, problems } = parseMcpServers(example.mcpServers, { API_KEY: "k", TOKEN: "t" });
+    expect(problems).toEqual([]);
+    expect(servers.map((s) => s.transport.type)).toEqual(["stdio", "http"]);
+    expect(prompt).not.toContain("mcp__<server>__<tool>");
+    expect(systemPrompt({ cwd: "~/proj", date: DATE, tools: [], mcp: true })).toContain("mcp__<server>__<tool>");
   });
 
   test("is identical for identical inputs (the prompt cache depends on it)", () => {

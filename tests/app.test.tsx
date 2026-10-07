@@ -1225,7 +1225,7 @@ describe("MCP servers", () => {
     expect(lastFrame()).toContain("runs outside the sandbox");
     const first = model.requests[0]!;
     expect(first.options.tools!.map((t) => t.name)).toContain("mcp__test__echo");
-    expect(first.options.system).toContain("# MCP tools");
+    expect(first.options.system).toContain("Tools named mcp__<server>__<tool>");
     stdin.write(ENTER);
     await tick(300);
     expect(lastFrame()).toContain("mcp__test__echo hi");
