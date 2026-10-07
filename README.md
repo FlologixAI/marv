@@ -296,7 +296,8 @@ git tag v0.1.0 && git push origin v0.1.0
 gh release create v0.1.0 --generate-notes
 ```
 
-Bump `version` in `package.json` first: a version number can only be published once. `release:build` bundles the CLI
+First move `CHANGELOG.md`'s Unreleased entries under the new version (patch for fixes, minor for features or anything
+breaking while below 1.0), then bump `version` in `package.json` to match: a version number can only be published once. `release:build` bundles the CLI
 (with the patched dependencies inside, since Bun applies patches only in this repository) into `release/dist/`, copies
 `src/` for the SDK, and writes a `package.json` without `patchedDependencies`, the scripts or the devDependencies; the
 SDK's dependencies are the packages its files import. The repository's own `package.json` is `private`, so a

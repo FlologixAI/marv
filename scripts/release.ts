@@ -70,7 +70,7 @@ chmodSync(out("bin/marv"), 0o755);
 
 // --- The SDK, as source ---
 cpSync(join(ROOT, "src"), out("src"), { recursive: true });
-for (const file of ["README.md", "LICENSE"]) cpSync(join(ROOT, file), out(file));
+for (const file of ["README.md", "LICENSE", "CHANGELOG.md"]) cpSync(join(ROOT, file), out(file));
 
 // Which packages the SDK's files import: bundle them with every package left external (nothing is written: no
 // outdir), then read the imports that remain. The converter counts too: the SDK runs it from src/. Type-only imports are erased, so a package the SDK

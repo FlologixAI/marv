@@ -1,0 +1,40 @@
+# Changelog
+
+All notable changes to Marv are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Marv uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While it's below 1.0.0, a minor version (0.**x**.0) may contain breaking changes; a patch version (0.1.**x**) never does.
+
+What counts as Marv's public API: the SDK (`@flologixai/marv/sdk`), the `marv` command's flags and slash commands, and the files it reads (`~/.marv/config.json`, `.marv/skills/`, `.marv/agents/`, `.mcp.json`, `AGENTS.md`, saved sessions).
+
+## [Unreleased]
+
+### Changed
+
+- The system prompt always explains how to set up an MCP server (where the config goes, its format, and that `~/.marv` isn't reachable from the sandbox), so the model hands you a correct config instead of inventing keys.
+
+## [0.1.1] - 2026-10-06
+
+### Changed
+
+- README: on Windows, use WSL (the npm page shows the README of the version published).
+
+## [0.1.0] - 2026-10-06
+
+The first public release, on npm as `@flologixai/marv`.
+
+### Added
+
+- A full-screen terminal UI with streaming Markdown replies, mouse-wheel scrolling, drag-to-copy and a `/` command menu.
+- An agent loop with tools: `read_file`, `glob`, `grep`, `edit_file`, `write_file`, `bash`, `web_fetch`, `memory`, `skill` and `agent`. It asks before continuing past 25 steps, retries an empty reply, and never runs a tool call cut off at the output limit.
+- `edit_file` matches forgivingly (trailing whitespace, indentation), keeps CRLF line endings, and shows the closest lines when nothing matches. `edit_file` and `write_file` say when a change breaks the file's syntax.
+- Providers: OpenRouter (any tool-capable model) and Ollama (local models), with a model picker and `/think`.
+- A bubblewrap sandbox for commands on Linux, and yolo mode (on by default): sandboxed commands and edits in the project run without asking; everything else shows a diff or the command first.
+- `web_fetch`: web pages as Markdown, and GitHub repositories, folders and files through GitHub's API.
+- MCP servers (stdio and Streamable HTTP) in Claude Code's `.mcp.json` format; a project's servers start only once trusted (`/mcp trust`).
+- Skills (`.marv/skills/`), subagents with Claude Code-compatible agent types (`.marv/agents/`), optionally in their own git worktree, and memory across sessions.
+- Saved sessions (`marv -c`, `marv -r`, `/resume`), automatic and `/compact` compaction, and token and cost tracking (`/cost`).
+- Trajectory logs with feedback (`/good`, `/bad`, `/label`) and `bun run stats`.
+- The SDK: `createSession()` from `@flologixai/marv/sdk` runs Marv from code, without the UI.
+- Evals: `bun run eval` runs real models on small tasks with hidden checks.
+
+[Unreleased]: https://github.com/FlologixAI/marv/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/FlologixAI/marv/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/FlologixAI/marv/releases/tag/v0.1.0
