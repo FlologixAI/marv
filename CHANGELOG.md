@@ -10,6 +10,12 @@ What counts as Marv's public API: the SDK (`@flologixai/marv/sdk`), the `marv` c
 
 - SDK: `maxSteps` sets how many steps a turn runs before it stops (without `approve`) or asks whether to keep going (default 25).
 
+## [0.1.2] - 2026-10-08
+
+### Security
+
+- The sandbox no longer exposes the host's `/run`. It had been mounted read-only, but a read-only mount doesn't stop a process from connecting to the sockets in it. A sandboxed command (which runs without asking in yolo mode, the default) could reach the user's D-Bus session and start programs outside the sandbox with `systemd-run --user`, and could reach the GPG and SSH agents, the keyring, the display and docker's socket. `/run` is now an empty folder in the sandbox. Only the folders on `PATH` and the DNS config that live there are shown again, read-only. Affects 0.1.0 and 0.1.1: update with `npm i -g @flologixai/marv@latest`.
+
 ### Changed
 
 - The system prompt always explains how to set up an MCP server (where the config goes, its format, and that `~/.marv` isn't reachable from the sandbox), so the model hands you a correct config instead of inventing keys.
