@@ -20,6 +20,7 @@ import { sandboxAvailable } from "../src/sandbox.ts";
 import { createSession } from "../src/sdk.ts";
 import { runCommand } from "../src/tools/bash.ts";
 import { formatSummary, type RunResult } from "./summary.ts";
+import { addTypeScript } from "./typescript.ts";
 
 const TASKS = join(import.meta.dir, "tasks");
 const RESULTS = join(import.meta.dir, "results");
@@ -49,6 +50,8 @@ function workspace(task: string, ...extra: string[]): string {
   git("init", "-q");
   git("add", "-A");
   git("commit", "-q", "-m", "start");
+  // After the commit, so the compiler is never part of the repo (the task repos' .gitignore lists node_modules/).
+  addTypeScript(dir);
   return dir;
 }
 
@@ -145,6 +148,7 @@ async function runOne({ model, task, rep }: { model: string; task: string; rep: 
           if (event.result.isError) tool.errors++;
           if (name === "edit_file" && event.result.isError) result.editErrors.push(short(event.result.output, 300));
           if (/^Marv: .* doesn't parse/m.test(event.result.output)) result.syntaxNotes = (result.syntaxNotes ?? 0) + 1;
+          if (name === "bash" && /\b(tsc|tsgo)\b/.test(event.call.arguments)) result.ranTypecheck = true;
           log.push({ tool: name, args: event.call.arguments, isError: event.result.isError ?? false, output: short(event.result.output, 3000) });
         }
       }
