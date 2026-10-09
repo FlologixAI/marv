@@ -111,6 +111,11 @@ interface Options {
   /** Calls that may run at the same time as their neighbours (subagents). Default: none. */
   isParallel?: (call: ToolCall) => boolean;
   maxParallel?: number;
+  /**
+   * After a step's tool calls are all answered, when the run goes on: a note for the model, appended as a message
+   * from Marv before the next request (like CUT_OFF_NOTE), or null. Never rejects. The session's typecheck uses it (src/diagnostics).
+   */
+  afterStep?: (results: ToolResult[]) => Promise<string | null>;
 }
 
 /**
@@ -243,6 +248,7 @@ export async function* runAgent({
   onLimit,
   isParallel = () => false,
   maxParallel = MAX_PARALLEL,
+  afterStep,
 }: Options): AsyncGenerator<LoopEvent> {
   // Ids already in the conversation (a resumed session's too): a new call may not reuse one.
   const usedIds = new Set(history.flatMap((turn) => (turn.role === "assistant" ? (turn.toolCalls ?? []).map((c) => c.id) : [])));
@@ -366,6 +372,8 @@ export async function* runAgent({
       return;
     }
 
+    // Every result of this step, in call order, for afterStep.
+    const stepResults: ToolResult[] = [];
     // Every call must get a result, even after an interrupt or a "no": a
     // request with an unanswered tool call is rejected by the API.
     let declined = false;
@@ -403,6 +411,7 @@ export async function* runAgent({
         }
         // In call order, whatever order they finished in (prompt cache).
         group.forEach((call, k) => answer(call, results[k]!.output));
+        stepResults.push(...results);
         declined = results.some((r) => r.declined);
       }
     } finally {
@@ -418,6 +427,14 @@ export async function* runAgent({
     if (declined) {
       yield { type: "done", reason: "declined" };
       return;
+    }
+    if (afterStep) {
+      const note = await afterStep(stepResults);
+      if (signal.aborted) {
+        yield { type: "done", reason: "aborted" };
+        return;
+      }
+      if (note) history.push({ role: "user", text: note });
     }
   }
 }

@@ -3,7 +3,7 @@
 //
 //   bun evals/run.ts --verify                         every check fails on the task's repo and passes with its solution
 //   bun evals/run.ts --models a,b --label baseline    each model on each task (OPENROUTER_API_KEY, or ~/.marv's key)
-//         [--tasks x,y] [--repeat 2] [--budget 1.50] [--concurrency 4] [--timeout 300]
+//         [--tasks x,y] [--repeat 2] [--budget 1.50] [--concurrency 4] [--timeout 300] [--max-steps 50] [--diagnostics on|off]
 //   bun evals/run.ts --report evals/results/a/results.jsonl evals/results/b/results.jsonl
 //
 // A task is a folder: task.md (the request), repo/ (the starting files), check/ (tests copied in only after the
@@ -20,6 +20,7 @@ import { sandboxAvailable } from "../src/sandbox.ts";
 import { createSession } from "../src/sdk.ts";
 import { runCommand } from "../src/tools/bash.ts";
 import { formatSummary, type RunResult } from "./summary.ts";
+import { addTypeScript, ranTypecheck } from "./typescript.ts";
 
 const TASKS = join(import.meta.dir, "tasks");
 const RESULTS = join(import.meta.dir, "results");
@@ -47,8 +48,14 @@ function workspace(task: string, ...extra: string[]): string {
     if (r.exitCode !== 0) throw new Error(`git ${args[0]}: ${r.stderr.toString()}`);
   };
   git("init", "-q");
+  // Excluded here rather than trusting each task repo's .gitignore: the compiler must stay untracked and invisible to
+  // `git ls-files`, which Marv's glob and grep use.
+  mkdirSync(join(dir, ".git", "info"), { recursive: true });
+  appendFileSync(join(dir, ".git", "info", "exclude"), "node_modules/\n");
   git("add", "-A");
   git("commit", "-q", "-m", "start");
+  // After the commit, and excluded above, so the compiler is never part of the repo.
+  addTypeScript(dir);
   return dir;
 }
 
@@ -91,6 +98,14 @@ const repeat = Number(option("repeat") ?? 1);
 const budget = Number(option("budget") ?? 1);
 const concurrency = Number(option("concurrency") ?? 4);
 const timeoutMs = Number(option("timeout") ?? 300) * 1000;
+// Twice the interactive limit: at 25 steps the TUI asks "Keep going?", and a user would say yes once. With no one to
+// ask, 25 was a hard stop, and slow, careful models (one file per step, re-reading after each edit) were measured on
+// the limit instead of on their edits.
+const maxSteps = Number(option("max-steps") ?? 50);
+// Marv's typecheck after file changes (on by default, as in the CLI); off for the comparison's other arm.
+const diagnosticsOption = option("diagnostics");
+if (diagnosticsOption !== undefined && diagnosticsOption !== "on" && diagnosticsOption !== "off") throw new Error("--diagnostics takes on or off");
+const diagnostics = diagnosticsOption !== "off";
 const savedKey = () => (JSON.parse(readFileSync(join(defaultConfigDir(process.env), "config.json"), "utf8")) as { apiKey?: string }).apiKey;
 const apiKey: string = process.env.OPENROUTER_API_KEY ?? savedKey() ?? "";
 if (!apiKey) throw new Error("No OpenRouter key: set OPENROUTER_API_KEY or run marv's /setup.");
@@ -114,12 +129,12 @@ const short = (text: string, max: number) => (text.length > max ? `${text.slice(
 async function runOne({ model, task, rep }: { model: string; task: string; rep: number }): Promise<RunResult> {
   const dir = workspace(task);
   const started = Date.now();
-  const result: RunResult = { label, model, task, rep, pass: false, reason: "error", requests: 0, promptTokens: 0, cachedTokens: 0, completionTokens: 0, cost: 0, ms: 0, tools: {}, editErrors: [], marv };
+  const result: RunResult = { label, model, task, rep, pass: false, reason: "error", requests: 0, promptTokens: 0, cachedTokens: 0, completionTokens: 0, cost: 0, ms: 0, tools: {}, editErrors: [], marv, diagnostics };
   // What happened, for reading a run afterwards: replies, and every tool call with (the start of) what it returned.
   const log: unknown[] = [];
   let timedOut = false;
   try {
-    const session = await createSession({ cwd: dir, provider: { kind: "openrouter", apiKey, model } });
+    const session = await createSession({ cwd: dir, provider: { kind: "openrouter", apiKey, model }, maxSteps, diagnostics });
     const timer = setTimeout(() => {
       timedOut = true;
       session.interrupt();
@@ -138,6 +153,10 @@ async function runOne({ model, task, rep }: { model: string; task: string; rep: 
           result.emptyReplies = (result.emptyReplies ?? 0) + 1;
           log.push({ emptyReply: event.next });
         }
+        if (event.type === "check") {
+          if (event.result.status === "done" && event.result.added.length) result.checkNotes = (result.checkNotes ?? 0) + 1;
+          log.push({ check: event.result });
+        }
         if (event.type === "tool_end") {
           const name = event.call.name;
           const tool = (result.tools[name] ??= { calls: 0, errors: 0 });
@@ -145,6 +164,7 @@ async function runOne({ model, task, rep }: { model: string; task: string; rep: 
           if (event.result.isError) tool.errors++;
           if (name === "edit_file" && event.result.isError) result.editErrors.push(short(event.result.output, 300));
           if (/^Marv: .* doesn't parse/m.test(event.result.output)) result.syntaxNotes = (result.syntaxNotes ?? 0) + 1;
+          if (name === "bash" && ranTypecheck(event.call.arguments)) result.ranTypecheck = true;
           log.push({ tool: name, args: event.call.arguments, isError: event.result.isError ?? false, output: short(event.result.output, 3000) });
         }
       }
@@ -195,7 +215,7 @@ async function worker() {
   }
 }
 
-console.log(`${jobs.length} runs (${models.length} models × ${tasks.length} tasks × ${repeat}), budget $${budget}, Marv ${marv} → ${out}`);
+console.log(`${jobs.length} runs (${models.length} models × ${tasks.length} tasks × ${repeat}), budget $${budget}, ${maxSteps} steps, diagnostics ${diagnostics ? "on" : "off"}, Marv ${marv} → ${out}`);
 await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
 if (skipped.length) console.log(`\nBudget reached: ${skipped.length} runs not started.`);
 console.log(`\n${formatSummary(readResults(resultsFile))}`);

@@ -615,3 +615,95 @@ describe("runAgent", () => {
     expect(JSON.stringify(provider.requests[1]!.history)).not.toContain("SECRET");
   });
 });
+
+describe("afterStep", () => {
+  test("its note goes in after all of the step's tool results, as a message from Marv, before the next request", async () => {
+    const provider = new ScriptedProvider([useTools(call("c1", "a.ts"), call("c2", "b.ts")), say("Fixed.")]);
+    const history: ChatTurn[] = [{ role: "user", text: "go" }];
+    const seen: string[][] = [];
+    await run(provider, history, { afterStep: async (results) => (seen.push(results.map((r) => r.output)), "Marv: 1 new error") });
+    expect(seen).toEqual([["contents of a.ts", "contents of b.ts"]]);
+    const second = provider.requests[1]!.history;
+    expect(second.slice(-3).map((t) => t.role)).toEqual(["tool", "tool", "user"]);
+    expect(second.at(-1)).toEqual({ role: "user", text: "Marv: 1 new error" });
+    // Appended, not inserted: the second request still starts with the first one (prompt cache).
+    expect(second.slice(0, provider.requests[0]!.history.length)).toEqual(provider.requests[0]!.history);
+  });
+
+  test("null adds nothing", async () => {
+    const provider = new ScriptedProvider([useTools(call("c1", "a.ts")), say("Done.")]);
+    let calls = 0;
+    await run(provider, [{ role: "user", text: "go" }], { afterStep: async () => (calls++, null) });
+    expect(calls).toBe(1);
+    expect(provider.requests[1]!.history.at(-1)?.role).toBe("tool");
+  });
+
+  test("not called after a plain answer", async () => {
+    let calls = 0;
+    await run(new ScriptedProvider([say("Hi.")]), [{ role: "user", text: "hi" }], { afterStep: async () => (calls++, null) });
+    expect(calls).toBe(0);
+  });
+
+  test("stopped during it: the run ends there, every call answered, and the note isn't added", async () => {
+    const stop = new AbortController();
+    const provider = new ScriptedProvider([useTools(call("c1", "a.ts")), say("never asked")]);
+    const history: ChatTurn[] = [{ role: "user", text: "go" }];
+    const events = await run(provider, history, {
+      signal: stop.signal,
+      afterStep: async () => {
+        stop.abort();
+        return "Marv: too late";
+      },
+    });
+    expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    expect(provider.requests).toHaveLength(1);
+    expect(history.at(-1)?.role).toBe("tool");
+  });
+
+  test("not called after a step whose call was declined", async () => {
+    let calls = 0;
+    const provider = new ScriptedProvider([useTools(call("c1", "a.ts")), say("never asked")]);
+    const events = await run(provider, [{ role: "user", text: "go" }], {
+      runTool: async (c) => ({ ...(await fakeTool(c)), declined: true }),
+      afterStep: async () => (calls++, null),
+    });
+    expect(events.at(-1)).toEqual({ type: "done", reason: "declined" });
+    expect(calls).toBe(0);
+  });
+
+  test("not called after a cut-off reply", async () => {
+    let calls = 0;
+    const provider = new ScriptedProvider([
+      [{ type: "tool_call", call: call("c1", "a.ts") }, { type: "done", reason: "length" }],
+      say("Smaller steps, then."),
+    ]);
+    await run(provider, [{ role: "user", text: "go" }], { afterStep: async () => (calls++, null) });
+    expect(calls).toBe(0);
+  });
+
+  test("a parallel group's results arrive in call order", async () => {
+    const provider = new ScriptedProvider([useTools(call("a", "a.ts"), call("b", "b.ts")), say("Done.")]);
+    const seen: string[][] = [];
+    await run(provider, [{ role: "user", text: "go" }], {
+      isParallel: () => true,
+      runTool: async (c) => {
+        if (c.id === "a") await Bun.sleep(40);
+        return fakeTool(c);
+      },
+      afterStep: async (results) => (seen.push(results.map((r) => r.output)), null),
+    });
+    expect(seen).toEqual([["contents of a.ts", "contents of b.ts"]]);
+  });
+
+  test("at the step limit, the note is already in the history when onLimit is asked", async () => {
+    const provider = new ScriptedProvider([useTools(call("c1", "a.ts")), say("never")]);
+    const history: ChatTurn[] = [{ role: "user", text: "go" }];
+    let last: ChatTurn | undefined;
+    await run(provider, history, {
+      maxSteps: 1,
+      afterStep: async () => "Marv: note",
+      onLimit: async () => ((last = history.at(-1)), false),
+    });
+    expect(last).toEqual({ role: "user", text: "Marv: note" });
+  });
+});

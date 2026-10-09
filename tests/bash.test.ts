@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, realpathSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { bash, formatOutput, runCommand, touchesHiddenHome } from "../src/tools/bash.ts";
@@ -102,6 +102,17 @@ describe("sandboxArgs", () => {
     expect(args).toContain("--unshare-net");
     expect(args).toContain("--clearenv");
     expect(args).toContain("--chdir /home/me/proj");
+  });
+
+  test("projectReadOnly mounts the project read-only (Marv's own checks run project code unasked)", () => {
+    const args = sandboxArgs({ ...base, network: false, projectReadOnly: true }).join(" ");
+    expect(args).toContain("--ro-bind /home/me/proj /home/me/proj");
+    expect(args).not.toContain("--bind /home/me/proj /home/me/proj");
+  });
+
+  test("projectReadOnly skips placeholders (bwrap can't create them in a read-only project)", () => {
+    const args = sandboxArgs({ ...base, network: false, projectReadOnly: true, placeholders: ["/home/me/proj/.git"] }).join(" ");
+    expect(args).not.toContain("--tmpfs /home/me/proj/.git");
   });
 
   test("personal skills are readable, the rest of ~/.marv is not", () => {
@@ -263,6 +274,15 @@ describe("runCommand", () => {
       expect((await sandboxed("touch made-it && ls made-it")).output).toBe("made-it\n");
       const system = await sandboxed("touch /usr/marv-probe");
       expect(system.exitCode).not.toBe(0);
+    });
+
+    test("with projectReadOnly, the project can be read but not changed", async () => {
+      await writeFile(join(root, "kept.txt"), "kept\n");
+      const result = await runCommand({ command: "cat kept.txt; touch made-it; echo changed > kept.txt", root, sandbox: true, network: false, projectReadOnly: true, timeoutMs: 10_000 });
+      expect(result.output).toContain("kept");
+      expect(result.output).toContain("Read-only file system");
+      expect(existsSync(join(root, "made-it"))).toBe(false);
+      expect(await readFile(join(root, "kept.txt"), "utf8")).toBe("kept\n");
     });
 
     test("can't see the home folder (keys, ssh, Marv's config)", async () => {

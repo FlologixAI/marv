@@ -66,6 +66,17 @@ export interface SessionOptions {
    * the model as refused.
    */
   approve?: (request: ApprovalRequest) => Promise<Decision>;
+  /**
+   * Steps a turn runs before it stops (without `approve`) or asks `approve` whether to keep going (again at each
+   * multiple). Default 25. Unattended runs that should finish long tasks raise it.
+   */
+  maxSteps?: number;
+  /**
+   * After a step that changed files in a TypeScript project (a tsconfig.json and node_modules/.bin/tsc), run the
+   * project's typecheck in the sandbox, read-only, and tell the model about new errors. Default true. Without the
+   * sandbox it doesn't run (the compiler is the project's own code).
+   */
+  diagnostics?: boolean;
   /** Run bash in the bubblewrap sandbox (default true). */
   sandbox?: boolean;
   /** Run what the sandbox confines without asking (default true). Must be false when `cwd` is your home folder or above it. */
@@ -144,6 +155,8 @@ export async function createSession(options: SessionOptions): Promise<Session> {
     tools: options.tools,
     systemPrompt: options.systemPrompt,
     approve: options.approve,
+    maxSteps: options.maxSteps,
+    diagnostics: options.diagnostics,
     sandbox: options.sandbox,
     yolo: options.yolo,
     noYolo,
@@ -176,6 +189,8 @@ export type { Provider, AgentEvent, ChatTurn, StreamOptions, ToolCall, ToolSpec,
 export { OllamaProvider } from "./provider/ollama.ts";
 export { OpenAICompatProvider } from "./provider/openai-compat.ts";
 export type { LoopEvent } from "./agent.ts";
+export type { CheckResult } from "./diagnostics/turn.ts";
+export type { TsError } from "./diagnostics/tsc.ts";
 export type { Totals } from "./usage.ts";
 export type { Message } from "./types.ts";
 export type { ModelInfo } from "./provider/models.ts";

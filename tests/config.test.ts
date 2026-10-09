@@ -44,7 +44,12 @@ describe("resolveConfig", () => {
   const file = { provider: "openrouter" as const, model: "z-ai/glm-5.3", apiKey: "sk-from-file" };
 
   test("uses the file and the preset endpoint when no env vars are set", () => {
-    expect(resolveConfig(file, {})).toEqual({ ...file, baseUrl: PRESETS.openrouter.baseUrl, apiKeySource: "file", thinking: false, contextLength: 32768, sandbox: true, yolo: true, trajectories: true });
+    expect(resolveConfig(file, {})).toEqual({ ...file, baseUrl: PRESETS.openrouter.baseUrl, apiKeySource: "file", thinking: false, contextLength: 32768, sandbox: true, yolo: true, trajectories: true, diagnostics: true });
+  });
+
+  test("diagnostics: on unless the file turns it off", () => {
+    expect(resolveConfig(file, {}).diagnostics).toBe(true);
+    expect(resolveConfig({ ...file, diagnostics: false }, {}).diagnostics).toBe(false);
   });
 
   test("yolo mode is on unless the file turns it off", () => {

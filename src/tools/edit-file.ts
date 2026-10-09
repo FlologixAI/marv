@@ -76,11 +76,15 @@ export const editFile: Tool<typeof input> = {
   autoSafe: ({ path }, { root }) => !touchesGit(root, path),
 
   async preview(args, ctx) {
+    void ctx.beforeChange?.().catch(() => {});
     const { shown, before, after } = await plan(args, ctx);
     return { title: `Edit ${shown}`, diff: diffText(before, after).lines };
   },
 
   async run(args, ctx) {
+    await ctx.beforeChange?.();
+    // Esc while waiting for the baseline: it resolves on abort, but the user said stop, so nothing is written.
+    if (ctx.signal?.aborted) return { output: "Interrupted before the change was written: nothing changed.", summary: "interrupted" };
     // Planned again: the file may have changed while the user was deciding.
     const { absolute, shown, before, after, count, fuzzy } = await plan(args, ctx);
     await Bun.write(absolute, after);

@@ -56,6 +56,8 @@ interface SandboxOptions {
    * outside the sandbox). bwrap leaves the empty mount point behind; the caller removes it.
    */
   placeholders?: string[];
+  /** The project read-only too: for Marv's own checks, which run the project's code without asking (src/diagnostics). */
+  projectReadOnly?: boolean;
   /** The file system, injectable for tests: whether a path exists (following symlinks), */
   exists?: (path: string) => boolean;
   /** what the path itself is (not following a final symlink), */
@@ -155,9 +157,10 @@ function credentialMasks(file: string, mounts: string[], stat: SandboxOptions["s
 
 /**
  * What the sandbox keeps of /run. It holds the host's sockets: the user's D-Bus (`systemd-run --user` starts any
- * program outside the sandbox), the GPG and SSH agents, the keyring, the display, docker's. A read-only mount doesn't
- * stop a process from connecting to a socket, so /run becomes an empty folder, and only what commands need from it is
- * shown again, read-only: folders on PATH (NixOS keeps its programs in /run/current-system, fnm its node in
+ * program outside the sandbox), the GPG and SSH agents, the keyring, docker's, and, only offline, the display (with
+ * network the sandbox shares the host's network namespace, whose abstract sockets include X11's). A read-only mount
+ * doesn't stop a process from connecting to a socket, so /run becomes an empty folder, and only what commands need
+ * from it is shown again, read-only: folders on PATH (NixOS keeps its programs in /run/current-system, fnm its node in
  * /run/user/<uid>/fnm_multishells) and, with network, the DNS config /etc/resolv.conf leads to (systemd-resolved
  * keeps it in /run). Never /run, /run/user or a user's whole folder, even if PATH names one: that's the sockets again.
  */
@@ -182,6 +185,7 @@ export function sandboxArgs({
   path,
   readOnly = [],
   placeholders = [],
+  projectReadOnly = false,
   exists = existsSync,
   stat = lstatKind,
   realpath = realpathSync,
@@ -194,9 +198,10 @@ export function sandboxArgs({
   // first: mounted after it, it would cover the project and silently turn it read-only.
   const extras = readOnly.map((dir) => ({ dir, ...resolveExtra(dir, home, root) }));
   for (const { dir, real } of extras.filter((e) => e.around)) args.push("--ro-bind", real, dir);
-  args.push("--bind", root, root);
+  args.push(projectReadOnly ? "--ro-bind" : "--bind", root, root);
   for (const { dir, real } of extras.filter((e) => !e.around)) args.push("--ro-bind", real, dir);
-  for (const path of placeholders) args.push("--tmpfs", path, "--remount-ro", path);
+  // A read-only project can't get the empty mount point bwrap creates, and nothing in it can create a .git anyway.
+  if (!projectReadOnly) for (const path of placeholders) args.push("--tmpfs", path, "--remount-ro", path);
   // Last, on top of every other mount, so the empty file hides the real one and no later mount shows it again.
   const masks = new Set(CREDENTIALS.flatMap((file) => credentialMasks(join(home, file), mounts, stat, realpath)));
   for (const mask of masks) args.push("--ro-bind", "/dev/null", mask);

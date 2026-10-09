@@ -5,7 +5,7 @@ import { agentArgs } from "./agent.ts";
 import { applyEvent, createAgentLog, type AgentLog } from "./agent-log.ts";
 import { GENERAL_PURPOSE, type AgentType } from "./agents.ts";
 import { copyToClipboard } from "./clipboard.ts";
-import { commands, isCommand, runCommand, trajectoriesStatus, yoloStatus } from "./commands/index.ts";
+import { commands, diagnosticsStatus, isCommand, runCommand, trajectoriesStatus, yoloStatus } from "./commands/index.ts";
 import {
   needsSetup,
   PRESETS,
@@ -31,6 +31,7 @@ import { skillMessage, type Skill } from "./skills.ts";
 import type { TrajectoryStore } from "./trajectory.ts";
 import type { McpManager, McpServerStatus } from "./mcp/manager.ts";
 import type { AgentProgress, ApprovalRequest, Decision } from "./tools/types.ts";
+import { checkNotice } from "./diagnostics/turn.ts";
 import type { CommandAction } from "./commands/index.ts";
 import type { Message } from "./types.ts";
 import { AgentView, AgentViewHeader } from "./ui/AgentView.tsx";
@@ -299,6 +300,7 @@ export function App({
         approve,
         sandbox: config.sandbox,
         yolo: config.yolo,
+        diagnostics: config.diagnostics,
         sessions,
         trajectories,
         logTrajectories: config.trajectories,
@@ -308,7 +310,7 @@ export function App({
         onWarning: (text) => addMessage({ role: "system", text, isError: true }),
       }),
   );
-  // Settings changed (setup, /model, /think, /sandbox, /yolo, /trajectories): the session uses them from its next turn.
+  // Settings changed (setup, /model, /think, /sandbox, /yolo, /trajectories, /diagnostics): the session uses them from its next turn.
   const configured = useRef(config);
   useEffect(() => {
     if (configured.current === config) return;
@@ -318,6 +320,7 @@ export function App({
       sandbox: config.sandbox,
       yolo: config.yolo,
       trajectories: config.trajectories,
+      diagnostics: config.diagnostics,
     });
     setSessionVersion((v) => v + 1);
   }, [config, session, makeProvider, loadModels]);
@@ -465,9 +468,15 @@ export function App({
           }
           switch (event.type) {
             case "status":
-              setWaitingFor(event.status === "waiting_for_mcp" ? "Waiting for MCP servers to start…" : null);
+              setWaitingFor(event.status === "waiting_for_mcp" ? "Waiting for MCP servers to start…" : event.status === "checking" ? "Checking types…" : null);
               setCompacting(event.status === "compacting");
+              if (event.status === "running") stepStarted = Date.now(); // the wait for the next reply starts after a check
               break;
+            case "check": {
+              const notice = checkNotice(event.result);
+              if (notice) addMessage({ role: "system", text: notice });
+              break;
+            }
             case "compaction":
               setCompacting(false);
               syncUsage();
@@ -729,6 +738,9 @@ export function App({
         break;
       case "trajectories":
         void saveConfig({ ...(file ?? { provider: config.provider }), trajectories: action.on }, `Trajectories ${trajectoriesStatus({ ...config, trajectories: action.on })}`);
+        break;
+      case "diagnostics":
+        void saveConfig({ ...(file ?? { provider: config.provider }), diagnostics: action.on }, `Diagnostics ${diagnosticsStatus({ ...config, diagnostics: action.on })}`);
         break;
       case "feedback":
         rateLastTurn(action);
@@ -1076,7 +1088,7 @@ export function App({
 
         {streaming !== null &&
           (streaming === "" ? (
-            toolsRunning === 0 && !draft && <ThinkingView thought={thinking} label={compacting ? "Compacting the conversation…" : (waitingFor ?? undefined)} />
+            toolsRunning === 0 && !draft && <ThinkingView key={compacting ? "compact" : (waitingFor ?? "thinking")} thought={thinking} label={compacting ? "Compacting the conversation…" : (waitingFor ?? undefined)} />
           ) : (
             <MessageView message={{ role: "assistant", text: streaming }} streaming />
           ))}
