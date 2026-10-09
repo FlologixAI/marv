@@ -20,6 +20,27 @@ describe("parseTsc", () => {
     ]);
   });
 
+  test("a crash after an error can't be trusted: null", () => {
+    expect(parseTsc("a.ts(1,1): error TS2304: Cannot find name 'x'.\npanic: boom\n    at foo (bar.js:1:1)\n", 2)).toBeNull();
+    expect(parseTsc("Error: Debug Failure.\n    at foo (bar.js:1:1)\n", 1)).toBeNull();
+  });
+
+  test("CRLF output, a (group) path, and a located tsconfig error", () => {
+    const output = "src/(group)/a.ts(2,7): error TS2322: Type 'A' is not assignable to type 'B'.\r\ntsconfig.json(1,21): error TS5023: Unknown compiler option 'foo'.\r\n";
+    expect(parseTsc(output, 2)).toEqual([
+      { file: "src/(group)/a.ts", line: 2, column: 7, code: "TS2322", message: "Type 'A' is not assignable to type 'B'." },
+      { file: "tsconfig.json", line: 1, column: 21, code: "TS5023", message: "Unknown compiler option 'foo'." },
+    ]);
+  });
+
+  test("elaboration keeps its nesting, tabs don't continue", () => {
+    const output = "a.ts(1,1): error TS2322: top\n  level one\n    level two\n";
+    const [e] = parseTsc(output, 2)!;
+    expect(e!.message).toBe("top\nlevel one\n  level two");
+    expect(formatError(e!)).toBe("a.ts:1:1 TS2322 top\n  level one\n    level two");
+    expect(parseTsc("a.ts(1,1): error TS2322: top\n\tnot a continuation\n", 2)).toBeNull();
+  });
+
   test("exit code 0 is no errors, whatever was printed", () => {
     expect(parseTsc("", 0)).toEqual([]);
   });
@@ -100,7 +121,7 @@ describe("detectChecker", () => {
     expect(detectChecker(root)).toBeNull();
   });
 
-  test("the command: no output files, plain lines, no .tsbuildinfo", () => {
-    expect(checkCommand("node_modules/.bin/tsc")).toBe("node_modules/.bin/tsc --noEmit --pretty false --incremental false -p tsconfig.json");
+  test("the command: no output files, plain lines, build info into the sandbox's throwaway /tmp", () => {
+    expect(checkCommand("node_modules/.bin/tsc")).toBe("node_modules/.bin/tsc --noEmit --pretty false --tsBuildInfoFile /tmp/marv.tsbuildinfo -p tsconfig.json");
   });
 });

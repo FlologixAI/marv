@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 export interface TsError {
-  /** As tsc prints it (relative to the project); absent for errors about the configuration. */
+  /** As tsc prints it (relative to the project); absent for errors about the command line or the run as a whole (tsconfig option errors are located: `tsconfig.json(1,21)`). */
   file?: string;
   line?: number;
   column?: number;
@@ -27,8 +27,11 @@ export function detectChecker(root: string): string | null {
   return null;
 }
 
-/** No output files, one plain line per error, and no .tsbuildinfo: the project is mounted read-only. */
-export const checkCommand = (bin: string) => `${bin} --noEmit --pretty false --incremental false -p tsconfig.json`;
+/**
+ * No output files, one plain line per error. The .tsbuildinfo goes to the sandbox's throwaway /tmp, since the project
+ * is read-only (`--incremental false` would make every composite project fail with only TS6379).
+ */
+export const checkCommand = (bin: string) => `${bin} --noEmit --pretty false --tsBuildInfoFile /tmp/marv.tsbuildinfo -p tsconfig.json`;
 
 const LOCATED = /^(.+)\((\d+),(\d+)\): error (TS\d+): (.*)$/;
 const UNLOCATED = /^error (TS\d+): (.*)$/;
@@ -40,12 +43,22 @@ const UNLOCATED = /^error (TS\d+): (.*)$/;
 export function parseTsc(output: string, exitCode: number | null): TsError[] | null {
   if (exitCode === 0) return [];
   const errors: TsError[] = [];
-  for (const line of output.split("\n")) {
+  // Only a line right after an error (or its continuation) can continue it.
+  let open = false;
+  for (const line of output.split(/\r?\n/)) {
     const located = LOCATED.exec(line);
     const unlocated = located ? null : UNLOCATED.exec(line);
     if (located) errors.push({ file: located[1]!, line: Number(located[2]), column: Number(located[3]), code: located[4]!, message: located[5]! });
     else if (unlocated) errors.push({ code: unlocated[1]!, message: unlocated[2]! });
-    else if (/^\s/.test(line) && line.trim() && errors.length) errors.at(-1)!.message += `\n${line.trim()}`;
+    else if (open && line.startsWith("  ") && line.trim()) {
+      // Strip only tsc's own two-space indent: deeper levels of the elaboration keep theirs.
+      errors.at(-1)!.message += `\n${line.slice(2).trimEnd()}`;
+      continue;
+    } else if (line.trim()) {
+      // A panic, a stack trace, anything that isn't tsc's report: the run can't be trusted.
+      return null;
+    }
+    open = !!(located || unlocated);
   }
   return errors.length ? errors : null;
 }

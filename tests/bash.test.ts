@@ -110,6 +110,11 @@ describe("sandboxArgs", () => {
     expect(args).not.toContain("--bind /home/me/proj /home/me/proj");
   });
 
+  test("projectReadOnly skips placeholders (bwrap can't create them in a read-only project)", () => {
+    const args = sandboxArgs({ ...base, network: false, projectReadOnly: true, placeholders: ["/home/me/proj/.git"] }).join(" ");
+    expect(args).not.toContain("--tmpfs /home/me/proj/.git");
+  });
+
   test("personal skills are readable, the rest of ~/.marv is not", () => {
     const args = sandboxArgs({ ...base, network: false, exists: (p) => p.endsWith(".marv/skills") }).join(" ");
     expect(args).toContain("--ro-bind /home/me/.marv/skills /home/me/.marv/skills");
