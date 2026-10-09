@@ -3,7 +3,7 @@
 //
 //   bun evals/run.ts --verify                         every check fails on the task's repo and passes with its solution
 //   bun evals/run.ts --models a,b --label baseline    each model on each task (OPENROUTER_API_KEY, or ~/.marv's key)
-//         [--tasks x,y] [--repeat 2] [--budget 1.50] [--concurrency 4] [--timeout 300] [--max-steps 50]
+//         [--tasks x,y] [--repeat 2] [--budget 1.50] [--concurrency 4] [--timeout 300] [--max-steps 50] [--diagnostics on|off]
 //   bun evals/run.ts --report evals/results/a/results.jsonl evals/results/b/results.jsonl
 //
 // A task is a folder: task.md (the request), repo/ (the starting files), check/ (tests copied in only after the
@@ -102,6 +102,8 @@ const timeoutMs = Number(option("timeout") ?? 300) * 1000;
 // ask, 25 was a hard stop, and slow, careful models (one file per step, re-reading after each edit) were measured on
 // the limit instead of on their edits.
 const maxSteps = Number(option("max-steps") ?? 50);
+// Marv's typecheck after file changes (on by default, as in the CLI); off for the comparison's other arm.
+const diagnostics = option("diagnostics") !== "off";
 const savedKey = () => (JSON.parse(readFileSync(join(defaultConfigDir(process.env), "config.json"), "utf8")) as { apiKey?: string }).apiKey;
 const apiKey: string = process.env.OPENROUTER_API_KEY ?? savedKey() ?? "";
 if (!apiKey) throw new Error("No OpenRouter key: set OPENROUTER_API_KEY or run marv's /setup.");
@@ -130,7 +132,7 @@ async function runOne({ model, task, rep }: { model: string; task: string; rep: 
   const log: unknown[] = [];
   let timedOut = false;
   try {
-    const session = await createSession({ cwd: dir, provider: { kind: "openrouter", apiKey, model }, maxSteps });
+    const session = await createSession({ cwd: dir, provider: { kind: "openrouter", apiKey, model }, maxSteps, diagnostics });
     const timer = setTimeout(() => {
       timedOut = true;
       session.interrupt();
@@ -148,6 +150,10 @@ async function runOne({ model, task, rep }: { model: string; task: string; rep: 
         if (event.type === "empty_reply") {
           result.emptyReplies = (result.emptyReplies ?? 0) + 1;
           log.push({ emptyReply: event.next });
+        }
+        if (event.type === "check") {
+          if (event.result.status === "done" && event.result.added.length) result.checkNotes = (result.checkNotes ?? 0) + 1;
+          log.push({ check: event.result });
         }
         if (event.type === "tool_end") {
           const name = event.call.name;
@@ -207,7 +213,7 @@ async function worker() {
   }
 }
 
-console.log(`${jobs.length} runs (${models.length} models × ${tasks.length} tasks × ${repeat}), budget $${budget}, ${maxSteps} steps, Marv ${marv} → ${out}`);
+console.log(`${jobs.length} runs (${models.length} models × ${tasks.length} tasks × ${repeat}), budget $${budget}, ${maxSteps} steps, diagnostics ${diagnostics ? "on" : "off"}, Marv ${marv} → ${out}`);
 await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
 if (skipped.length) console.log(`\nBudget reached: ${skipped.length} runs not started.`);
 console.log(`\n${formatSummary(readResults(resultsFile))}`);

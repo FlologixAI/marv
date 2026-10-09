@@ -29,6 +29,8 @@ export interface RunResult {
   syntaxNotes?: number;
   /** The model ran a typecheck itself (a guess from the command's text: a bash command naming tsc, tsgo or `run typecheck`). */
   ranTypecheck?: boolean;
+  /** Steps after which Marv told the model about new type errors (post-edit diagnostics). */
+  checkNotes?: number;
   /** The start of each failed edit_file result: what went wrong. */
   editErrors: string[];
   /** The tail of the check's output, for a failure. */
