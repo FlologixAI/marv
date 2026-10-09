@@ -63,7 +63,7 @@ The agent is never blocked by the check.
 
 - **Timeout:** 60 s per check. If the baseline times out, that turn has no check. Two timeouts in a session turn checks off for the session, and Marv says so once.
 - **Esc/ctrl+c** kills a running check along with the turn. Every tool call already has its result by then.
-- **Unparsable output** (tsc crashed, nonzero exit with no error lines) counts as unavailable for that turn: no report. Errors with no file (`TS5023` config errors) are compared like any other, so one already in the baseline isn't reported.
+- **Unparsable output** (tsc crashed, nonzero exit with no error lines) counts as unavailable for that turn: no report, and no more checks until the next turn (a step check that times out too). Errors added meanwhile end up in the next turn's baseline and aren't reported: the price of not rerunning a failing compiler on every step. Errors with no file (`TS5023` config errors) are compared like any other, so one already in the baseline isn't reported.
 
 ## UI, settings, records
 

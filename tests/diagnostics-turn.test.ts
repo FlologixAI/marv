@@ -181,7 +181,7 @@ describe("a turn's checks, when a check can't be used", () => {
     expect(run.runs).toBe(4);
   });
 
-  test("a step check that times out leaves the baseline, and no more checks run this turn", async () => {
+  test("after a step check times out, no more checks run this turn; the next turn starts fresh", async () => {
     const run = fake(ok(), timedOut, ok(), failed(ERR_X));
     const diagnostics = new Diagnostics({ run, sandboxWorks: () => true });
     const first = turn(diagnostics);
