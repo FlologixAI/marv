@@ -153,6 +153,27 @@ function credentialMasks(file: string, mounts: string[], stat: SandboxOptions["s
   return masks;
 }
 
+/**
+ * What the sandbox keeps of /run. It holds the host's sockets: the user's D-Bus (`systemd-run --user` starts any
+ * program outside the sandbox), the GPG and SSH agents, the keyring, the display, docker's. A read-only mount doesn't
+ * stop a process from connecting to a socket, so /run becomes an empty folder, and only what commands need from it is
+ * shown again, read-only: folders on PATH (NixOS keeps its programs in /run/current-system, fnm its node in
+ * /run/user/<uid>/fnm_multishells) and, with network, the DNS config /etc/resolv.conf leads to (systemd-resolved
+ * keeps it in /run). Never /run, /run/user or a user's whole folder, even if PATH names one: that's the sockets again.
+ */
+function runMounts(path: string, network: boolean, exists: (path: string) => boolean, realpath: (path: string) => string): string[] {
+  const keep = path.split(":").filter((dir) => dir.startsWith("/run/") && !/^\/run(\/user(\/[^/]+)?)?\/?$/.test(dir) && exists(dir));
+  if (network) {
+    try {
+      const dns = realpath("/etc/resolv.conf");
+      if (dns.startsWith("/run/")) keep.push(dns);
+    } catch {
+      // no resolv.conf: nothing to show
+    }
+  }
+  return ["--tmpfs", "/run", ...[...new Set(keep)].flatMap((p) => ["--ro-bind", p, p])];
+}
+
 /** bwrap's arguments (everything before `-- command`). Order matters: later mounts sit on top of earlier ones. */
 export function sandboxArgs({
   root,
@@ -166,6 +187,7 @@ export function sandboxArgs({
   realpath = realpathSync,
 }: SandboxOptions): string[] {
   const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", home];
+  args.push(...runMounts(path, network, exists, realpath));
   const mounts = TOOLCHAINS.map((dir) => join(home, dir)).filter((full) => exists(full));
   for (const full of mounts) args.push("--ro-bind", full, full);
   // Bind the resolved path (what was checked), at the path the caller gave. A folder around the project goes

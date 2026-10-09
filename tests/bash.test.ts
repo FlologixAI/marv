@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, realpathSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,6 +75,21 @@ describe("sandboxArgs", () => {
     test("that are missing fail and name the folder", () => {
       expect(() => args([join(tmp, "nope")])).toThrow(/nope/);
     });
+  });
+
+  test("/run is an empty folder (it holds the host's sockets), with the PATH folders and the DNS config that live in it shown again, read-only", () => {
+    const realpath = (p: string) => (p === "/etc/resolv.conf" ? "/run/systemd/resolve/stub-resolv.conf" : p);
+    const exists = (p: string) => p.startsWith("/run/") || p.endsWith(".bun");
+    const path = "/run/current-system/sw/bin:/usr/bin:/run/user/1000/fnm_multishells/42/bin";
+    const offline = sandboxArgs({ ...base, path, network: false, exists, realpath }).join(" ");
+    expect(offline).toContain("--tmpfs /run");
+    expect(offline).toContain("--ro-bind /run/current-system/sw/bin /run/current-system/sw/bin");
+    expect(offline).toContain("--ro-bind /run/user/1000/fnm_multishells/42/bin /run/user/1000/fnm_multishells/42/bin");
+    expect(offline).not.toContain("resolv"); // no network, no DNS
+    const online = sandboxArgs({ ...base, path, network: true, exists, realpath }).join(" ");
+    expect(online).toContain("--ro-bind /run/systemd/resolve/stub-resolv.conf /run/systemd/resolve/stub-resolv.conf");
+    // The empty /run comes first: mounted after them, it would hide what it's meant to let through.
+    expect(online.indexOf("--tmpfs /run")).toBeLessThan(online.indexOf("--ro-bind /run/systemd"));
   });
 
   test("read-only system, hidden home, writable project, no network, clean env", () => {
@@ -225,6 +240,24 @@ describe("runCommand", () => {
 
   describe.if(sandboxAvailable())("inside the bubblewrap sandbox", () => {
     const sandboxed = (command: string, network = false) => run(command, { sandbox: true, network });
+
+    test("can't reach the host's sockets under /run: the user's D-Bus (systemd-run starts programs outside), GPG and SSH agents, docker", async () => {
+      // A folder on the host, outside the project: the sandbox can't write it, so a file there means a command ran outside.
+      const outside = mkdtempSync(join(tmpdir(), "marv-escape-"));
+      const marker = join(outside, "escaped");
+      try {
+        const result = await sandboxed(
+          'echo "run:[$(ls -A /run)]"; test -e /var/run/docker.sock && echo DOCKER; ' +
+            `XDG_RUNTIME_DIR=/run/user/$(id -u) systemd-run --user --wait --collect --quiet /usr/bin/touch ${marker} 2>&1; echo done`,
+        );
+        expect(result.output).toContain("done");
+        expect(result.output).not.toContain("DOCKER");
+        expect(result.output).toContain("run:[]"); // nothing of the host's /run (this machine's PATH and DNS don't live there)
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
 
     test("can write the project, but not the system", async () => {
       expect((await sandboxed("touch made-it && ls made-it")).output).toBe("made-it\n");
