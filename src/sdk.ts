@@ -71,6 +71,12 @@ export interface SessionOptions {
    * multiple). Default 25. Unattended runs that should finish long tasks raise it.
    */
   maxSteps?: number;
+  /**
+   * After a step that changed files in a TypeScript project (a tsconfig.json and node_modules/.bin/tsc), run the
+   * project's typecheck in the sandbox, read-only, and tell the model about new errors. Default true. Without the
+   * sandbox it doesn't run (the compiler is the project's own code).
+   */
+  diagnostics?: boolean;
   /** Run bash in the bubblewrap sandbox (default true). */
   sandbox?: boolean;
   /** Run what the sandbox confines without asking (default true). Must be false when `cwd` is your home folder or above it. */
@@ -150,6 +156,7 @@ export async function createSession(options: SessionOptions): Promise<Session> {
     systemPrompt: options.systemPrompt,
     approve: options.approve,
     maxSteps: options.maxSteps,
+    diagnostics: options.diagnostics,
     sandbox: options.sandbox,
     yolo: options.yolo,
     noYolo,

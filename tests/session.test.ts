@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,8 @@ import { addMemory, loadMemory, memoryPaths } from "../src/memory.ts";
 import type { ProviderFactory, ProviderOption } from "../src/provider/factory.ts";
 import type { ModelInfo } from "../src/provider/models.ts";
 import type { AgentEvent, ChatTurn, Provider, StreamOptions, ToolCall, ToolSpec } from "../src/provider/types.ts";
+import { Diagnostics, type RunCheck } from "../src/diagnostics/turn.ts";
+import type { CommandResult } from "../src/tools/bash.ts";
 import { MarvSession, type SessionEvent, type SessionInit } from "../src/session.ts";
 import { SessionStore, type SavedSession } from "../src/sessions.ts";
 import { TrajectoryStore } from "../src/trajectory.ts";
@@ -851,5 +853,77 @@ describe("final review fixes", () => {
     // Settings and saving still work.
     session.configure({ yolo: false });
     await session.flush();
+  });
+});
+
+describe("diagnostics", () => {
+  const ok: CommandResult = { output: "", exitCode: 0, timedOut: false, aborted: false };
+  const broken: CommandResult = { output: "src/b.ts(1,1): error TS2304: Cannot find name 'x'.\n", exitCode: 2, timedOut: false, aborted: false };
+  const write = (id: string) => call(id, "write_file", { path: "a.ts", content: "export const a = 1;\n" });
+  /** The project as a TypeScript one, and a stand-in tsc that answers in turn and notes whether a.ts existed each time. */
+  function typescriptProject(...answers: CommandResult[]) {
+    mkdirSync(join(project, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(join(project, "node_modules", ".bin", "tsc"), "");
+    const sawFile: boolean[] = [];
+    const run: RunCheck = async () => (sawFile.push(existsSync(join(project, "a.ts"))), answers.shift() ?? ok);
+    return { checks: new Diagnostics({ run, sandboxWorks: () => true }), sawFile };
+  }
+  beforeEach(async () => writeFile(join(project, "tsconfig.json"), "{}"));
+
+  test("new errors after a step that changed a file reach the model, after the tool results", async () => {
+    const { checks } = typescriptProject(ok, broken);
+    const provider = new ScriptedProvider([useTools(write("c1")), say("Done.")]);
+    const events = await collect(makeSession(provider, { checks }).send("go"));
+    const second = provider.requests[1]!.history;
+    expect(second.at(-2)?.role).toBe("tool");
+    expect(second.at(-1)).toEqual({ role: "user", text: expect.stringContaining("src/b.ts:1:1 TS2304 Cannot find name 'x'.") });
+    expect(events).toContainEqual({ type: "status", status: "checking" });
+    expect(events).toContainEqual({ type: "check", result: expect.objectContaining({ status: "done", errors: 1 }) });
+  });
+
+  test("the baseline is taken before the file is written, also in yolo mode", async () => {
+    const { checks, sawFile } = typescriptProject(ok, ok);
+    await collect(makeSession(new ScriptedProvider([useTools(write("c1")), say("Done.")]), { checks }).send("go"));
+    expect(sawFile).toEqual([false, true]);
+  });
+
+  test("diagnostics: false runs nothing, and configure() turns it on from the next turn", async () => {
+    const { checks, sawFile } = typescriptProject(ok, ok);
+    const session = makeSession(new ScriptedProvider([useTools(write("c1")), say("Done."), useTools(write("c2")), say("Done.")]), { checks, diagnostics: false });
+    await collect(session.send("go"));
+    expect(sawFile).toEqual([]);
+    session.configure({ diagnostics: true });
+    await collect(session.send("again"));
+    expect(sawFile).toHaveLength(2);
+  });
+
+  test("the check is in the trajectory", async () => {
+    const { checks } = typescriptProject(ok, broken);
+    const trajectories = new TrajectoryStore(dir);
+    const session = makeSession(new ScriptedProvider([useTools(write("c1")), say("Done.")]), { checks, trajectories });
+    await collect(session.send("go"));
+    await session.flush();
+    const files = await Array.fromAsync(new Bun.Glob("**/*.jsonl").scan(dir));
+    const records = (await readFile(join(dir, files[0]!), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    expect(records).toContainEqual(expect.objectContaining({ type: "check", agent: "main", status: "done", before: 0, errors: 1, added: 1 }));
+  });
+
+  test("a baseline whose call was declined is stopped when the turn ends, and the next turn works", async () => {
+    mkdirSync(join(project, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(join(project, "node_modules", ".bin", "tsc"), "");
+    let captured: AbortSignal | undefined;
+    const run: RunCheck = async (_command, { signal }) => {
+      captured = signal;
+      await new Promise<void>((resolve) => (signal.aborted ? resolve() : signal.addEventListener("abort", () => resolve(), { once: true })));
+      return { output: "", exitCode: null, timedOut: false, aborted: true };
+    };
+    const checks = new Diagnostics({ run, sandboxWorks: () => true });
+    const session = makeSession(new ScriptedProvider([useTools(write("c1")), say("Fine.")]), { checks, yolo: false, approve: async () => "no" });
+    await collect(session.send("go"));
+    expect(captured).toBeDefined();
+    expect(captured!.aborted).toBe(true);
+    const events = await collect(session.send("again"));
+    expect(events.at(-1)).toMatchObject({ type: "turn_end" });
+    expect(events.some((e) => e.type === "assistant")).toBe(true);
   });
 });

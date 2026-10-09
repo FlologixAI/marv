@@ -54,6 +54,8 @@ export type TrajectoryRecord =
   | (Who & { type: "cut_off"; continued: boolean })
   /** A reply had no text and no tool calls; `next`: asked again, nudged (EMPTY_REPLY_NOTE), or stopped there. */
   | (Who & { type: "empty_reply"; next: "retry" | "nudge" | "stop" })
+  /** The typecheck after a step's file changes (src/diagnostics): how it went, and how many errors were new. */
+  | (Who & { type: "check"; status: "done" | "failed" | "off"; ms?: number; before?: number; errors?: number; added?: number; reason?: string })
   /** `agent` started a subagent with the agent tool call `call`; its records follow with `agent: subagent`. */
   | (Who & { type: "subagent_start"; subagent: string; call: string; agentType: string; description: string; prompt: string; isolation?: string })
   /** How an agent's run ended (for "main", the turn). */

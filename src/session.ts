@@ -10,6 +10,7 @@
 import { agentArgs, answerAllCalls, DEFAULT_MAX_STEPS, runAgent, type LoopEvent } from "./agent.ts";
 import { GENERAL_PURPOSE, type AgentType } from "./agents.ts";
 import { COMPACT_AT, compactedHistory, summarize } from "./compact.ts";
+import { Diagnostics, type CheckResult } from "./diagnostics/turn.ts";
 import { EventQueue } from "./event-queue.ts";
 import { classifyReply } from "./feedback.ts";
 import { runGit } from "./git.ts";
@@ -40,7 +41,7 @@ export type SessionEvent =
   /** Always first. */
   | { type: "turn_start"; turn: string }
   /** What the turn is doing before (or instead of) the model's reply. */
-  | { type: "status"; status: "waiting_for_mcp" | "compacting" | "running" }
+  | { type: "status"; status: "waiting_for_mcp" | "compacting" | "checking" | "running" }
   /** The main agent, exactly as runAgent yields them. */
   | LoopEvent
   /** A subagent's loop event; `callId` is the agent tool call that started it. */
@@ -48,6 +49,8 @@ export type SessionEvent =
   | { type: "subagent_progress"; callId: string; progress: AgentProgress }
   /** An automatic compaction (the context was nearly full), and how it went. */
   | { type: "compaction"; result: CompactResult }
+  /** The typecheck after a step's file changes (src/diagnostics): new errors, a failure, or that it's off. */
+  | { type: "check"; result: CheckResult }
   /** Always last, exactly once, however the turn ended. */
   | { type: "turn_end"; turn: string; reason: TurnEndReason };
 
@@ -96,6 +99,10 @@ export interface SessionInit {
    * multiple). Default 25.
    */
   maxSteps?: number;
+  /** Typecheck after each step that changed files (TypeScript projects, in the sandbox), and tell the model about new errors. Default true. */
+  diagnostics?: boolean;
+  /** The typecheck's session state; tests pass one with a stand-in runner. */
+  checks?: Diagnostics;
   sandbox?: boolean;
   yolo?: boolean;
   /**
@@ -193,7 +200,7 @@ export interface Session {
    * only for an invalid provider (an unknown kind) or for turning yolo on where it isn't allowed (cwd your home
    * folder or above it), and then nothing changed.
    */
-  configure(changes: { provider?: ProviderOption; thinking?: boolean; sandbox?: boolean; yolo?: boolean; trajectories?: boolean }): void;
+  configure(changes: { provider?: ProviderOption; thinking?: boolean; sandbox?: boolean; yolo?: boolean; trajectories?: boolean; diagnostics?: boolean }): void;
   /** Feedback on the last turn, in its trajectory. */
   rate(feedback: { score: 1 | -1 | 0; note?: string; labels?: string[] }): "rated" | "off" | "nothing";
   /** Saves the conversation now (it's also saved shortly after every turn). */
@@ -230,6 +237,8 @@ export class MarvSession implements Session {
   private readonly specs: ToolSpec[];
   private system: string;
   private sandbox: boolean;
+  private diagnostics: boolean;
+  private readonly checks: Diagnostics;
   private yolo: boolean;
   private logging: boolean;
   private log: Trajectory | null = null;
@@ -260,6 +269,8 @@ export class MarvSession implements Session {
     this.provider = this.factory.make();
     this.sandbox = init.sandbox ?? true;
     this.yolo = init.yolo ?? true;
+    this.diagnostics = init.diagnostics ?? true;
+    this.checks = init.checks ?? new Diagnostics();
     this.logging = init.logTrajectories ?? true;
     this.memories = init.memory?.initial;
     // Built once, so every request sends byte-identical tool definitions (the skill tool only when there are skills).
@@ -389,6 +400,7 @@ export class MarvSession implements Session {
     sandbox?: boolean;
     yolo?: boolean;
     trajectories?: boolean;
+    diagnostics?: boolean;
   }): void {
     if (changes.yolo && this.init.noYolo) throw new Error(this.init.noYolo);
     let remade: { option: ProviderFactory | ProviderOption; thinking: boolean; factory: ProviderFactory; provider: Provider; info: ModelInfo | undefined } | undefined;
@@ -404,6 +416,7 @@ export class MarvSession implements Session {
     if (changes.sandbox !== undefined) this.sandbox = changes.sandbox;
     if (changes.yolo !== undefined) this.yolo = changes.yolo;
     if (changes.trajectories !== undefined) this.logging = changes.trajectories;
+    if (changes.diagnostics !== undefined) this.diagnostics = changes.diagnostics;
     if (!remade) return;
     ({ option: this.option, thinking: this.thinking, factory: this.factory, provider: this.provider, info: this.info } = remade);
     this.lookup();
@@ -728,7 +741,7 @@ export class MarvSession implements Session {
       // naming its own model gets it from the same provider as the turn, and its usage is counted (local or not) as
       // that one's, priced with what the model list said about the turn's model.
       const { specs, tools } = this.offered();
-      const { sandbox, yolo, factory, provider, info } = this;
+      const { sandbox, yolo, factory, provider, info, diagnostics } = this;
       const log = this.trajectory();
       const record = (r: TrajectoryRecord) => log?.write(r);
       this.startTurnLog(log, turn, text, forModel, specs);
@@ -751,6 +764,25 @@ export class MarvSession implements Session {
       emit({ type: "status", status: "running" });
 
       const approve = this.approver(stop.signal);
+      // The typecheck after file changes: a baseline before the first, a check after each step that made one.
+      const checks = diagnostics
+        ? this.checks.turn({
+            root: this.init.root,
+            sandbox,
+            signal: stop.signal,
+            onStatus: (checking) => emit({ type: "status", status: checking ? "checking" : "running" }),
+            onResult: (result) => {
+              emit({ type: "check", result });
+              record(
+                result.status === "done"
+                  ? { type: "check", turn, agent: "main", status: "done", ms: result.ms, before: result.before, errors: result.errors, added: result.added.length }
+                  : result.status === "failed"
+                    ? { type: "check", turn, agent: "main", status: "failed", ms: result.ms, reason: result.reason }
+                    : { type: "check", turn, agent: "main", status: "off", reason: result.reason },
+              );
+            },
+          })
+        : undefined;
       let subagents = 0;
       // What the agent tool needs to start subagents. Only the main agent gets one; what a subagent does reaches
       // this conversation only as its tool result, and the client through "subagent" events.
@@ -776,12 +808,13 @@ export class MarvSession implements Session {
         runTool: (call) =>
           runTool(
             call,
-            { root: this.init.root, signal: stop.signal, approve, sandbox, yolo, skills: this.init.skills, memory: this.init.memory?.paths, agentHost },
+            { root: this.init.root, signal: stop.signal, approve, sandbox, yolo, skills: this.init.skills, memory: this.init.memory?.paths, agentHost, beforeChange: checks?.beforeChange },
             tools,
           ),
         signal: stop.signal,
         isParallel: isParallelCall,
         maxSteps: this.init.maxSteps,
+        afterStep: checks?.afterStep,
         // At the step limit, ask instead of stopping dead; with no one to ask, it stops there.
         onLimit: approve && (async (steps) => (await approve(stepLimitRequest(steps, this.init.maxSteps ?? DEFAULT_MAX_STEPS))) !== "no"),
       })) {
