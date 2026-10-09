@@ -155,6 +155,8 @@ export class Diagnostics {
           const added = newErrors(before.errors, now.errors);
           tell({ status: "done", ms: now.ms, before: before.errors.length, errors: now.errors.length, added });
           return added.length ? diagnosticsNote(added) : null;
+        } catch {
+          return null; // a bug in reading the output must never end the turn: runAgent awaits this
         } finally {
           setStatus(false);
         }

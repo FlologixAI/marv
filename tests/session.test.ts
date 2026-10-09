@@ -929,7 +929,7 @@ describe("diagnostics", () => {
     writeFileSync(join(project, "node_modules", ".bin", "tsc"), "");
     const usage: AgentEvent = { type: "usage", usage: { promptTokens: 10, completionTokens: 1 } };
     let runs = 0;
-    const run: RunCheck = async () => (runs++ && (await Bun.sleep(200)), ok);
+    const run: RunCheck = async () => (runs++ && (await Bun.sleep(500)), ok);
     const checks = new Diagnostics({ run, sandboxWorks: () => true });
     const trajectories = new TrajectoryStore(dir);
     const session = makeSession(new ScriptedProvider([[usage, ...useTools(write("c1"))], [usage, ...say("Done.")]]), { checks, trajectories });
@@ -939,7 +939,7 @@ describe("diagnostics", () => {
     const records = (await readFile(join(dir, files[0]!), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     const requests = records.filter((r) => r.type === "request");
     expect(requests).toHaveLength(2);
-    expect(requests[1].ms).toBeLessThan(150);
+    expect(requests[1].ms).toBeLessThan(250);
   });
 
   test("turning diagnostics back on resets what a session gave up on", async () => {
