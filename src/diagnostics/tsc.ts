@@ -48,7 +48,9 @@ export function parseTsc(output: string, exitCode: number | null): TsError[] | n
   const lines = output.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    // Node's own runtime warnings (stderr is merged into the output) aren't tsc's report; the second line follows the first.
+    // Node's own runtime warnings (stderr is merged into the output) aren't tsc's report; the second line follows the
+    // first. One in the middle of an error's continuation makes the next indented line unreadable, deliberately
+    // (conservative: the report can't be trusted to be whole).
     if (/^\(node:\d+\) /.test(line)) {
       if (lines[i + 1]?.startsWith("(Use `node --trace-warnings")) i++;
       open = false;

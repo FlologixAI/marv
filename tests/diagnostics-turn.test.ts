@@ -28,10 +28,10 @@ function fake(...answers: CommandResult[]): RunCheck & { runs: number } {
   return run;
 }
 
-function turn(diagnostics: Diagnostics, { sandbox = true } = {}) {
+function turn(diagnostics: Diagnostics, { sandbox = true, signal = new AbortController().signal, onResult }: { sandbox?: boolean; signal?: AbortSignal; onResult?: (r: CheckResult) => void } = {}) {
   const results: CheckResult[] = [];
   const statuses: boolean[] = [];
-  const checks = diagnostics.turn({ root, sandbox, signal: new AbortController().signal, onStatus: (s) => statuses.push(s), onResult: (r) => results.push(r) });
+  const checks = diagnostics.turn({ root, sandbox, signal, onStatus: (s) => statuses.push(s), onResult: (r) => (results.push(r), onResult?.(r)) });
   return { checks, results, statuses };
 }
 
@@ -52,7 +52,7 @@ describe("a turn's checks", () => {
     expect(note).toContain("found 1 new error");
     expect(note).toContain("src/b.ts:2:3 TS2304 Cannot find name 'y'.");
     expect(note).not.toContain("'x'");
-    expect(results).toEqual([{ status: "done", ms: expect.any(Number), errors: 2, added: [expect.objectContaining({ file: "src/b.ts" })] }]);
+    expect(results).toEqual([{ status: "done", ms: expect.any(Number), before: 1, errors: 2, added: [expect.objectContaining({ file: "src/b.ts" })] }]);
     expect(statuses).toEqual([true, false]);
     // The same errors again: nothing new.
     expect(await checks.afterStep(changed)).toBeNull();
@@ -138,7 +138,7 @@ describe("a turn's checks", () => {
   });
 
   test("output at the capture limit may be cut mid-list, so it's unreadable", async () => {
-    const run = fake(ok(), failed("x".repeat(MAX_CAPTURE)));
+    const run = fake(ok(), failed(ERR_Y.repeat(Math.ceil(MAX_CAPTURE / ERR_Y.length))));
     const { checks, results } = turn(new Diagnostics({ run, sandboxWorks: () => true }));
     await checks.beforeChange();
     expect(await checks.afterStep(changed)).toBeNull();
@@ -163,17 +163,112 @@ describe("a turn's checks", () => {
   });
 });
 
+describe("a turn's checks, when a check can't be used", () => {
+  const timedOut: CommandResult = { output: "", exitCode: null, timedOut: true, aborted: false };
+  const aborted: CommandResult = { output: "", exitCode: null, timedOut: false, aborted: true };
+
+  test("a step check that can't be read leaves the rest of the turn unchecked; the next turn starts fresh", async () => {
+    const run = fake(ok(), failed("Segmentation fault\n"), ok(), failed(ERR_X));
+    const diagnostics = new Diagnostics({ run, sandboxWorks: () => true });
+    const first = turn(diagnostics);
+    await first.checks.beforeChange();
+    expect(await first.checks.afterStep(changed)).toBeNull();
+    expect(await first.checks.afterStep(changed)).toBeNull();
+    expect(run.runs).toBe(2);
+    const second = turn(diagnostics);
+    await second.checks.beforeChange();
+    expect(await second.checks.afterStep(changed)).toContain("found 1 new error");
+    expect(run.runs).toBe(4);
+  });
+
+  test("a step check that times out leaves the baseline, and no more checks run this turn", async () => {
+    const run = fake(ok(), timedOut, ok(), failed(ERR_X));
+    const diagnostics = new Diagnostics({ run, sandboxWorks: () => true });
+    const first = turn(diagnostics);
+    await first.checks.beforeChange();
+    expect(await first.checks.afterStep(changed)).toBeNull();
+    expect(await first.checks.afterStep(changed)).toBeNull();
+    expect(run.runs).toBe(2);
+    const second = turn(diagnostics);
+    await second.checks.beforeChange();
+    expect(await second.checks.afterStep(changed)).not.toBeNull();
+  });
+
+  test("the second timeout of a session, in a step check, turns checking off", async () => {
+    const run = fake(timedOut, ok(), timedOut);
+    const diagnostics = new Diagnostics({ run, sandboxWorks: () => true });
+    await turn(diagnostics).checks.beforeChange();
+    const second = turn(diagnostics);
+    await second.checks.beforeChange();
+    expect(await second.checks.afterStep(changed)).toBeNull();
+    expect(second.results.at(-1)).toEqual({ status: "off", reason: "timeouts" });
+    expect(await second.checks.afterStep(changed)).toBeNull();
+    expect(run.runs).toBe(3);
+  });
+
+  test("a signal aborted before the step: nothing runs, no status", async () => {
+    const controller = new AbortController();
+    const run = fake(ok());
+    const { checks, statuses } = turn(new Diagnostics({ run, sandboxWorks: () => true }), { signal: controller.signal });
+    await checks.beforeChange();
+    controller.abort();
+    expect(await checks.afterStep(changed)).toBeNull();
+    expect(run.runs).toBe(1);
+    expect(statuses).toEqual([]);
+  });
+
+  test("a step check stopped by the runner still ends the status", async () => {
+    const run = fake(ok(), aborted);
+    const { checks, statuses } = turn(new Diagnostics({ run, sandboxWorks: () => true }));
+    await checks.beforeChange();
+    expect(await checks.afterStep(changed)).toBeNull();
+    expect(statuses).toEqual([true, false]);
+  });
+
+  test("Esc right as a check finishes: nothing is told or emitted", async () => {
+    const controller = new AbortController();
+    let n = 0;
+    const run: RunCheck = async () => {
+      if (n++ === 0) return ok();
+      controller.abort();
+      return failed(ERR_X);
+    };
+    const { checks, results } = turn(new Diagnostics({ run, sandboxWorks: () => true }), { signal: controller.signal });
+    await checks.beforeChange();
+    expect(await checks.afterStep(changed)).toBeNull();
+    expect(results).toEqual([]);
+  });
+
+  test("callbacks that throw can't make beforeChange reject or afterStep throw", async () => {
+    const run = fake(failed(ERR_X), failed(ERR_X + ERR_Y));
+    const diagnostics = new Diagnostics({ run, sandboxWorks: () => true });
+    const checks = diagnostics.turn({
+      root,
+      sandbox: true,
+      signal: new AbortController().signal,
+      onStatus: () => {
+        throw new Error("ui");
+      },
+      onResult: () => {
+        throw new Error("ui");
+      },
+    });
+    await checks.beforeChange();
+    expect(await checks.afterStep(changed)).toContain("found 1 new error");
+  });
+});
+
 describe("checkNotice", () => {
   test("new errors: the first five, then how many more", () => {
     const added = Array.from({ length: 7 }, (_, i) => ({ file: "a.ts", line: i + 1, column: 1, code: "TS2304", message: `Cannot find name 'v${i}'.` }));
-    const text = checkNotice({ status: "done", ms: 5, errors: 7, added })!;
+    const text = checkNotice({ status: "done", ms: 5, before: 0, errors: 7, added })!;
     expect(text.split("\n")[0]).toBe("✻ Typecheck: 7 new errors, told the model:");
     expect(text.split("\n")).toHaveLength(1 + 5 + 1);
     expect(text).toContain("… and 2 more");
   });
 
   test("nothing for a clean check or a failure; one line when checking is off", () => {
-    expect(checkNotice({ status: "done", ms: 5, errors: 0, added: [] })).toBeNull();
+    expect(checkNotice({ status: "done", ms: 5, before: 0, errors: 0, added: [] })).toBeNull();
     expect(checkNotice({ status: "failed", ms: 5, reason: "timeout" })).toBeNull();
     expect(checkNotice({ status: "failed", ms: 5, reason: "unreadable" })).toBeNull();
     expect(checkNotice({ status: "failed", ms: 5, reason: "unreadable", notify: true })).toBe("✻ Marv couldn't read the typecheck's output here, so it can't tell the model about new errors.");
@@ -181,8 +276,12 @@ describe("checkNotice", () => {
     expect(checkNotice({ status: "off", reason: "timeouts" })).toContain("stopped");
   });
 
+  test("off after timeouts doesn't name a duration", () => {
+    expect(checkNotice({ status: "off", reason: "timeouts" })).toBe("✻ The typecheck timed out twice, so Marv stopped running it for this session.");
+  });
+
   test("escape sequences in an error message never reach the terminal", () => {
-    const text = checkNotice({ status: "done", ms: 5, errors: 1, added: [{ file: "a.ts", line: 1, column: 1, code: "TS2322", message: "Type '\u001b]52;c;aGk=\u0007' is wrong." }] })!;
+    const text = checkNotice({ status: "done", ms: 5, before: 0, errors: 1, added: [{ file: "a.ts", line: 1, column: 1, code: "TS2322", message: "Type '\u001b]52;c;aGk=\u0007' is wrong." }] })!;
     expect(text).not.toContain("\u001b");
   });
 });

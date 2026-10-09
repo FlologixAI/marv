@@ -18,8 +18,11 @@ const NOTICE_LINES = 5;
 
 export type CheckResult =
   /** It ran. `added`: the errors the model was told about (none: nothing was said). */
-  | { status: "done"; ms: number; errors: number; added: TsError[] }
-  /** It couldn't tell what's new, so nothing was said. `notify`: the session's first unreadable output, which the transcript says once (otherwise this stays silent forever). */
+  | { status: "done"; ms: number; before: number; errors: number; added: TsError[] }
+  /**
+   * It couldn't tell what's new, so nothing was said. `notify`: the session's first unreadable output, which the
+   * transcript says once (otherwise this stays silent forever).
+   */
   | { status: "failed"; ms: number; reason: "timeout" | "unreadable"; notify?: boolean }
   /** No checks from here on (said once per session). */
   | { status: "off"; reason: "no-sandbox" | "timeouts" };
@@ -44,6 +47,10 @@ interface TurnOptions {
   root: string;
   /** The session's sandbox setting: checks need it on, and bwrap working. */
   sandbox: boolean;
+  /**
+   * Must be aborted when the turn ends, however it ends: a baseline started by a preview whose call was then
+   * declined keeps running otherwise, and its orphaned timeout would count against the session.
+   */
   signal: AbortSignal;
   /** True while a step's check runs ("Checking types…"), false after. */
   onStatus: (checking: boolean) => void;
@@ -67,12 +74,27 @@ export class Diagnostics {
         beforeChange: async () => {
           if (this.toldNoSandbox) return;
           this.toldNoSandbox = true;
-          onResult({ status: "off", reason: "no-sandbox" });
+          try {
+            onResult({ status: "off", reason: "no-sandbox" });
+          } catch {}
         },
         afterStep: async () => null,
       };
     }
+    // Callbacks are the UI's: whatever they do, a check never throws into the turn.
+    const tell = (r: CheckResult) => {
+      try {
+        onResult(r);
+      } catch {}
+    };
+    const setStatus = (checking: boolean) => {
+      try {
+        onStatus(checking);
+      } catch {}
+    };
     const run = this.opts.run ?? sandboxed;
+    // A check that failed (not one Esc stopped) makes checking unavailable for the rest of this turn.
+    let unavailable = false;
     // The first unreadable result of the session asks for a notice; later ones don't repeat it.
     const unreadable = (ms: number): CheckResult => {
       const notify = !this.toldUnreadable;
@@ -85,21 +107,24 @@ export class Diagnostics {
       try {
         result = await run(checkCommand(bin), { root, signal, timeoutMs: this.opts.timeoutMs ?? CHECK_TIMEOUT_MS });
       } catch {
-        onResult(unreadable(Date.now() - started));
+        unavailable = true;
+        tell(unreadable(Date.now() - started));
         return null;
       }
       const ms = Date.now() - started;
       if (result.aborted) return null; // Esc: the turn is ending, nothing to say
       if (result.timedOut) {
         this.timeouts++;
-        onResult({ status: "failed", ms, reason: "timeout" });
-        if (this.timeouts === MAX_TIMEOUTS) onResult({ status: "off", reason: "timeouts" });
+        unavailable = true;
+        tell({ status: "failed", ms, reason: "timeout" });
+        if (this.timeouts === MAX_TIMEOUTS) tell({ status: "off", reason: "timeouts" });
         return null;
       }
       // Output at the capture limit was cut off, maybe mid-list: what's left would make errors look fixed or new.
       const errors = result.output.length >= MAX_CAPTURE ? null : parseTsc(result.output, result.exitCode);
       if (!errors) {
-        onResult(unreadable(ms));
+        unavailable = true;
+        tell(unreadable(ms));
         return null;
       }
       return { errors, ms };
@@ -112,18 +137,18 @@ export class Diagnostics {
       afterStep: async (results) => {
         if (!baseline || !results.some((r) => r.diff)) return null;
         const before = await baseline;
-        if (!before || signal.aborted || this.timeouts >= MAX_TIMEOUTS) return null;
-        onStatus(true);
+        if (!before || unavailable || signal.aborted || this.timeouts >= MAX_TIMEOUTS) return null;
         let now: { errors: TsError[]; ms: number } | null;
         try {
+          setStatus(true);
           now = await check();
         } finally {
-          onStatus(false);
+          setStatus(false);
         }
-        if (!now) return null;
+        if (!now || signal.aborted) return null;
         baseline = Promise.resolve(now); // each error is told once, when it first appears
         const added = newErrors(before.errors, now.errors);
-        onResult({ status: "done", ms: now.ms, errors: now.errors.length, added });
+        tell({ status: "done", ms: now.ms, before: before.errors.length, errors: now.errors.length, added });
         return added.length ? diagnosticsNote(added) : null;
       },
     };
@@ -135,7 +160,7 @@ export function checkNotice(result: CheckResult): string | null {
   if (result.status === "off") {
     return result.reason === "no-sandbox"
       ? "✻ Marv typechecks after the model's edits only in the sandbox (it runs the project's own compiler), so it won't here."
-      : "✻ The typecheck took over a minute twice, so Marv stopped running it for this session.";
+      : "✻ The typecheck timed out twice, so Marv stopped running it for this session.";
   }
   if (result.status === "failed") {
     return result.reason === "unreadable" && result.notify ? "✻ Marv couldn't read the typecheck's output here, so it can't tell the model about new errors." : null;

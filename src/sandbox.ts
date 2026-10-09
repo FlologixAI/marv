@@ -157,9 +157,10 @@ function credentialMasks(file: string, mounts: string[], stat: SandboxOptions["s
 
 /**
  * What the sandbox keeps of /run. It holds the host's sockets: the user's D-Bus (`systemd-run --user` starts any
- * program outside the sandbox), the GPG and SSH agents, the keyring, docker's, and, only offline, the display (with network the sandbox shares the host's network namespace, whose abstract sockets include X11's). A read-only mount doesn't
- * stop a process from connecting to a socket, so /run becomes an empty folder, and only what commands need from it is
- * shown again, read-only: folders on PATH (NixOS keeps its programs in /run/current-system, fnm its node in
+ * program outside the sandbox), the GPG and SSH agents, the keyring, docker's, and, only offline, the display (with
+ * network the sandbox shares the host's network namespace, whose abstract sockets include X11's). A read-only mount
+ * doesn't stop a process from connecting to a socket, so /run becomes an empty folder, and only what commands need
+ * from it is shown again, read-only: folders on PATH (NixOS keeps its programs in /run/current-system, fnm its node in
  * /run/user/<uid>/fnm_multishells) and, with network, the DNS config /etc/resolv.conf leads to (systemd-resolved
  * keeps it in /run). Never /run, /run/user or a user's whole folder, even if PATH names one: that's the sockets again.
  */
