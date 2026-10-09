@@ -18,6 +18,8 @@ Spec: `docs/superpowers/specs/2026-10-08-post-edit-diagnostics-design.md`, secti
 - TypeScript 7's `node_modules/typescript/bin/tsc` is a `#!/usr/bin/env node` launcher that loads the native compiler from `node_modules/@typescript/typescript-<platform>`. Both folders must be copied. `/usr/bin/node` is visible in the sandbox (the system is mounted read-only).
 - All three tasks were prototyped and verified before this plan was written: each `repo/` typechecks clean, each fails its check before any change and passes with its solution, and leaving one site unchanged is caught by tsc (`src/types.ts` in the rename, `src/guest.ts` in the required field, `src/log.ts` in make-async), by a runtime test (`src/banner.ts` and `src/keys.ts` in make-async: those still typecheck, since a template literal and `Object.keys` accept a `Promise`), or by both.
 
+> **Superseded in part (2026-10-08):** code review changed Tasks 1–4 after they were written: `addTypeScript` throws when TypeScript is missing, replaces an existing link and dereferences, `ranTypecheck()` parses the bash command, `workspace()` excludes `node_modules/` via `.git/info/exclude` (commits 236b855, afa64cf); the tasks gained `typecheck` scripts, stderr in the tsc assertion, a hidden `@ts-expect-error` check that `email` is required (`ts-required-field`), a tsc-only caller `src/css.ts` (`ts-make-async`), clearer wording, and a recursive scan without the name in comments (`ts-rename-export`) (commit fe28829). The files in `evals/` are the source of truth; the listings below are the first version.
+
 ---
 
 ### Task 1: Copy TypeScript into TypeScript tasks' workspaces
