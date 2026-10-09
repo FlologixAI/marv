@@ -63,6 +63,13 @@ export class Diagnostics {
   private toldNoSandbox = false;
   private toldUnreadable = false;
 
+  /** Checking was turned off and on again: forget what made the session give up, and the notices already given. */
+  reset(): void {
+    this.timeouts = 0;
+    this.toldNoSandbox = false;
+    this.toldUnreadable = false;
+  }
+
   constructor(private readonly opts: { run?: RunCheck; timeoutMs?: number; sandboxWorks?: () => boolean } = {}) {}
 
   turn({ root, sandbox, signal, onStatus, onResult }: TurnOptions): TurnChecks {
@@ -107,12 +114,13 @@ export class Diagnostics {
       try {
         result = await run(checkCommand(bin), { root, signal, timeoutMs: this.opts.timeoutMs ?? CHECK_TIMEOUT_MS });
       } catch {
+        if (signal.aborted) return null;
         unavailable = true;
         tell(unreadable(Date.now() - started));
         return null;
       }
       const ms = Date.now() - started;
-      if (result.aborted) return null; // Esc: the turn is ending, nothing to say
+      if (result.aborted || signal.aborted) return null; // Esc: the turn is ending, nothing to say
       if (result.timedOut) {
         this.timeouts++;
         unavailable = true;
@@ -138,18 +146,18 @@ export class Diagnostics {
         if (!baseline || !results.some((r) => r.diff)) return null;
         const before = await baseline;
         if (!before || unavailable || signal.aborted || this.timeouts >= MAX_TIMEOUTS) return null;
-        let now: { errors: TsError[]; ms: number } | null;
+        // The status goes back after the result is told, so the client sees checking, the check, then running.
         try {
           setStatus(true);
-          now = await check();
+          const now = await check();
+          if (!now || signal.aborted) return null;
+          baseline = Promise.resolve(now); // each error is told once, when it first appears
+          const added = newErrors(before.errors, now.errors);
+          tell({ status: "done", ms: now.ms, before: before.errors.length, errors: now.errors.length, added });
+          return added.length ? diagnosticsNote(added) : null;
         } finally {
           setStatus(false);
         }
-        if (!now || signal.aborted) return null;
-        baseline = Promise.resolve(now); // each error is told once, when it first appears
-        const added = newErrors(before.errors, now.errors);
-        tell({ status: "done", ms: now.ms, before: before.errors.length, errors: now.errors.length, added });
-        return added.length ? diagnosticsNote(added) : null;
       },
     };
   }

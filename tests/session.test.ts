@@ -879,6 +879,20 @@ describe("diagnostics", () => {
     expect(second.at(-1)).toEqual({ role: "user", text: expect.stringContaining("src/b.ts:1:1 TS2304 Cannot find name 'x'.") });
     expect(events).toContainEqual({ type: "status", status: "checking" });
     expect(events).toContainEqual({ type: "check", result: expect.objectContaining({ status: "done", errors: 1 }) });
+    // In this order, each after the one before.
+    const steps: ((e: SessionEvent) => boolean)[] = [
+      (e) => e.type === "tool_end",
+      (e) => e.type === "status" && e.status === "checking",
+      (e) => e.type === "check",
+      (e) => e.type === "status" && e.status === "running",
+      (e) => e.type === "assistant" && e.text === "Done.",
+    ];
+    let from = 0;
+    for (const match of steps) {
+      const i = events.findIndex((e, n) => n >= from && match(e));
+      expect(i).toBeGreaterThanOrEqual(from);
+      from = i + 1;
+    }
   });
 
   test("the baseline is taken before the file is written, also in yolo mode", async () => {
@@ -905,7 +919,44 @@ describe("diagnostics", () => {
     await session.flush();
     const files = await Array.fromAsync(new Bun.Glob("**/*.jsonl").scan(dir));
     const records = (await readFile(join(dir, files[0]!), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-    expect(records).toContainEqual(expect.objectContaining({ type: "check", agent: "main", status: "done", before: 0, errors: 1, added: 1 }));
+    expect(files).toHaveLength(1);
+    expect(records).toContainEqual(expect.objectContaining({ type: "check", agent: "main", status: "done", before: 0, errors: 1, added: 1, note: expect.stringContaining("Cannot find name 'x'") }));
+    expect(records).toContainEqual(expect.objectContaining({ type: "turn_start", diagnostics: true }));
+  });
+
+  test("the step's check isn't counted in the next request's time", async () => {
+    mkdirSync(join(project, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(join(project, "node_modules", ".bin", "tsc"), "");
+    const usage: AgentEvent = { type: "usage", usage: { promptTokens: 10, completionTokens: 1 } };
+    let runs = 0;
+    const run: RunCheck = async () => (runs++ && (await Bun.sleep(200)), ok);
+    const checks = new Diagnostics({ run, sandboxWorks: () => true });
+    const trajectories = new TrajectoryStore(dir);
+    const session = makeSession(new ScriptedProvider([[usage, ...useTools(write("c1"))], [usage, ...say("Done.")]]), { checks, trajectories });
+    await collect(session.send("go"));
+    await session.flush();
+    const files = await Array.fromAsync(new Bun.Glob("**/*.jsonl").scan(dir));
+    const records = (await readFile(join(dir, files[0]!), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const requests = records.filter((r) => r.type === "request");
+    expect(requests).toHaveLength(2);
+    expect(requests[1].ms).toBeLessThan(150);
+  });
+
+  test("turning diagnostics back on resets what a session gave up on", async () => {
+    let resets = 0;
+    class Spy extends Diagnostics {
+      override reset() {
+        resets++;
+        super.reset();
+      }
+    }
+    const session = makeSession(new ScriptedProvider([]), { checks: new Spy() });
+    session.configure({ diagnostics: true });
+    expect(resets).toBe(0);
+    session.configure({ diagnostics: false });
+    expect(resets).toBe(0);
+    session.configure({ diagnostics: true });
+    expect(resets).toBe(1);
   });
 
   test("a baseline whose call was declined is stopped when the turn ends, and the next turn works", async () => {

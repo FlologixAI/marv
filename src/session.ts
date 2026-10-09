@@ -10,6 +10,7 @@
 import { agentArgs, answerAllCalls, DEFAULT_MAX_STEPS, runAgent, type LoopEvent } from "./agent.ts";
 import { GENERAL_PURPOSE, type AgentType } from "./agents.ts";
 import { COMPACT_AT, compactedHistory, summarize } from "./compact.ts";
+import { diagnosticsNote } from "./diagnostics/tsc.ts";
 import { Diagnostics, type CheckResult } from "./diagnostics/turn.ts";
 import { EventQueue } from "./event-queue.ts";
 import { classifyReply } from "./feedback.ts";
@@ -40,7 +41,7 @@ export type CompactResult =
 export type SessionEvent =
   /** Always first. */
   | { type: "turn_start"; turn: string }
-  /** What the turn is doing before (or instead of) the model's reply. */
+  /** What the turn is doing between the model's replies: `running` once the message is sent, and again after each `checking`. */
   | { type: "status"; status: "waiting_for_mcp" | "compacting" | "checking" | "running" }
   /** The main agent, exactly as runAgent yields them. */
   | LoopEvent
@@ -416,7 +417,11 @@ export class MarvSession implements Session {
     if (changes.sandbox !== undefined) this.sandbox = changes.sandbox;
     if (changes.yolo !== undefined) this.yolo = changes.yolo;
     if (changes.trajectories !== undefined) this.logging = changes.trajectories;
-    if (changes.diagnostics !== undefined) this.diagnostics = changes.diagnostics;
+    if (changes.diagnostics !== undefined) {
+      // Turned back on: forget what made checking give up (timeouts), so /diagnostics on really does.
+      if (changes.diagnostics && !this.diagnostics) this.checks.reset();
+      this.diagnostics = changes.diagnostics;
+    }
     if (!remade) return;
     ({ option: this.option, thinking: this.thinking, factory: this.factory, provider: this.provider, info: this.info } = remade);
     this.lookup();
@@ -647,6 +652,7 @@ export class MarvSession implements Session {
         model: this.factory.model,
         yolo: this.yolo,
         sandbox: this.sandbox,
+        diagnostics: this.diagnostics,
       });
     }
     // Only a logged turn can be rated: feedback for a turn the file never recorded would be an orphan.
@@ -770,12 +776,25 @@ export class MarvSession implements Session {
             root: this.init.root,
             sandbox,
             signal: stop.signal,
-            onStatus: (checking) => emit({ type: "status", status: checking ? "checking" : "running" }),
+            onStatus: (checking) => {
+              emit({ type: "status", status: checking ? "checking" : "running" });
+              if (!checking) main?.restartClock();
+            },
             onResult: (result) => {
               emit({ type: "check", result });
               record(
                 result.status === "done"
-                  ? { type: "check", turn, agent: "main", status: "done", ms: result.ms, before: result.before, errors: result.errors, added: result.added.length }
+                  ? {
+                      type: "check",
+                      turn,
+                      agent: "main",
+                      status: "done",
+                      ms: result.ms,
+                      before: result.before,
+                      errors: result.errors,
+                      added: result.added.length,
+                      ...(result.added.length ? { note: diagnosticsNote(result.added) } : {}),
+                    }
                   : result.status === "failed"
                     ? { type: "check", turn, agent: "main", status: "failed", ms: result.ms, reason: result.reason }
                     : { type: "check", turn, agent: "main", status: "off", reason: result.reason },

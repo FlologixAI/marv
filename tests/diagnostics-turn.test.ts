@@ -137,6 +137,36 @@ describe("a turn's checks", () => {
     expect(results.map((r) => (r as { notify?: boolean }).notify)).toEqual([true, undefined]);
   });
 
+  test("a result arriving after the turn was stopped isn't reported and doesn't use up the one-time notice", async () => {
+    const stop = new AbortController();
+    const diagnostics = new Diagnostics({ run: async () => (stop.abort(), failed("Segmentation fault\n")), sandboxWorks: () => true });
+    const first = turn(diagnostics, { signal: stop.signal });
+    await first.checks.beforeChange();
+    expect(first.results).toEqual([]);
+    const later = turn(new Diagnostics({ run: fake(failed("x\n")), sandboxWorks: () => true }));
+    await later.checks.beforeChange();
+    expect(later.results).toEqual([{ status: "failed", ms: expect.any(Number), reason: "unreadable", notify: true }]);
+    // The same session, in a new turn: the stopped one didn't spend the notice.
+    const again = turn(diagnostics);
+    await again.checks.beforeChange();
+    expect(again.results).toEqual([{ status: "failed", ms: expect.any(Number), reason: "unreadable", notify: true }]);
+  });
+
+  test("reset() brings back checking after timeouts, and the one-time notices", async () => {
+    const timedOut: CommandResult = { output: "", exitCode: null, timedOut: true, aborted: false };
+    const run = fake(timedOut, timedOut, failed("Segmentation fault\n"));
+    const diagnostics = new Diagnostics({ run, sandboxWorks: () => true });
+    for (let i = 0; i < 2; i++) await turn(diagnostics).checks.beforeChange();
+    expect(run.runs).toBe(2);
+    await turn(diagnostics).checks.beforeChange();
+    expect(run.runs).toBe(2); // off
+    diagnostics.reset();
+    const { checks, results } = turn(diagnostics);
+    await checks.beforeChange();
+    expect(run.runs).toBe(3);
+    expect(results).toEqual([{ status: "failed", ms: expect.any(Number), reason: "unreadable", notify: true }]);
+  });
+
   test("output at the capture limit may be cut mid-list, so it's unreadable", async () => {
     const run = fake(ok(), failed(ERR_Y.repeat(Math.ceil(MAX_CAPTURE / ERR_Y.length))));
     const { checks, results } = turn(new Diagnostics({ run, sandboxWorks: () => true }));

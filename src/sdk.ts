@@ -189,6 +189,8 @@ export type { Provider, AgentEvent, ChatTurn, StreamOptions, ToolCall, ToolSpec,
 export { OllamaProvider } from "./provider/ollama.ts";
 export { OpenAICompatProvider } from "./provider/openai-compat.ts";
 export type { LoopEvent } from "./agent.ts";
+export type { CheckResult } from "./diagnostics/turn.ts";
+export type { TsError } from "./diagnostics/tsc.ts";
 export type { Totals } from "./usage.ts";
 export type { Message } from "./types.ts";
 export type { ModelInfo } from "./provider/models.ts";
