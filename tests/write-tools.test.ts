@@ -255,22 +255,29 @@ describe("the diff a change carries (for the transcript)", () => {
 });
 
 describe("beforeChange", () => {
-  for (const [name, args, path] of [
+  const cases = [
     ["edit_file", { path: "greet.ts", old_string: "Hello", new_string: "Hi" }, "greet.ts"],
     ["write_file", { path: "new.ts", content: "export {};\n" }, "new.ts"],
-  ] as const) {
+  ] as const;
+  for (const [name, args, path] of cases) {
     test(`${name}: the preview starts it (before the user is asked), and the file is written only once it's done`, async () => {
       let started = 0;
       let release!: () => void;
       const baseline = new Promise<void>((resolve) => (release = resolve));
+      const inRun = Promise.withResolvers<void>();
       const startedWhenAsked: number[] = [];
       const pending = runTool(call(name, args), {
         root,
         sandbox: false,
         approve: async () => (startedWhenAsked.push(started), "yes"),
-        beforeChange: () => (started++, baseline),
+        beforeChange: () => {
+          if (++started === 2) inRun.resolve();
+          return baseline;
+        },
       });
-      await Bun.sleep(30);
+      // The second call is run() reaching its await.
+      await inRun.promise;
+      expect(started).toBe(2);
       expect(startedWhenAsked).toEqual([1]);
       // Approved, but still waiting for the baseline: nothing written yet.
       if (path === "greet.ts") expect(await read(path)).toContain("Hello");
@@ -279,6 +286,29 @@ describe("beforeChange", () => {
       expect((await pending).isError).toBeFalsy();
       if (path === "greet.ts") expect(await read(path)).toContain("Hi");
       else expect(await read(path)).toBe("export {};\n");
+    });
+
+    test(`${name}: stopped while waiting for the baseline, nothing is written`, async () => {
+      const stop = new AbortController();
+      const inRun = Promise.withResolvers<void>();
+      let started = 0;
+      const pending = runTool(call(name, args), {
+        root,
+        sandbox: false,
+        signal: stop.signal,
+        approve: async () => "yes",
+        // Resolves only once the abort happens, like the real baseline (it ends on abort).
+        beforeChange: () => {
+          if (++started === 2) inRun.resolve();
+          return new Promise<void>((resolve) => stop.signal.addEventListener("abort", () => resolve()));
+        },
+      });
+      await inRun.promise;
+      stop.abort();
+      const result = await pending;
+      expect(result.summary).toBe("interrupted");
+      if (path === "greet.ts") expect(await read(path)).toContain("Hello");
+      else expect(existsSync(join(root, path))).toBe(false);
     });
   }
 });

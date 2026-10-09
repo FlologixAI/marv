@@ -113,7 +113,7 @@ interface Options {
   maxParallel?: number;
   /**
    * After a step's tool calls are all answered, when the run goes on: a note for the model, appended as a message
-   * from Marv before the next request (like CUT_OFF_NOTE), or null. The session's typecheck uses it (src/diagnostics).
+   * from Marv before the next request (like CUT_OFF_NOTE), or null. Never rejects. The session's typecheck uses it (src/diagnostics).
    */
   afterStep?: (results: ToolResult[]) => Promise<string | null>;
 }
@@ -372,10 +372,10 @@ export async function* runAgent({
       return;
     }
 
-    // Every call must get a result, even after an interrupt or a "no": a
-    // request with an unanswered tool call is rejected by the API.
     // Every result of this step, in call order, for afterStep.
     const stepResults: ToolResult[] = [];
+    // Every call must get a result, even after an interrupt or a "no": a
+    // request with an unanswered tool call is rejected by the API.
     let declined = false;
     // How many calls have their result in the history: they're appended in call order, so the rest are a suffix.
     let answered = 0;

@@ -40,7 +40,7 @@ export const writeFile: Tool<typeof input> = {
   autoSafe: ({ path }, { root }) => !touchesGit(root, path),
 
   async preview(args, ctx) {
-    void ctx.beforeChange?.();
+    void ctx.beforeChange?.().catch(() => {});
     const { shown, before, content } = await plan(args, ctx);
     // All of it: the prompt shows what fits and counts the rest (a preview is never saved).
     if (before === null) return { title: `Create ${shown}`, diff: addedLines(content) };
@@ -49,6 +49,8 @@ export const writeFile: Tool<typeof input> = {
 
   async run(args, ctx) {
     await ctx.beforeChange?.();
+    // Esc while waiting for the baseline: it resolves on abort, but the user said stop, so nothing is written.
+    if (ctx.signal?.aborted) return { output: "Interrupted before the change was written: nothing changed.", summary: "interrupted" };
     const { absolute, shown, before, content, crlf } = await plan(args, ctx);
     await mkdir(dirname(absolute), { recursive: true });
     await Bun.write(absolute, content);
