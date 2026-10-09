@@ -135,12 +135,12 @@ function gitHead(root: string): string | undefined {
 }
 
 /** The step-limit question: asked like any approval, so the client's "stop everything" answers it too. */
-const stepLimitRequest = (steps: number): ApprovalRequest => ({
+const stepLimitRequest = (steps: number, every: number): ApprovalRequest => ({
   tool: "continue",
   label: `${steps} steps`,
   preview: {
     title: `Keep going? Marv has taken ${steps} steps on this request without finishing`,
-    note: `it asks again after another ${DEFAULT_MAX_STEPS}; no stops it here, and you can say what to do next`,
+    note: `it asks again after another ${every}; no stops it here, and you can say what to do next`,
   },
   scope: { key: "continue", description: "the step limit" },
 });
@@ -783,7 +783,7 @@ export class MarvSession implements Session {
         isParallel: isParallelCall,
         maxSteps: this.init.maxSteps,
         // At the step limit, ask instead of stopping dead; with no one to ask, it stops there.
-        onLimit: approve && (async (steps) => (await approve(stepLimitRequest(steps))) !== "no"),
+        onLimit: approve && (async (steps) => (await approve(stepLimitRequest(steps, this.init.maxSteps ?? DEFAULT_MAX_STEPS))) !== "no"),
       })) {
         main.event(event);
         switch (event.type) {

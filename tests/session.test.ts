@@ -216,6 +216,13 @@ describe("approvals", () => {
     expect(events).toContainEqual({ type: "done", reason: "max_steps" });
   });
 
+  test("the step-limit question says when it asks again", async () => {
+    const provider = new ScriptedProvider(Array.from({ length: 10 }, (_, i) => useTools(read(`c${i}`))));
+    const asked: ApprovalRequest[] = [];
+    await collect(makeSession(provider, { maxSteps: 4, approve: async (r) => (asked.push(r), "no") }).send("loop"));
+    expect(asked[0]?.preview.note).toContain("after another 4");
+  });
+
   test("a maxSteps that isn't a positive whole number throws", () => {
     for (const maxSteps of [0, -1, 2.5, Number.NaN]) expect(() => makeSession(new ScriptedProvider([]), { maxSteps })).toThrow(/maxSteps/);
   });
