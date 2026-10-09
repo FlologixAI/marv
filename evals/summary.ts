@@ -27,7 +27,7 @@ export interface RunResult {
   emptyReplies?: number;
   /** File changes after which Marv said the file no longer parses. */
   syntaxNotes?: number;
-  /** The model ran a typecheck itself: a bash command naming tsc or tsgo. */
+  /** The model ran a typecheck itself: a guess from the command's text: a bash command naming tsc or tsgo. */
   ranTypecheck?: boolean;
   /** The start of each failed edit_file result: what went wrong. */
   editErrors: string[];
