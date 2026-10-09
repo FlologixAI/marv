@@ -36,5 +36,6 @@ export function ranTypecheck(args: string): boolean {
   } catch {
     return false;
   }
-  return typeof command === "string" && /\b(tsc|tsgo)\b/.test(command);
+  // `run typecheck`: the TS task repos have that script (npm run, bun run), and models use it.
+  return typeof command === "string" && /\b(tsc|tsgo)\b|\brun typecheck\b/.test(command);
 }

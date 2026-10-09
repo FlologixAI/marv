@@ -69,6 +69,10 @@ describe("ranTypecheck", () => {
     expect(ranTypecheck(bash("npx tsc -p ."))).toBe(true);
     expect(ranTypecheck(bash("node_modules/.bin/tsgo"))).toBe(true);
   });
+  test("sees the project's typecheck script (the TS task repos have one)", () => {
+    expect(ranTypecheck(bash("npm run typecheck"))).toBe(true);
+    expect(ranTypecheck(bash("bun run typecheck 2>&1 | head"))).toBe(true);
+  });
   test("ignores other commands, bad JSON and a missing command", () => {
     expect(ranTypecheck(bash("cat tsconfig.json"))).toBe(false);
     expect(ranTypecheck("{not json")).toBe(false);
