@@ -20,6 +20,7 @@ export type CommandAction =
   | { type: "sandbox"; on: boolean }
   | { type: "yolo"; on: boolean }
   | { type: "trajectories"; on: boolean }
+  | { type: "diagnostics"; on: boolean }
   /** Trust and start the project's MCP servers. */
   | { type: "mcp-trust" }
   /** Rate or tag the last turn: 1 good, -1 bad, 0 labels only. */
@@ -194,6 +195,16 @@ export const commands: Command[] = [
     },
   },
   {
+    name: "diagnostics",
+    description: "Typecheck after the model's edits (/diagnostics on, /diagnostics off)",
+    run: (args, { config }) => {
+      const arg = args.toLowerCase();
+      if (arg === "on" || arg === "off") return { type: "diagnostics", on: arg === "on" };
+      if (arg) return { type: "print", text: "Usage: /diagnostics, /diagnostics on, or /diagnostics off", isError: true };
+      return { type: "print", text: `Diagnostics: ${diagnosticsStatus(config)}` };
+    },
+  },
+  {
     name: "clear",
     description: "Clear the conversation",
     run: () => ({ type: "clear" }),
@@ -241,11 +252,18 @@ function configText({ config, configPath }: CommandContext): string {
     `Sandbox:   ${sandboxStatus(config)}`,
     `Yolo:      ${config.yolo ? "on" : "off"} (/yolo)`,
     `Trajectories: ${config.trajectories ? "on" : "off"} (/trajectories)`,
+    `Diagnostics: ${config.diagnostics ? "on" : "off"} (/diagnostics)`,
     `Endpoint:  ${config.baseUrl}`,
     ...(config.provider === "ollama" ? [`Context:   ${config.contextLength.toLocaleString("en-US")} tokens (contextLength in the config file)`] : []),
     `API key:   ${key}`,
     `File:      ${configPath}`,
   ].join("\n");
+}
+
+export function diagnosticsStatus(config: Config): string {
+  return config.diagnostics
+    ? "on: after the model changes files in a TypeScript project, Marv runs the project's typecheck (in the sandbox, read-only) and tells the model about new errors"
+    : "off";
 }
 
 export function trajectoriesStatus(config: Config, path = "~/.marv/trajectories"): string {

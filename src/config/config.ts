@@ -57,6 +57,8 @@ const FileConfigSchema = z.object({
   yolo: z.boolean().optional(),
   /** Log every turn to ~/.marv/trajectories (default on). */
   trajectories: z.boolean().optional(),
+  /** Typecheck after the model changes files, and tell it about new errors (default on). */
+  diagnostics: z.boolean().optional(),
 });
 
 /** 32k fits fully on a 12 GB GPU for 9-12B models and holds a fair amount of code. */
@@ -77,6 +79,7 @@ export interface Config {
   sandbox: boolean;
   yolo: boolean;
   trajectories: boolean;
+  diagnostics: boolean;
 }
 
 export type Env = Record<string, string | undefined>;
@@ -151,6 +154,7 @@ export function resolveConfig(file: FileConfig | null, env: Env): Config {
     sandbox: file?.sandbox ?? true,
     yolo: file?.yolo ?? true,
     trajectories: file?.trajectories ?? true,
+    diagnostics: file?.diagnostics ?? true,
   };
 }
 

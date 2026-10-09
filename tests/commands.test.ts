@@ -14,6 +14,7 @@ const ctx: CommandContext = {
     sandbox: true,
     yolo: true,
     trajectories: true,
+    diagnostics: true,
   },
   configPath: "~/.marv/config.json",
 };
@@ -49,7 +50,7 @@ describe("slash commands", () => {
   });
 
   test("/config says when no key is needed (Ollama)", () => {
-    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://localhost:11434", thinking: false, contextLength: 32768, sandbox: true, yolo: true, trajectories: true } });
+    const action = run("/config", { ...ctx, config: { provider: "ollama", model: "qwen3.5:9b", baseUrl: "http://localhost:11434", thinking: false, contextLength: 32768, sandbox: true, yolo: true, trajectories: true, diagnostics: true } });
     expect(action).toMatchObject({ type: "print", text: expect.stringContaining("API key:   not needed") });
   });
 
@@ -89,6 +90,14 @@ describe("slash commands", () => {
     });
     expect(runCommand("/trajectories maybe")).toMatchObject({ type: "print", isError: true });
     expect(runCommand("/config")).toMatchObject({ type: "print", text: expect.stringContaining("Trajectories: on") });
+  });
+
+  test("/diagnostics says what it does, or turns it on and off", () => {
+    expect(runCommand("/diagnostics off")).toEqual({ type: "diagnostics", on: false });
+    expect(runCommand("/diagnostics on")).toEqual({ type: "diagnostics", on: true });
+    expect(runCommand("/diagnostics")).toMatchObject({ type: "print", text: expect.stringContaining("typecheck") });
+    expect(runCommand("/diagnostics maybe")).toMatchObject({ type: "print", isError: true });
+    expect(runCommand("/config")).toMatchObject({ type: "print", text: expect.stringContaining("Diagnostics: on") });
   });
 
   test("/mcp lists servers, their state and tools, or explains how to add one; /mcp trust starts the project's", () => {
