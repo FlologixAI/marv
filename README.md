@@ -21,6 +21,7 @@ Marv is written in TypeScript on [Bun](https://bun.sh), with an [Ink](https://gi
 - **Sessions.** Every conversation is saved; `marv -c` continues the last one, `/resume` picks an earlier one.
 - **Long conversations.** When the context window fills up, Marv summarizes the conversation and carries on (`/compact` does it on demand). Requests reuse the provider's prompt cache wherever possible.
 - **Trajectories and feedback.** Every turn is logged step by step (requests, replies, tool calls, subagents, timings, tokens) to `~/.marv/trajectories/`, with your ratings: `/good`, `/bad`, `/label`, and what your next message implies ("thanks, perfect" or "that's wrong"). `bun run stats` sums them up per model or Marv version, so you can measure whether a change made runs better.
+- **Type errors caught early.** After Marv changes files in a TypeScript project, it runs the project's own typecheck in the sandbox and tells the model about errors the change added, even in files it didn't touch, so it fixes broken callers before saying it's done. `/diagnostics off` turns it off.
 - **No dead stops.** After 25 steps without finishing, Marv asks whether to keep going instead of giving up.
 - **Cost tracking.** OpenRouter's actual charge per request, plus context and cache use, in the status bar; `/cost` for the breakdown.
 - **A comfortable TUI.** Streaming Markdown replies, mouse-wheel scrolling, drag-to-copy with auto-scroll, a `/` command menu, and Esc to interrupt.
@@ -90,6 +91,7 @@ Type what you want in plain language, for example:
 | `/good`, `/bad` | Rate the last turn, with an optional note (`/bad edited the wrong file`) |
 | `/label` | Tag the last turn (`/label refactor, tests`) |
 | `/mcp` | Show MCP servers and their tools; `/mcp trust` starts the project's |
+| `/diagnostics` | Show or set the typecheck after edits (`/diagnostics on`, `/diagnostics off`) |
 | `/trajectories` | Show or set run logging (`/trajectories on`, `/trajectories off`) |
 | `/clear` | Start a fresh conversation (the old one stays saved) |
 | `/exit` | Quit |
@@ -217,7 +219,8 @@ await session.close();
 - **Turns and events.** `send()` starts a turn at once and returns its events: `turn_start` first and
   `turn_end` last, exactly once however it ends, with the model's text, tool calls (`tool_start`/`tool_end`),
   subagents' events (`subagent`, tagged with the call that started them), `status` (waiting for MCP servers,
-  compacting, running), compaction, and `cut_off` (a reply hit the output limit, so nothing in it ran; the
+  compacting, checking types, running), `check` (the typecheck after a file change: how many errors were new, a
+  failure, or that it's off), compaction, and `cut_off` (a reply hit the output limit, so nothing in it ran; the
   model is told and goes on, and a second one in a row ends the turn) in between. A file change's `tool_end`
   (`edit_file`, `write_file`) carries `result.diff`: what changed, as numbered lines, for display; the model
   never sees it. Leaving the loop early interrupts the turn (and waits until
@@ -242,7 +245,8 @@ await session.close();
   `.mcp.json` (whose servers still need trusting); `"user"` reads your `~/.marv` (skills, agents, memory, MCP
   servers). Environment variables like `OPENROUTER_API_KEY` and `MARV_MODEL` are ignored: the session uses what
   you pass. `persist: true` saves the conversation where `marv -r` finds it, and `resume: id | "latest"` (with
-  `persist`) continues one; `trajectories: true` logs every turn.
+  `persist`) continues one; `trajectories: true` logs every turn. `diagnostics` (on by default) typechecks
+  TypeScript projects after the model's file changes and tells it about new errors; it needs the sandbox.
 - **MCP servers in code:** `mcpServers: { name: { command, args } }` (`.mcp.json`'s format). These are trusted like
   your own: no trust prompt, started in your home folder (use an absolute path, or `${MARV_PROJECT_DIR}` for
   the project). So never pass config read from a repository you don't control; `sources: ["project"]` is the
@@ -251,7 +255,7 @@ await session.close();
   main agent (not to subagents). `input` must be a zod 4 schema (it's described to the model with
   `z.toJSONSchema`). A name of a built-in tool, one used twice, or one starting with `mcp__` (MCP servers'
   tools) makes `createSession` throw. A Provider of your own is used for everything, subagents included.
-- **Settings between turns.** `configure({ provider, thinking, sandbox, yolo })`: a turn reads its settings
+- **Settings between turns.** `configure({ provider, thinking, sandbox, yolo, trajectories, diagnostics })`: a turn reads its settings
   when it starts, so a change during one applies from the next. It throws only for an invalid provider (an
   unknown `kind`) or for turning yolo on in the home folder, and then nothing changed. `close()` stops what's running, waits for it, saves, and stops
   the MCP servers the session started; `send()` throws after it.
