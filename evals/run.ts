@@ -103,7 +103,9 @@ const timeoutMs = Number(option("timeout") ?? 300) * 1000;
 // the limit instead of on their edits.
 const maxSteps = Number(option("max-steps") ?? 50);
 // Marv's typecheck after file changes (on by default, as in the CLI); off for the comparison's other arm.
-const diagnostics = option("diagnostics") !== "off";
+const diagnosticsOption = option("diagnostics");
+if (diagnosticsOption !== undefined && diagnosticsOption !== "on" && diagnosticsOption !== "off") throw new Error("--diagnostics takes on or off");
+const diagnostics = diagnosticsOption !== "off";
 const savedKey = () => (JSON.parse(readFileSync(join(defaultConfigDir(process.env), "config.json"), "utf8")) as { apiKey?: string }).apiKey;
 const apiKey: string = process.env.OPENROUTER_API_KEY ?? savedKey() ?? "";
 if (!apiKey) throw new Error("No OpenRouter key: set OPENROUTER_API_KEY or run marv's /setup.");
@@ -127,7 +129,7 @@ const short = (text: string, max: number) => (text.length > max ? `${text.slice(
 async function runOne({ model, task, rep }: { model: string; task: string; rep: number }): Promise<RunResult> {
   const dir = workspace(task);
   const started = Date.now();
-  const result: RunResult = { label, model, task, rep, pass: false, reason: "error", requests: 0, promptTokens: 0, cachedTokens: 0, completionTokens: 0, cost: 0, ms: 0, tools: {}, editErrors: [], marv };
+  const result: RunResult = { label, model, task, rep, pass: false, reason: "error", requests: 0, promptTokens: 0, cachedTokens: 0, completionTokens: 0, cost: 0, ms: 0, tools: {}, editErrors: [], marv, diagnostics };
   // What happened, for reading a run afterwards: replies, and every tool call with (the start of) what it returned.
   const log: unknown[] = [];
   let timedOut = false;

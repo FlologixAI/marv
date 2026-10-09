@@ -470,6 +470,7 @@ export function App({
             case "status":
               setWaitingFor(event.status === "waiting_for_mcp" ? "Waiting for MCP servers to start…" : event.status === "checking" ? "Checking types…" : null);
               setCompacting(event.status === "compacting");
+              if (event.status === "running") stepStarted = Date.now(); // the wait for the next reply starts after a check
               break;
             case "check": {
               const notice = checkNotice(event.result);
@@ -1087,7 +1088,7 @@ export function App({
 
         {streaming !== null &&
           (streaming === "" ? (
-            toolsRunning === 0 && !draft && <ThinkingView thought={thinking} label={compacting ? "Compacting the conversation…" : (waitingFor ?? undefined)} />
+            toolsRunning === 0 && !draft && <ThinkingView key={compacting ? "compact" : (waitingFor ?? "thinking")} thought={thinking} label={compacting ? "Compacting the conversation…" : (waitingFor ?? undefined)} />
           ) : (
             <MessageView message={{ role: "assistant", text: streaming }} streaming />
           ))}

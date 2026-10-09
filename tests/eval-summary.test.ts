@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { formatSummary, summarizeRuns, type RunResult } from "../evals/summary.ts";
 
 const run = (over: Partial<RunResult>): RunResult => ({
+  diagnostics: true,
   label: "base",
   model: "m1",
   task: "t1",

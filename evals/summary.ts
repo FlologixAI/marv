@@ -31,6 +31,8 @@ export interface RunResult {
   ranTypecheck?: boolean;
   /** Steps after which Marv told the model about new type errors (post-edit diagnostics). */
   checkNotes?: number;
+  /** Whether Marv's typecheck after file changes was on for this run. */
+  diagnostics: boolean;
   /** The start of each failed edit_file result: what went wrong. */
   editErrors: string[];
   /** The tail of the check's output, for a failure. */

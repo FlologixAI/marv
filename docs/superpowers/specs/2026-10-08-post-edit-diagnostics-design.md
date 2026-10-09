@@ -68,7 +68,7 @@ The agent is never blocked by the check.
 ## UI, settings, records
 
 - While a step-end check runs, the waiting line says **"Checking types…"** with its timer: a new session `status` (`checking`), like `compacting`.
-- New errors add a dim transcript entry, **`Typecheck: N new errors`**, with the same list the model got, collapsed (ctrl+o expands, like diffs). Nothing new: nothing shown.
+- New errors add a dim transcript entry, **`Typecheck: N new errors`**, as a `✻ Typecheck:` notice with the first 5 new errors and "… and N more" (the model gets up to 20; the trajectory record keeps the full note). Nothing new: nothing shown.
 - Config `diagnostics` (on by default) and `/diagnostics on|off`, like `/trajectories`. The SDK takes `diagnostics?: boolean`, on by default. Read when a turn starts, like the other settings.
 - Trajectories get a `check` record: ms, errors before and after, how many were new.
 
@@ -79,7 +79,7 @@ The agent is never blocked by the check.
 - `tests/agent.test.ts`: `afterStep` runs only when a step changed a file; the note comes after all of the step's tool results; the "every request extends the previous one" check still passes; Esc during a check ends cleanly with every call answered.
 - Session, with a fake checker: the baseline finishes before the first write, in yolo too; a new baseline each turn; the second timeout turns checks off; no sandbox → no check, notice shown once.
 - End to end (bwrap only): a temp project with `tsconfig.json` and a copy of Marv's `typescript`; a `ScriptedProvider` renames an export, and the note names the broken caller in another file.
-- UI: the "Checking types…" line and the collapsed entry.
+- UI: the "Checking types…" line and the `✻ Typecheck:` notice.
 
 ## Measuring (#12, before the check is built)
 
