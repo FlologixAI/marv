@@ -50,6 +50,11 @@ describe("parseTsc", () => {
     expect(parseTsc("", 1)).toBeNull();
     expect(parseTsc("", null)).toBeNull();
   });
+
+  test("Node's runtime warnings (stderr is merged into the output) are skipped, not a failed run", () => {
+    const out = "src/a.ts(1,1): error TS2304: Cannot find name 'x'.\n(node:123) ExperimentalWarning: something\n(Use `node --trace-warnings ...` to show where the warning was created)\n";
+    expect(parseTsc(out, 2)).toEqual([{ file: "src/a.ts", line: 1, column: 1, code: "TS2304", message: "Cannot find name 'x'." }]);
+  });
 });
 
 describe("newErrors", () => {

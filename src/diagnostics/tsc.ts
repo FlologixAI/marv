@@ -45,7 +45,15 @@ export function parseTsc(output: string, exitCode: number | null): TsError[] | n
   const errors: TsError[] = [];
   // Only a line right after an error (or its continuation) can continue it.
   let open = false;
-  for (const line of output.split(/\r?\n/)) {
+  const lines = output.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    // Node's own runtime warnings (stderr is merged into the output) aren't tsc's report; the second line follows the first.
+    if (/^\(node:\d+\) /.test(line)) {
+      if (lines[i + 1]?.startsWith("(Use `node --trace-warnings")) i++;
+      open = false;
+      continue;
+    }
     const located = LOCATED.exec(line);
     const unlocated = located ? null : UNLOCATED.exec(line);
     if (located) errors.push({ file: located[1]!, line: Number(located[2]), column: Number(located[3]), code: located[4]!, message: located[5]! });

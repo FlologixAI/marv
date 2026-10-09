@@ -70,7 +70,7 @@ export function touchesHiddenHome(command: string, root: string, home: string): 
 }
 const MAX_TIMEOUT_S = 600;
 /** Kept in memory per command; anything beyond is dropped (the middle is cut for the model anyway). */
-const MAX_CAPTURE = 2_000_000;
+export const MAX_CAPTURE = 2_000_000;
 /** What the model sees: the start and the end of long output. */
 const MAX_MODEL_CHARS = 30_000;
 const HEAD_CHARS = 10_000;
