@@ -18,7 +18,6 @@ test("every user gets one", () => {
   expect(welcomeOwner()).toBe("Hi Root <root@example.com>");
 });
 test("it typechecks", () => {
-  const tsc = Bun.spawnSync(["node_modules/.bin/tsc", "--noEmit", "--pretty", "false", "-p", "tsconfig.json"]);
-  expect(tsc.stdout.toString()).toBe("");
-  expect(tsc.exitCode).toBe(0);
+  const tsc = Bun.spawnSync(["node_modules/.bin/tsc", "--noEmit", "--pretty", "false", "-p", "tsconfig.eval.json"]);
+  expect({ code: tsc.exitCode, out: tsc.stdout.toString() + tsc.stderr.toString() }).toEqual({ code: 0, out: "" });
 });

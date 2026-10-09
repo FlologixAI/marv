@@ -5,6 +5,7 @@ import { theme } from "./src/theme.ts";
 import { banner } from "./src/banner.ts";
 import { debug } from "./src/log.ts";
 import { settingNames } from "./src/keys.ts";
+import { isDark } from "./src/css.ts";
 
 test("loadSettings is async, and readSync is gone", async () => {
   const settings = loadSettings();
@@ -17,9 +18,9 @@ test("everything that uses it still works", async () => {
   expect(await banner()).toBe("Theme: dark");
   expect(await debug("hi")).toBe("[debug] hi");
   expect(await settingNames()).toEqual(["theme", "verbose"]);
+  expect(await isDark()).toBe(true);
 });
 test("it typechecks", () => {
   const tsc = Bun.spawnSync(["node_modules/.bin/tsc", "--noEmit", "--pretty", "false", "-p", "tsconfig.json"]);
-  expect(tsc.stdout.toString()).toBe("");
-  expect(tsc.exitCode).toBe(0);
+  expect({ code: tsc.exitCode, out: tsc.stdout.toString() + tsc.stderr.toString() }).toEqual({ code: 0, out: "" });
 });
