@@ -91,6 +91,11 @@ export interface SessionInit {
    * queued requests in that scope itself; an approver can do the same).
    */
   approve?: (request: ApprovalRequest) => Promise<Decision>;
+  /**
+   * Steps a turn runs before it stops (without an approver) or asks whether to keep going (with one, again at each
+   * multiple). Default 25.
+   */
+  maxSteps?: number;
   sandbox?: boolean;
   yolo?: boolean;
   /**
@@ -245,6 +250,9 @@ export class MarvSession implements Session {
   constructor(private readonly init: SessionInit) {
     checkToolNames(init.tools ?? []);
     if (init.noYolo && (init.yolo ?? true)) throw new Error(init.noYolo);
+    if (init.maxSteps !== undefined && !(Number.isInteger(init.maxSteps) && init.maxSteps > 0)) {
+      throw new Error(`maxSteps must be a positive whole number, not ${init.maxSteps}`);
+    }
     this.problems = init.problems ?? [];
     this.option = init.provider;
     this.thinking = init.thinking ?? false;
@@ -773,6 +781,7 @@ export class MarvSession implements Session {
           ),
         signal: stop.signal,
         isParallel: isParallelCall,
+        maxSteps: this.init.maxSteps,
         // At the step limit, ask instead of stopping dead; with no one to ask, it stops there.
         onLimit: approve && (async (steps) => (await approve(stepLimitRequest(steps))) !== "no"),
       })) {

@@ -66,6 +66,11 @@ export interface SessionOptions {
    * the model as refused.
    */
   approve?: (request: ApprovalRequest) => Promise<Decision>;
+  /**
+   * Steps a turn runs before it stops (without `approve`) or asks `approve` whether to keep going (again at each
+   * multiple). Default 25. Unattended runs that should finish long tasks raise it.
+   */
+  maxSteps?: number;
   /** Run bash in the bubblewrap sandbox (default true). */
   sandbox?: boolean;
   /** Run what the sandbox confines without asking (default true). Must be false when `cwd` is your home folder or above it. */
@@ -144,6 +149,7 @@ export async function createSession(options: SessionOptions): Promise<Session> {
     tools: options.tools,
     systemPrompt: options.systemPrompt,
     approve: options.approve,
+    maxSteps: options.maxSteps,
     sandbox: options.sandbox,
     yolo: options.yolo,
     noYolo,

@@ -209,6 +209,17 @@ describe("approvals", () => {
     expect(events).toContainEqual({ type: "done", reason: "max_steps" });
   });
 
+  test("maxSteps moves the step limit", async () => {
+    const provider = new ScriptedProvider(Array.from({ length: 40 }, (_, i) => useTools(read(`c${i}`))));
+    const events = await collect(makeSession(provider, { maxSteps: 30 }).send("loop"));
+    expect(provider.requests).toHaveLength(30);
+    expect(events).toContainEqual({ type: "done", reason: "max_steps" });
+  });
+
+  test("a maxSteps that isn't a positive whole number throws", () => {
+    for (const maxSteps of [0, -1, 2.5, Number.NaN]) expect(() => makeSession(new ScriptedProvider([]), { maxSteps })).toThrow(/maxSteps/);
+  });
+
   test("with an approver it asks at the step limit, in the continue scope", async () => {
     const provider = new ScriptedProvider(Array.from({ length: 30 }, (_, i) => useTools(read(`c${i}`))));
     const asked: ApprovalRequest[] = [];

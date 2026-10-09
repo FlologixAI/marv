@@ -6,6 +6,10 @@ What counts as Marv's public API: the SDK (`@flologixai/marv/sdk`), the `marv` c
 
 ## [Unreleased]
 
+### Added
+
+- SDK: `maxSteps` sets how many steps a turn runs before it stops (without `approve`) or asks whether to keep going (default 25).
+
 ### Changed
 
 - The system prompt always explains how to set up an MCP server (where the config goes, its format, and that `~/.marv` isn't reachable from the sandbox), so the model hands you a correct config instead of inventing keys.

@@ -3,7 +3,7 @@
 //
 //   bun evals/run.ts --verify                         every check fails on the task's repo and passes with its solution
 //   bun evals/run.ts --models a,b --label baseline    each model on each task (OPENROUTER_API_KEY, or ~/.marv's key)
-//         [--tasks x,y] [--repeat 2] [--budget 1.50] [--concurrency 4] [--timeout 300]
+//         [--tasks x,y] [--repeat 2] [--budget 1.50] [--concurrency 4] [--timeout 300] [--max-steps 50]
 //   bun evals/run.ts --report evals/results/a/results.jsonl evals/results/b/results.jsonl
 //
 // A task is a folder: task.md (the request), repo/ (the starting files), check/ (tests copied in only after the
@@ -98,6 +98,10 @@ const repeat = Number(option("repeat") ?? 1);
 const budget = Number(option("budget") ?? 1);
 const concurrency = Number(option("concurrency") ?? 4);
 const timeoutMs = Number(option("timeout") ?? 300) * 1000;
+// Twice the interactive limit: at 25 steps the TUI asks "Keep going?", and a user would say yes once. With no one to
+// ask, 25 was a hard stop, and slow, careful models (one file per step, re-reading after each edit) were measured on
+// the limit instead of on their edits.
+const maxSteps = Number(option("max-steps") ?? 50);
 const savedKey = () => (JSON.parse(readFileSync(join(defaultConfigDir(process.env), "config.json"), "utf8")) as { apiKey?: string }).apiKey;
 const apiKey: string = process.env.OPENROUTER_API_KEY ?? savedKey() ?? "";
 if (!apiKey) throw new Error("No OpenRouter key: set OPENROUTER_API_KEY or run marv's /setup.");
@@ -126,7 +130,7 @@ async function runOne({ model, task, rep }: { model: string; task: string; rep: 
   const log: unknown[] = [];
   let timedOut = false;
   try {
-    const session = await createSession({ cwd: dir, provider: { kind: "openrouter", apiKey, model } });
+    const session = await createSession({ cwd: dir, provider: { kind: "openrouter", apiKey, model }, maxSteps });
     const timer = setTimeout(() => {
       timedOut = true;
       session.interrupt();
@@ -203,7 +207,7 @@ async function worker() {
   }
 }
 
-console.log(`${jobs.length} runs (${models.length} models × ${tasks.length} tasks × ${repeat}), budget $${budget}, Marv ${marv} → ${out}`);
+console.log(`${jobs.length} runs (${models.length} models × ${tasks.length} tasks × ${repeat}), budget $${budget}, ${maxSteps} steps, Marv ${marv} → ${out}`);
 await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
 if (skipped.length) console.log(`\nBudget reached: ${skipped.length} runs not started.`);
 console.log(`\n${formatSummary(readResults(resultsFile))}`);
