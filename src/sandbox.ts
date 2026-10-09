@@ -56,6 +56,8 @@ interface SandboxOptions {
    * outside the sandbox). bwrap leaves the empty mount point behind; the caller removes it.
    */
   placeholders?: string[];
+  /** The project read-only too: for Marv's own checks, which run the project's code without asking (src/diagnostics). */
+  projectReadOnly?: boolean;
   /** The file system, injectable for tests: whether a path exists (following symlinks), */
   exists?: (path: string) => boolean;
   /** what the path itself is (not following a final symlink), */
@@ -161,6 +163,7 @@ export function sandboxArgs({
   path,
   readOnly = [],
   placeholders = [],
+  projectReadOnly = false,
   exists = existsSync,
   stat = lstatKind,
   realpath = realpathSync,
@@ -172,7 +175,7 @@ export function sandboxArgs({
   // first: mounted after it, it would cover the project and silently turn it read-only.
   const extras = readOnly.map((dir) => ({ dir, ...resolveExtra(dir, home, root) }));
   for (const { dir, real } of extras.filter((e) => e.around)) args.push("--ro-bind", real, dir);
-  args.push("--bind", root, root);
+  args.push(projectReadOnly ? "--ro-bind" : "--bind", root, root);
   for (const { dir, real } of extras.filter((e) => !e.around)) args.push("--ro-bind", real, dir);
   for (const path of placeholders) args.push("--tmpfs", path, "--remount-ro", path);
   // Last, on top of every other mount, so the empty file hides the real one and no later mount shows it again.

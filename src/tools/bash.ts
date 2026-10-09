@@ -93,6 +93,8 @@ interface RunOptions {
   signal?: AbortSignal;
   readOnly?: string[];
   placeholders?: string[];
+  /** Mount the project read-only (see SandboxOptions.projectReadOnly). */
+  projectReadOnly?: boolean;
   /** The home folder the sandbox hides (default: the user's); tests pass a fake one. */
   home?: string;
 }
@@ -104,11 +106,11 @@ const hasSetsid = Bun.which("setsid") !== null;
  * Sandboxed: inside bwrap (see src/sandbox.ts). Not sandboxed: still with a
  * minimal environment, so API keys don't leak into commands.
  */
-export async function runCommand({ command, root, sandbox, network, timeoutMs, signal, readOnly, placeholders, home = homedir() }: RunOptions): Promise<CommandResult> {
+export async function runCommand({ command, root, sandbox, network, timeoutMs, signal, readOnly, placeholders, projectReadOnly, home = homedir() }: RunOptions): Promise<CommandResult> {
   const path = process.env.PATH ?? "/usr/bin:/bin";
   const script = `exec 2>&1\n${command}`; // stderr into stdout, so the output stays in order
   const argv = sandbox
-    ? ["bwrap", ...sandboxArgs({ root, home, network, path, readOnly, placeholders }), "--", "bash", "-c", script]
+    ? ["bwrap", ...sandboxArgs({ root, home, network, path, readOnly, placeholders, projectReadOnly }), "--", "bash", "-c", script]
     : // setsid: its own process group, so killing it also kills everything it started.
       [...(hasSetsid ? ["setsid"] : []), "bash", "-c", script];
 
