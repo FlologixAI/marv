@@ -253,3 +253,32 @@ describe("the diff a change carries (for the transcript)", () => {
     ]);
   });
 });
+
+describe("beforeChange", () => {
+  for (const [name, args, path] of [
+    ["edit_file", { path: "greet.ts", old_string: "Hello", new_string: "Hi" }, "greet.ts"],
+    ["write_file", { path: "new.ts", content: "export {};\n" }, "new.ts"],
+  ] as const) {
+    test(`${name}: the preview starts it (before the user is asked), and the file is written only once it's done`, async () => {
+      let started = 0;
+      let release!: () => void;
+      const baseline = new Promise<void>((resolve) => (release = resolve));
+      const startedWhenAsked: number[] = [];
+      const pending = runTool(call(name, args), {
+        root,
+        sandbox: false,
+        approve: async () => (startedWhenAsked.push(started), "yes"),
+        beforeChange: () => (started++, baseline),
+      });
+      await Bun.sleep(30);
+      expect(startedWhenAsked).toEqual([1]);
+      // Approved, but still waiting for the baseline: nothing written yet.
+      if (path === "greet.ts") expect(await read(path)).toContain("Hello");
+      else expect(existsSync(join(root, path))).toBe(false);
+      release();
+      expect((await pending).isError).toBeFalsy();
+      if (path === "greet.ts") expect(await read(path)).toContain("Hi");
+      else expect(await read(path)).toBe("export {};\n");
+    });
+  }
+});

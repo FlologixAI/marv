@@ -76,11 +76,13 @@ export const editFile: Tool<typeof input> = {
   autoSafe: ({ path }, { root }) => !touchesGit(root, path),
 
   async preview(args, ctx) {
+    void ctx.beforeChange?.();
     const { shown, before, after } = await plan(args, ctx);
     return { title: `Edit ${shown}`, diff: diffText(before, after).lines };
   },
 
   async run(args, ctx) {
+    await ctx.beforeChange?.();
     // Planned again: the file may have changed while the user was deciding.
     const { absolute, shown, before, after, count, fuzzy } = await plan(args, ctx);
     await Bun.write(absolute, after);

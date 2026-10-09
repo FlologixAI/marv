@@ -82,6 +82,12 @@ export interface ToolContext {
   agentHost?: AgentHost;
   /** Pins where git looks for this agent's file listing (a worktree subagent: its own .git file is within its reach). */
   gitEnv?: Record<string, string>;
+  /**
+   * Before a file change: the preview starts it (not awaited, so it can run while the user decides), and the change
+   * waits for it before writing. The session takes the typecheck's baseline there (src/diagnostics), so the
+   * baseline sees the project as it was. Never rejects.
+   */
+  beforeChange?: () => Promise<void>;
 }
 
 export interface ToolResult {
